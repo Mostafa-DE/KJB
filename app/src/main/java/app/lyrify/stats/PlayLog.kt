@@ -38,16 +38,30 @@ interface PlayLogStore {
     suspend fun all(): List<LoggedPlay>?
 
     /**
-     * A restore's [plays], each written as [put] writes it without an [OpenState], all in one go or none: a play of the
-     * same song and start is the same play, so restoring a backup twice adds nothing. False when none was written.
+     * A restore's [plays], each written as [put] writes it without an [OpenState], and its [interactions], all in one go
+     * or none: a play of the same song and start is the same play, and an interaction of the same time and kind the same
+     * one (kept as the phone has it, so words forgotten stay forgotten), so restoring a backup twice adds nothing. False
+     * when none was written.
      */
-    suspend fun putAll(plays: List<LoggedPlay>): Boolean
+    suspend fun putAll(plays: List<LoggedPlay>, interactions: List<Interaction> = emptyList()): Boolean
 
     /**
      * An import's Undo (backup/ImportPlan.kt): [plays] taken out of the log, each by its song and start, all in one go
      * or none. False when none was taken out.
      */
     suspend fun removeAll(plays: List<LoggedPlay>): Boolean
+
+    /** Notes [interaction] (stats/Interactions.kt): one of the same time and kind is the same one, which it replaces. */
+    suspend fun note(interaction: Interaction): Boolean
+
+    /**
+     * The interactions from [from] (inclusive) until [until] (exclusive), either end open, the oldest first; null when
+     * the log cannot be read.
+     */
+    suspend fun interactions(from: Long? = null, until: Long? = null): List<Interaction>?
+
+    /** Forgets the words of the searches made at [times], the searches kept, all in one go or none. */
+    suspend fun forget(times: List<Long>): Boolean
 }
 
 /** Where a play still going stands: the song's length, its position, and the parts of it heard. */
@@ -151,6 +165,8 @@ object PlaysSchema {
      * [LoggedPlay.end]), codes by name in lower case ([codeOf]); the plays from before keep NULL there. And `imported`:
      * the plays an import made are marked, found by their shape (nothing heard and counted, which a play heard here never
      * is), so a file 3.1.0 kept after a downgrade gets the imports it made marked on the next upgrade too.
+     * Version 4: Insights' real minutes (lane in1's step, empty on this branch until it merges).
+     * Version 5: the interaction log ([Interaction]), one row per time and kind, codes as in version 3.
      */
     val STEPS: List<List<String>> = listOf(
         listOf(
@@ -172,6 +188,11 @@ object PlaysSchema {
             "ALTER TABLE plays ADD COLUMN ended_at_ms INTEGER",
             "ALTER TABLE plays ADD COLUMN imported INTEGER NOT NULL DEFAULT 0",
             "UPDATE plays SET imported = 1 WHERE heard_ms = 0 AND counted != 0",
+        ),
+        emptyList(),
+        listOf(
+            "CREATE TABLE IF NOT EXISTS interactions (at INTEGER NOT NULL, kind TEXT NOT NULL, zone_offset_min INTEGER, words TEXT, " +
+                "target TEXT, target_key TEXT, PRIMARY KEY (at, kind)) WITHOUT ROWID",
         ),
     )
 
@@ -244,6 +265,29 @@ object PlaysSchema {
 
     /** An import's Undo: its play taken out of the log ([PlayLogStore.removeAll]). */
     const val REMOVE: String = "DELETE FROM plays WHERE path = ? AND started_at = ?"
+
+    /** [interaction]'s values in [NOTE]'s order. */
+    fun noteArgs(interaction: Interaction): Array<Any?> = arrayOf(
+        interaction.at,
+        codeOf(interaction.kind),
+        interaction.zoneOffsetMinutes?.toLong(),
+        interaction.words,
+        interaction.target?.kind?.let(::codeOf),
+        interaction.target?.key,
+    )
+
+    /** An interaction, replacing the one of the same time and kind (a search's result tapped after it). Its values: [noteArgs]. */
+    const val NOTE: String = "INSERT OR REPLACE INTO interactions (at, kind, zone_offset_min, words, target, target_key) VALUES (?, ?, ?, ?, ?, ?)"
+
+    /** A restore's interaction: one of the same time and kind there already stays as the phone has it. Its values: [noteArgs]. */
+    const val RESTORE_INTERACTION: String = "INSERT OR IGNORE INTO interactions (at, kind, zone_offset_min, words, target, target_key) VALUES (?, ?, ?, ?, ?, ?)"
+
+    /** The interactions between two bounds, the oldest first ([interactionOf] reads them). */
+    const val INTERACTIONS: String = "SELECT at, kind, zone_offset_min, words, target, target_key FROM interactions " +
+        "WHERE at >= CAST(? AS INTEGER) AND at < CAST(? AS INTEGER) ORDER BY at, kind"
+
+    /** A search's words forgotten (Recent searches' "×"), the search kept. */
+    const val FORGET: String = "UPDATE interactions SET words = NULL WHERE at = ? AND kind = 'search'"
 
     /** Per play still going: path, start, id hint, time heard, counted, length, position, parts heard ([storedPlayOf]). */
     const val OPEN_PLAYS: String = "SELECT o.path, o.started_at, p.media_id, p.heard_ms, p.counted, o.duration_ms, o.position_ms, o.spans " +
@@ -378,14 +422,15 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
         }
     }
 
-    override suspend fun putAll(plays: List<LoggedPlay>): Boolean = withContext(io) {
+    override suspend fun putAll(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean = withContext(io) {
         try {
             db.writableDatabase.transaction {
                 plays.forEach { play -> execSQL(PlaysSchema.PUT, PlaysSchema.putArgs(play)) }
+                interactions.forEach { interaction -> execSQL(PlaysSchema.RESTORE_INTERACTION, PlaysSchema.noteArgs(interaction)) }
             }
             true
         } catch (e: Exception) {
-            log("plays: ${plays.size} not restored (${e.javaClass.simpleName})")
+            log("plays: ${plays.size} not restored, with ${interactions.size} interactions (${e.javaClass.simpleName})")
             false
         }
     }
@@ -402,6 +447,43 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
             true
         } catch (e: Exception) {
             log("plays: ${plays.size} not removed (${e.javaClass.simpleName})")
+            false
+        }
+    }
+
+    override suspend fun note(interaction: Interaction): Boolean = withContext(io) {
+        try {
+            db.writableDatabase.execSQL(PlaysSchema.NOTE, PlaysSchema.noteArgs(interaction))
+            true
+        } catch (e: Exception) {
+            log("interactions: not written (${e.javaClass.simpleName})")
+            false
+        }
+    }
+
+    override suspend fun interactions(from: Long?, until: Long?): List<Interaction>? = withContext(io) {
+        try {
+            val bounds = arrayOf((from ?: Long.MIN_VALUE).toString(), (until ?: Long.MAX_VALUE).toString())
+            db.readableDatabase.rawQuery(PlaysSchema.INTERACTIONS, bounds).use { rows ->
+                val row = CursorRow(rows)
+                buildList {
+                    while (rows.moveToNext()) interactionOf(row)?.let(::add)
+                }
+            }
+        } catch (e: Exception) {
+            log("interactions: not read (${e.javaClass.simpleName})")
+            null
+        }
+    }
+
+    override suspend fun forget(times: List<Long>): Boolean = withContext(io) {
+        try {
+            db.writableDatabase.transaction {
+                times.forEach { at -> execSQL(PlaysSchema.FORGET, arrayOf<Any?>(at)) }
+            }
+            true
+        } catch (e: Exception) {
+            log("interactions: ${times.size} searches' words not forgotten (${e.javaClass.simpleName})")
             false
         }
     }

@@ -55,6 +55,7 @@ object StatsGraph {
     private var store: PlayLogStore? = null
     private var counter: PlayCounter? = null
     private var stats: PlayStats? = null
+    private var interactions: InteractionLog? = null
 
     /** `plays.db` in app-private `databases/`, an unreadable one moved aside there. */
     @Synchronized
@@ -76,6 +77,10 @@ object StatsGraph {
         val library = LibraryGraph.repository(context).state
         PlayStats(store(context), library = { (library.value as? LibraryState.Ready)?.library })
     }.also { stats = it }
+
+    /** The interaction log, beside the plays in `plays.db`: the screens note into it, Suggestions reads it. */
+    @Synchronized
+    fun interactions(context: Context): InteractionLog = interactions ?: InteractionLog(store(context), scope, log = { Log.w(LOG_TAG, it) }).also { interactions = it }
 
     /** The play log itself, for a backup and a restore (backup/). */
     fun log(context: Context): PlayLogStore = store(context)

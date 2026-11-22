@@ -25,7 +25,9 @@ import app.lyrify.player.Speed
 import app.lyrify.settings.BackupSettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
+import app.lyrify.stats.Interaction
 import app.lyrify.stats.LoggedPlay
+import app.lyrify.stats.TargetKind
 import app.lyrify.tags.CoversTagsMemory
 import app.lyrify.tags.NamePair
 import app.lyrify.tones.TonesState
@@ -39,6 +41,8 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.time.LocalDate
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -51,7 +55,7 @@ enum class Section(val key: String, val version: Int) {
     /** The queue playing at its song and second, the saved and recent queues, and Repeat. */
     QUEUES("queues", 1),
 
-    /** The play log (`plays.db`): every play, so each song's play count too. */
+    /** The play log (`plays.db`): every play, so each song's play count too, and the interaction log beside it. */
     PLAYS("plays", 1),
 
     /** `song-state.json`: bookmarks, Remember my place's places, the speeds and the part repeating. */
@@ -93,6 +97,9 @@ enum class Section(val key: String, val version: Int) {
 
     /** Its file in the zip. */
     val file: String get() = "$key.json"
+
+    /** The file of its part [part] (from 2) in the zip, gzipped ([BackupBundle.PART_BYTES]). */
+    fun partFile(part: Int): String = "$key-$part.json.gz"
 }
 
 /**
@@ -129,6 +136,8 @@ data class BackupSnapshot(
     val keptApart: Set<NamePair>? = null,
     val searches: List<String>? = null,
     val books: BookState? = null,
+    /** The interaction log, kept with the plays; null when it could not be read. */
+    val interactions: List<Interaction>? = null,
 )
 
 /**
@@ -175,6 +184,8 @@ data class BackupContents(
     val tooNew: List<Section> = emptyList(),
     /** How many sections this version does not know at all (a newer KJB's): skipped. */
     val unknown: Int = 0,
+    /** With the plays: the interaction log; none in a backup from before it was kept. */
+    val interactions: List<Interaction> = emptyList(),
 ) {
     /** The sections it holds, in the summary's order. */
     val sections: List<Section> get() = Section.entries.filter(::has)
@@ -220,11 +231,13 @@ sealed interface BackupRead {
 
 /** How much a backup may hold once unpacked; reading stops as soon as one is passed, so a zip bomb costs little. */
 data class ZipLimits(
-    /** One entry, unpacked. */
+    /** One entry, unpacked; one part of a section, unpacked from its gzip too. */
     val entryBytes: Long = 32L * 1024 * 1024,
     /** Every entry together, unpacked, also those not read. */
     val totalBytes: Long = 96L * 1024 * 1024,
     val entries: Int = 64,
+    /** A section's parts after its first ([BackupBundle.PART_BYTES]) together, unpacked from their gzip: some 850,000 plays. */
+    val partsBytes: Long = 256L * 1024 * 1024,
 )
 
 /**
@@ -241,7 +254,10 @@ data class ZipLimits(
  * AI switch, and the tones, Duplicates, Covers & tags, names kept apart and recent searches sections, all as new keys or
  * sections: format 1 backups read as before, and a format 1 KJB reads a format 2 backup's sections it knows. The queues
  * section keeps version 1: a format 1 KJB reads its Recent and Saved queues and leaves the one playing, as before. The
- * books section came later, a section only: a KJB without it skips it as one it does not know.
+ * books section came later, a section only: a KJB without it skips it as one it does not know. A long play log came later
+ * still: the plays section in parts ([PART_BYTES] each), the first in `plays.json` as before with the newest plays, the
+ * others gzipped beside it (`plays-2.json.gz`, ...) and their count in the manifest, so a KJB without parts restores the
+ * newest plays and reads a zip no bigger than it can (each part is small in the zip), and every play comes back here.
  *
  * Read as untrusted input: only the known entry names are kept, no entry name ever becomes a path, each entry and all of
  * them together are capped unpacked ([ZipLimits]), two entries of one name make it unreadable, and every section is
@@ -253,6 +269,12 @@ object BackupBundle {
     const val SONGS: String = "songs.json"
     const val SONGS_VERSION: Int = 1
     const val MIME_TYPE: String = "application/zip"
+
+    /**
+     * How much of the plays section one part holds, unpacked: half of what any KJB reads of one entry
+     * ([ZipLimits.entryBytes]), so 3.1.1 and before read the first part, the newest plays.
+     */
+    const val PART_BYTES: Int = 16 * 1024 * 1024
 
     /** What the open dialog offers: zip files, as providers name them. */
     val MIME_TYPES: Array<String> = arrayOf(MIME_TYPE, "application/x-zip-compressed", "application/octet-stream")
@@ -266,12 +288,13 @@ object BackupBundle {
      * Writes the backup of [snapshot] to [output] and closes it: the manifest, the songs the sections name (their tags
      * from [library], the songs MediaStore lists), then each section a store could be read for.
      */
-    fun write(snapshot: BackupSnapshot, library: List<Song>, appVersion: String, createdAt: Long, output: OutputStream) {
+    fun write(snapshot: BackupSnapshot, library: List<Song>, appVersion: String, createdAt: Long, output: OutputStream, partBytes: Int = PART_BYTES) {
         val pathOf = library.mapNotNull { song -> song.ref.mediaStoreId?.let { it to song.path } }.toMap()
+        val plays = snapshot.plays?.let { SectionJson.plays(it, snapshot.interactions, partBytes) }
         val sections = buildList {
             snapshot.playlists?.let { add(Section.PLAYLISTS to PlaylistsJson.encode(bare(it))) }
             snapshot.queues?.let { add(Section.QUEUES to withKeys(QueuesJson.encode(bare(it)), REPEAT_KEY to snapshot.repeat?.name?.let(::JsonPrimitive))) }
-            snapshot.plays?.let { add(Section.PLAYS to SectionJson.plays(it)) }
+            plays?.let { add(Section.PLAYS to it[0]) }
             snapshot.songState?.let { add(Section.BOOKMARKS to SectionJson.marks(it)) }
             snapshot.equalizer?.let { add(Section.EQUALIZER to EqProfilesJson.encode(it.copy(unknownProfiles = emptyMap()))) }
             snapshot.ledger?.let { add(Section.LYRICS to LedgerJson.encode(bare(it))) }
@@ -288,15 +311,24 @@ object BackupBundle {
             BackupSong(song.path, song.title, song.artist, song.album, song.durationMs, (song.folder + song.fileName).trimStart('/'), song.sizeBytes.takeIf { it > 0 })
         }
         ZipOutputStream(output).use { zip ->
-            zip.put(MANIFEST, manifest(appVersion, createdAt, sections.map { it.first }))
+            zip.put(MANIFEST, manifest(appVersion, createdAt, sections.map { it.first }, playsParts = plays?.size ?: 1))
             zip.put(SONGS, songs(songs))
             sections.forEach { (section, text) -> zip.put(section.file, text) }
+            // The plays' further parts, each made and gzipped as it is written.
+            plays?.let { parts ->
+                (1 until parts.size).forEach { at ->
+                    val gzipped = ByteArrayOutputStream().also { bytes -> GZIPOutputStream(bytes).use { it.write(parts[at].encodeToByteArray()) } }
+                    zip.put(Section.PLAYS.partFile(at + 1), gzipped.toByteArray())
+                }
+            }
         }
     }
 
-    private fun ZipOutputStream.put(name: String, text: String) {
+    private fun ZipOutputStream.put(name: String, text: String) = put(name, text.encodeToByteArray())
+
+    private fun ZipOutputStream.put(name: String, bytes: ByteArray) {
         putNextEntry(ZipEntry(name))
-        write(text.encodeToByteArray())
+        write(bytes)
         closeEntry()
     }
 
@@ -305,6 +337,7 @@ object BackupBundle {
         snapshot.playlists?.let { state -> state.playlists.forEach { playlist -> playlist.songs.forEach { add(it.path) } }; state.favouriteSongs.forEach { add(it.path) } }
         snapshot.queues?.let { book -> book.queues.forEach { queue -> queue.items.forEach { add(it.song.path) } } }
         snapshot.plays?.forEach { add(it.song.path) }
+        snapshot.interactions?.forEach { interaction -> interaction.target?.takeIf { it.kind == TargetKind.SONG }?.let { add(it.key) } }
         snapshot.songState?.let { state -> addAll(state.places.keys + state.bookmarks.keys + state.speeds.keys + listOfNotNull(state.part?.path)) }
         snapshot.ledger?.let { state -> addAll(bare(state).entries.keys) }
         snapshot.tones?.let { state -> state.tones.values.forEach { add(it.songPath) } }
@@ -358,17 +391,23 @@ object BackupBundle {
     private fun withKeys(text: String, vararg extra: Pair<String, JsonElement?>): String =
         JsonObject(checkNotNull(jsonObject(text)) + extra.mapNotNull { (key, value) -> value?.let { key to it } }).toString()
 
-    private fun manifest(appVersion: String, createdAt: Long, sections: List<Section>): String = JsonObject(
+    /** The manifest; the plays section's parts counted when it has more than one ([playsParts]). */
+    private fun manifest(appVersion: String, createdAt: Long, sections: List<Section>, playsParts: Int): String = JsonObject(
         mapOf(
             FORMAT_KEY to JsonPrimitive(FORMAT),
             APP_VERSION_KEY to JsonPrimitive(appVersion),
             CREATED_AT_KEY to JsonPrimitive(createdAt),
             SectionJson.SONGS_KEY to version(SONGS_VERSION),
-            SECTIONS_KEY to JsonObject(sections.associate { it.key to version(it.version) }),
+            SECTIONS_KEY to JsonObject(sections.associate { it.key to version(it.version, if (it == Section.PLAYS) playsParts else 1) }),
         ),
     ).toString()
 
-    private fun version(version: Int): JsonObject = JsonObject(mapOf(VERSION_KEY to JsonPrimitive(version)))
+    private fun version(version: Int, parts: Int = 1): JsonObject = JsonObject(
+        buildMap {
+            put(VERSION_KEY, JsonPrimitive(version))
+            if (parts > 1) put(PARTS_KEY, JsonPrimitive(parts))
+        },
+    )
 
     private fun songs(songs: List<BackupSong>): String = JsonObject(
         mapOf(
@@ -396,7 +435,9 @@ object BackupBundle {
      * The backup in [input], read whole (and closed) before anything is restored. Only the manifest, the songs and the
      * sections are kept; every entry counts towards [limits] as it is unpacked, read or not. A section the manifest lists
      * must be there and read as what it says; one from a newer KJB ([Section.version]) or one this version does not know
-     * is skipped. Unknown keys are ignored throughout, and items a store's own reading leaves out cost nothing else.
+     * is skipped. Unknown keys are ignored throughout, and items a store's own reading leaves out cost nothing else. The
+     * plays section's parts after its first must be there too, each unpacked within [ZipLimits.entryBytes] and all of
+     * them within [ZipLimits.partsBytes], and read one at a time; another section's are left, as a KJB without them does.
      */
     fun read(input: InputStream, limits: ZipLimits = ZipLimits()): BackupRead {
         val files = when (val unzipped = unzip(input, limits)) {
@@ -421,6 +462,7 @@ object BackupBundle {
         )
         val tooNew = mutableListOf<Section>()
         var unknown = 0
+        var partsLeft = limits.partsBytes
         (manifest[SECTIONS_KEY] as? JsonObject).orEmpty().forEach { (key, about) ->
             val section = Section.entries.firstOrNull { it.key == key }
             val version = (about as? JsonObject)?.int(VERSION_KEY)
@@ -430,8 +472,38 @@ object BackupBundle {
                 version > section.version -> tooNew += section
                 else -> contents = section(contents, section, files[section.file]?.decodeToString() ?: return notABackup) ?: return notABackup
             }
+            val parts = (about as? JsonObject)?.int(PARTS_KEY)?.takeIf { section == Section.PLAYS && version == section.version } ?: 1
+            if (parts !in 1..limits.entries) return notABackup
+            for (part in 2..parts) {
+                val text = try {
+                    unpacked(files[Section.PLAYS.partFile(part)] ?: return notABackup, minOf(limits.entryBytes, partsLeft))
+                } catch (_: IOException) {
+                    return BackupRead.Unreadable(BackupRead.Why.CORRUPT)
+                } ?: return BackupRead.Unreadable(BackupRead.Why.TOO_BIG)
+                partsLeft -= text.size
+                val more = SectionJson.plays(text.decodeToString()) ?: return notABackup
+                // A later part holds older ones: they go first, the plays and the skips apart, as one part reads them.
+                val (plays, skips) = contents.plays.orEmpty().partition { !it.isShort }
+                val (olderPlays, olderSkips) = more.plays.partition { !it.isShort }
+                contents = contents.copy(plays = olderPlays + plays + olderSkips + skips, interactions = more.interactions + contents.interactions)
+            }
         }
         return BackupRead.Read(contents.copy(tooNew = tooNew.sorted(), unknown = unknown))
+    }
+
+    /** A part [packed] in its gzip, unpacked; null past [limit] bytes. A damaged one throws an IOException. */
+    private fun unpacked(packed: ByteArray, limit: Long): ByteArray? {
+        val bytes = ByteArrayOutputStream()
+        val buffer = ByteArray(BUFFER)
+        GZIPInputStream(packed.inputStream()).use { gzip ->
+            while (true) {
+                val read = gzip.read(buffer)
+                if (read < 0) break
+                if (bytes.size() + read > limit) return null
+                bytes.write(buffer, 0, read)
+            }
+        }
+        return bytes.toByteArray()
     }
 
     /** [contents] with [section] read from [text]; null when it is not what it says. */
@@ -440,7 +512,7 @@ object BackupBundle {
         Section.QUEUES -> QueuesJson.decode(text)?.let { book ->
             contents.copy(queues = book, repeat = jsonObject(text)?.text(REPEAT_KEY)?.let { name -> Repeat.entries.firstOrNull { it.name == name } })
         }
-        Section.PLAYS -> SectionJson.plays(text)?.let { contents.copy(plays = it) }
+        Section.PLAYS -> SectionJson.plays(text)?.let { contents.copy(plays = it.plays, interactions = it.interactions) }
         Section.BOOKMARKS -> SectionJson.marks(text)?.let { contents.copy(bookmarks = it.marks, usualSpeed = it.usual, part = it.part) }
         Section.EQUALIZER -> EqProfilesJson.decode(text)?.let { contents.copy(equalizer = it.copy(unknownProfiles = emptyMap())) }
         Section.LYRICS -> ledger(text)?.let { contents.copy(lyrics = bare(it)) }
@@ -537,6 +609,7 @@ object BackupBundle {
     private const val CREATED_AT_KEY: String = "createdAt"
     private const val SECTIONS_KEY: String = "sections"
     private const val VERSION_KEY: String = "version"
+    private const val PARTS_KEY: String = "parts"
     private const val ALBUM_KEY: String = "album"
     private const val DURATION_KEY: String = "durationMs"
     private const val RELATIVE_PATH_KEY: String = "relativePath"
@@ -545,6 +618,6 @@ object BackupBundle {
     private const val AI_KEY: String = "aiLyrics"
     private const val CONNECT_KEY: String = "startWhenConnected"
 
-    /** The only entries read into memory. */
-    private val KEPT: Set<String> = setOf(MANIFEST, SONGS) + Section.entries.map { it.file }
+    /** The only entries read into memory: the plays section's parts too, as many as a zip may hold entries. */
+    private val KEPT: Set<String> = setOf(MANIFEST, SONGS) + Section.entries.map { it.file } + (2..ZipLimits().entries).map(Section.PLAYS::partFile)
 }

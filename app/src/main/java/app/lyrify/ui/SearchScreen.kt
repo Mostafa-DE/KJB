@@ -92,6 +92,9 @@ import app.lyrify.library.search.searchSource
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.stats.PlaysQuery
+import app.lyrify.stats.StatsGraph
+import app.lyrify.stats.Target
+import app.lyrify.stats.TargetKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -131,6 +134,18 @@ data class SearchResults(
     }
 }
 
+/**
+ * What the interaction log (stats/Interactions.kt) notes a result or page as: an album, artist, folder or playlist by its
+ * key; none for anything else (a built-in list, Tools' pages).
+ */
+fun targetOf(page: Page): Target? = when (page) {
+    is Page.Album -> Target(TargetKind.ALBUM, page.key)
+    is Page.Artist -> Target(TargetKind.ARTIST, page.name)
+    is Page.Folder -> Target(TargetKind.FOLDER, page.path)
+    is Page.Playlist -> Target(TargetKind.PLAYLIST, page.id)
+    else -> null
+}
+
 /** How many results a group shows before "View all". */
 const val SEARCH_PREVIEW: Int = 4
 
@@ -150,7 +165,8 @@ fun shownCount(results: SearchResults, group: SearchGroup, all: Boolean): Int =
 /**
  * Search, the second tab, at its root: the field at the top, focused when the tab opens and when Search is tapped
  * again, not when the phone turns. With the field empty, the recent searches, each with an "×"; else the results in
- * groups. The search goes among the recent ones when the keyboard's search key is pressed or a result is tapped.
+ * groups. The search goes among the recent ones, and into the interaction log with the result tapped, when the
+ * keyboard's search key is pressed, View all or a result is tapped; its "×" forgets the words there too.
  */
 @Composable
 fun SearchPage() {
@@ -172,19 +188,23 @@ fun SearchPage() {
         }
     }
     val recent = remember(context) { SearchGraph.recent(context) }
+    val interactions = remember(context) { StatsGraph.interactions(context) }
     val searches by recent.state.collectAsStateWithLifecycle()
     // The lyrics index looks again when Search opens and after lyrics were written or removed.
     val ledger = LocalLyrics.current.ledger
     LaunchedEffect(ledger) { SearchGraph.refreshLyrics() }
     val results = rememberSearchResults(query)
-    val commit = { recent.add(query) }
+    val commit = { result: Target? ->
+        recent.add(query)
+        interactions.searched(query, result)
+    }
     val ui = rememberLibraryUi()
     val sheets = rememberSongSheets()
 
     PageFrame(
         topBar = { under, backdrop ->
             SearchBar(query, { query = it }, focus, onSearch = {
-                commit()
+                commit(null)
                 keyboard?.hide()
             }, under, backdrop)
         },
@@ -192,7 +212,7 @@ fun SearchPage() {
         val modifier = Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()
         FadeThrough(query.isBlank()) { blank ->
             if (blank) {
-                RecentSearches(searches, recentList, onPick = { query = it }, onRemove = recent::remove, modifier)
+                RecentSearches(searches, recentList, onPick = { query = it }, onRemove = { recent.remove(it); interactions.forget(it) }, modifier)
             } else {
                 val play = rememberPlay(commit)
                 val reading by remember(context) { SearchGraph.lyrics(context).building }.collectAsStateWithLifecycle()
@@ -208,13 +228,13 @@ fun SearchPage() {
                         item(key = "group ${group.group}", contentType = "group") {
                             Box(rowMotion(reduced)) {
                                 GroupHeader(group) {
-                                    commit()
+                                    commit(null)
                                     nav.open(Page.SearchAll(group.group, results.query))
                                 }
                             }
                         }
                         resultRows(results, group.group, all = false, ui, reduced, onSong = { play(results, it) }, onMore = sheets::openSong) {
-                            commit()
+                            commit(targetOf(it))
                             nav.open(it)
                         }
                     }
@@ -235,8 +255,12 @@ fun SearchAllPage(page: Page.SearchAll) {
     val list = rememberLazyListState()
     val results = rememberSearchResults(page.query, lyricPages = list.takeIf { page.group == SearchGroup.LYRICS })
     val recent = remember(context) { SearchGraph.recent(context) }
+    val interactions = remember(context) { StatsGraph.interactions(context) }
     val commands = remember(context) { Lyrify.playback(context) }
-    val play = rememberPlay { recent.add(page.query) }
+    val play = rememberPlay { song ->
+        recent.add(page.query)
+        interactions.searched(page.query, song)
+    }
     val title = stringResource(R.string.search_all_title, groupLabel(page.group), page.query.trim())
     val ui = rememberLibraryUi()
     val sheets = rememberSongSheets()
@@ -276,7 +300,10 @@ fun SearchAllPage(page: Page.SearchAll) {
                     }
                 }
             }
-            resultRows(results, page.group, all = true, ui, reduced, onSong = { play(results, it) }, onMore = sheets::openSong, onOpen = nav::open)
+            resultRows(results, page.group, all = true, ui, reduced, onSong = { play(results, it) }, onMore = sheets::openSong) {
+                interactions.searched(page.query, targetOf(it))
+                nav.open(it)
+            }
         }
     }
     ui?.let { SongSheetsHost(sheets, it) }
@@ -373,13 +400,16 @@ private suspend fun listRows(library: Library, playlists: PlaylistsState, names:
 @Composable
 private fun builtInNames(): Map<BuiltInList, String> = BuiltInList.entries.associateWith { stringResource(it.words) }
 
-/** A song tapped in the results: the search goes among the recent ones, and the results' queue plays from the song. */
+/**
+ * A song tapped in the results: the search counts with the song as its result ([onCommit]), and the results' queue plays
+ * from the song.
+ */
 @Composable
-private fun rememberPlay(onCommit: () -> Unit): (SearchResults, Song) -> Unit {
+private fun rememberPlay(onCommit: (Target) -> Unit): (SearchResults, Song) -> Unit {
     val context = LocalContext.current
     val commands = remember(context) { Lyrify.playback(context) }
     return { results, song ->
-        onCommit()
+        onCommit(Target(TargetKind.SONG, song.path))
         val queue = results.queue
         commands.play(queue.map { it.ref }, queue.indexOf(song).coerceAtLeast(0), searchSource(results.query))
     }

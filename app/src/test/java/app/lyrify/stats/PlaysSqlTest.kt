@@ -9,8 +9,9 @@ import org.junit.Test
 
 /**
  * `plays.db`'s own SQL ([PlaysSchema]) on the laptop's SQLite ([JdbcPlayLog]): a new file, a 3.1.0 file brought up to
- * date, the step run again after a downgrade, what a play keeps when written again, what a backup reads, and the totals
- * every list and count reads, which leave the short plays out as 3.1.0 had none. Made-up names only.
+ * date, the step run again after a downgrade, what a play keeps when written again, what a backup reads, the totals
+ * every list and count reads, which leave the short plays out as 3.1.0 had none, and the interaction log. Made-up
+ * names only.
  */
 class PlaysSqlTest {
     private val stores = mutableListOf<JdbcPlayLog>()
@@ -221,6 +222,126 @@ class PlaysSqlTest {
         assertEquals(sql.totals(T0 + 1_000, T0 + 3_000).toSet(), fake.totals(T0 + 1_000, T0 + 3_000).toSet())
     }
 
+    // The interaction log (version 5)
+
+    private val searched = Interaction(T0, InteractionKind.SEARCH, 180, words = "Harbour Glass")
+    private val album = Interaction(T0 + 1_000, InteractionKind.OPEN, 180, Target(TargetKind.ALBUM, """["KJB Test Band","Harbour Glass"]"""))
+    private val lyrics = Interaction(T0 + 2_000, InteractionKind.LYRICS, -300, Target(TargetKind.SONG, salt.path))
+
+    @Test
+    fun `a 3_1_1 file gains the interaction log empty, every play kept`() = runBlocking {
+        val store = store(version = 3)
+        val play = LoggedPlay(salt, T0, 200_000, counted = true, start = picked, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 210_000))
+        store.put(play)
+
+        store.upgrade(3, PlaysSchema.VERSION)
+
+        assertEquals(INTERACTION_COLUMNS, store.columns("interactions"))
+        assertEquals(listOf(play), store.all())
+        assertEquals(emptyList<Interaction>(), store.interactions())
+        // A downgrade keeps the file; the next upgrade runs the step again without harm.
+        store.note(album)
+        store.upgrade(3, PlaysSchema.VERSION)
+        assertEquals(listOf(album), store.interactions())
+    }
+
+    @Test
+    fun `the interaction log is a step of its own after version 4, so a file at version 4 gains it too`() = runBlocking {
+        val store = store(version = 4)
+        assertEquals(emptySet<String>(), store.columns("interactions"))
+
+        store.upgrade(4, PlaysSchema.VERSION)
+
+        assertEquals(INTERACTION_COLUMNS, store.columns("interactions"))
+    }
+
+    @Test
+    fun `an interaction reads back as noted, and a search noted again at its time takes the result tapped`() = runBlocking {
+        val store = store()
+        listOf(lyrics, searched, album).forEach { store.note(it) }
+        assertEquals(listOf(searched, album, lyrics), store.interactions())
+
+        val tapped = searched.copy(target = Target(TargetKind.SONG, ember.path))
+        store.note(tapped)
+        // Another kind at the same time is another interaction.
+        val opened = Interaction(T0, InteractionKind.OPEN, 180, Target(TargetKind.PLAYLIST, "list-7"))
+        store.note(opened)
+
+        assertEquals(listOf(opened, tapped, album, lyrics), store.interactions())
+    }
+
+    @Test
+    fun `the interactions between two bounds, from inclusive until exclusive`() = runBlocking {
+        val store = store()
+        listOf(searched, album, lyrics).forEach { store.note(it) }
+
+        assertEquals(listOf(album), store.interactions(T0 + 1_000, T0 + 2_000))
+        assertEquals(listOf(album, lyrics), store.interactions(from = T0 + 1))
+        assertEquals(listOf(searched), store.interactions(until = T0 + 1_000))
+    }
+
+    @Test
+    fun `forgetting a search's words keeps the search and its result, and touches nothing else`() = runBlocking {
+        val store = store()
+        val tapped = searched.copy(target = Target(TargetKind.ARTIST, "Kit Calloway"))
+        val other = Interaction(T0 + 5_000, InteractionKind.SEARCH, 180, words = "Salt Lattice")
+        val opened = Interaction(T0 + 5_000, InteractionKind.OPEN, 180, Target(TargetKind.ARTIST, "Kit Calloway"))
+        listOf(tapped, other, opened).forEach { store.note(it) }
+
+        store.forget(listOf(T0, T0 + 5_000))
+
+        assertEquals(listOf(tapped.copy(words = null), opened, other.copy(words = null)), store.interactions())
+    }
+
+    @Test
+    fun `a restore adds the interactions not there, one there kept as the phone has it`() = runBlocking {
+        val store = store()
+        // Removed from Recent searches on this phone since the backup was made.
+        store.note(searched.copy(words = null))
+
+        store.putAll(emptyList(), listOf(searched, album))
+        store.putAll(emptyList(), listOf(searched, album))
+
+        assertEquals(listOf(searched.copy(words = null), album), store.interactions())
+    }
+
+    @Test
+    fun `a damaged interaction reads leniently, and one without a time or of an unknown kind is dropped`() = runBlocking {
+        val store = store()
+        val insert = "INSERT INTO interactions (at, kind, zone_offset_min, words, target, target_key) VALUES (?, ?, ?, ?, ?, ?)"
+        store.update(insert, T0, "search", 99_999, "   ", "shelf", "x")
+        store.update(insert, T0, "open", "east", null, "album", null)
+        store.update(insert, T0 + 1, "lyrics", 60, null, "song", salt.path)
+        store.update(insert, T0 + 2, "share", 60, null, "song", salt.path)
+        store.update(insert, 0, "open", 60, null, "album", "a")
+        store.update(insert, -5, "open", 60, null, "album", "a")
+
+        assertEquals(
+            listOf(
+                // Blank words and a time zone past 18 hours are none; a target of a kind unknown here, or without its key, is none.
+                Interaction(T0, InteractionKind.OPEN, null),
+                Interaction(T0, InteractionKind.SEARCH, null),
+                Interaction(T0 + 1, InteractionKind.LYRICS, 60, Target(TargetKind.SONG, salt.path)),
+            ),
+            store.interactions(),
+        )
+    }
+
+    @Test
+    fun `the fake log keeps interactions as plays_db does`() = runBlocking {
+        val tapped = searched.copy(target = Target(TargetKind.FOLDER, "Music/Rips"))
+        val fake = FakePlayLog()
+        val sql = store()
+        listOf(fake, sql).forEach { store ->
+            listOf(lyrics, searched, album, tapped).forEach { store.note(it) }
+            store.forget(listOf(T0, T0 + 1_000))
+            store.putAll(emptyList(), listOf(searched, Interaction(T0 + 9_000, InteractionKind.OPEN, 0, Target(TargetKind.SONG, ember.path))))
+        }
+
+        assertEquals(sql.interactions(), fake.interactions())
+        assertEquals(sql.interactions(T0 + 1_000, T0 + 9_000), fake.interactions(T0 + 1_000, T0 + 9_000))
+    }
+
     private companion object {
         const val MUSIC: String = "/storage/emulated/0/Music/KJB test"
         const val T0: Long = 1_800_000_000_000L
@@ -228,6 +349,7 @@ class PlaysSqlTest {
         val PLAYS_310: Set<String> = setOf("path", "started_at", "media_id", "heard_ms", "counted")
         val OPEN_PLAYS_310: Set<String> = setOf("path", "started_at", "duration_ms", "position_ms", "spans")
         val NEW_COLUMNS: Set<String> = setOf("started_by", "source", "shuffled", "zone_offset_min", "song_key", "ended_how", "ended_at_ms", "imported")
+        val INTERACTION_COLUMNS: Set<String> = setOf("at", "kind", "zone_offset_min", "words", "target", "target_key")
 
         /** 3.1.0's PlaysSchema.PUT. */
         const val PUT_310: String = "INSERT INTO plays (path, started_at, media_id, heard_ms, counted) VALUES (?, ?, ?, ?, ?) " +

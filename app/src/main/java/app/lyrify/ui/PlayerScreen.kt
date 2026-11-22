@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import app.lyrify.stats.StatsGraph
 import kotlinx.coroutines.CoroutineScope
 import androidx.compose.runtime.Stable
 import androidx.compose.ui.draw.drawWithContent
@@ -575,7 +576,10 @@ fun PlayerView() {
                     // stays as the user left it.
                     showLyrics = showsLyrics(settings.playerUi, bookPart, touring = LocalTour.current?.state?.stop == TourStop.LYRICS),
                     flips = !bookPart,
-                    onFlip = { lyrics -> scope.launch { store.update { it.copy(playerUi = flipped(it.playerUi, lyrics, bookPart)) } } },
+                    onFlip = { lyrics ->
+                        if (lyrics) StatsGraph.interactions(context).lyrics(ui.item.song.path)
+                        scope.launch { store.update { it.copy(playerUi = flipped(it.playerUi, lyrics, bookPart)) } }
+                    },
                     onSeek = connection::seekTo,
                     onPlay = connection::play,
                     // In a book the swipe goes by chapter, as the buttons under it do.
@@ -1227,6 +1231,7 @@ private fun FlipChip(modifier: Modifier, enabled: Boolean, onFlip: () -> Unit) {
 @Composable
 private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, onSeek: (Long) -> Unit, onPlay: () -> Unit, onRoute: (PlayerRoute) -> Unit) {
     val nav = LocalNavigator.current
+    val context = LocalContext.current
     val path = ui.item.song.path
     val entry = LocalLyrics.current.ledger.entries[path]
     val book = knownBookPart(path, ui.library)
@@ -1247,7 +1252,10 @@ private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, 
             Spacer(Modifier.weight(1f))
             if (book == false) {
                 AaButton(enabled) { onRoute(PlayerRoute.LYRICS_TEXT) }
-                LyrifyButton(stringResource(R.string.player_full_screen), { nav.show(FullScreen.FullLyrics) }, kind = ButtonKind.GHOST, icon = R.drawable.ic_open_in_full, compact = true, enabled = enabled)
+                LyrifyButton(stringResource(R.string.player_full_screen), {
+                    StatsGraph.interactions(context).lyrics(path)
+                    nav.show(FullScreen.FullLyrics)
+                }, kind = ButtonKind.GHOST, icon = R.drawable.ic_open_in_full, compact = true, enabled = enabled)
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {

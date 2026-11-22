@@ -519,11 +519,12 @@ class BackupRestoreTest {
             BackupSnapshot(
                 BackupFixtures.playlists, BackupFixtures.queues, BackupFixtures.plays, BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings,
                 repeat = Repeat.OFF, aiLyrics = false, tones = TonesState(), duplicates = DuplicateChoices(), coversTags = CoversTagsMemory(), keptApart = emptySet(), searches = emptyList(),
-                books = BackupFixtures.books,
+                books = BackupFixtures.books, interactions = emptyList(),
             ),
             stores.snapshot(),
         )
         stores.log.failing = true
         assertEquals(null, stores.snapshot().plays)
+        assertEquals(null, stores.snapshot().interactions)
     }
 }

@@ -4,8 +4,10 @@ import app.lyrify.library.SongRef
 import app.lyrify.player.AbPart
 import app.lyrify.player.SongState
 import app.lyrify.player.Speed
+import app.lyrify.stats.Interaction
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.codeOf
+import app.lyrify.stats.interactionOf
 import app.lyrify.stats.playEndedOf
 import app.lyrify.stats.playStartOf
 import app.lyrify.stats.zoneOffsetOf
@@ -72,6 +74,9 @@ data class BackupAlbum(
     val problems: List<SongProblem>,
 )
 
+/** The plays section: every play, the skips among them, and the interaction log kept beside them. */
+data class BackupPlays(val plays: List<LoggedPlay>, val interactions: List<Interaction>)
+
 /** Covers & tags in a backup: the albums settled and its two flags. */
 data class BackupCovers(val albums: List<BackupAlbum>, val checkedOnce: Boolean, val noted: Boolean)
 
@@ -81,11 +86,51 @@ internal object SectionJson {
     /**
      * Every play with what it keeps, a key for each part it has; the skips ([LoggedPlay.isShort]) apart, under a key of
      * their own that 3.1.0 does not read, so it restores the plays it knew and none it never kept. No key marks an
-     * import's play: its shape does (nothing heard, counted), as `plays.db`'s own upgrade finds them.
+     * import's play: its shape does (nothing heard, counted), as `plays.db`'s own upgrade finds them. The [interactions]
+     * (none when the log could not be read) under a key of their own too, which 3.1.1 and before do not read.
+     *
+     * In parts of at most [partBytes] each (UTF-8; one item bigger alone has a part of its own), each in this same form:
+     * the first holds the newest plays, as many as fit, so a KJB that reads only the first (3.1.1 and before) restores
+     * those; then the older plays, the skips and the interactions, the newest first. One part when all fit, as before.
+     * Each part is made as it is asked for, so a long history never stands in memory whole as JSON.
      */
-    fun plays(plays: List<LoggedPlay>): String = JsonObject(
-        mapOf(PLAYS_KEY to JsonArray(plays.filterNot { it.isShort }.map(::play)), SKIPS_KEY to JsonArray(plays.filter { it.isShort }.map(::play))),
-    ).toString()
+    fun plays(plays: List<LoggedPlay>, interactions: List<Interaction>? = null, partBytes: Int = Int.MAX_VALUE): List<String> {
+        // Each list the newest first, the order the parts are filled in.
+        val kept = plays.filterNot { it.isShort }.asReversed()
+        val skips = plays.filter { it.isShort }.asReversed()
+        val logged = interactions?.asReversed()
+        val lists = listOfNotNull(
+            Listed(PLAYS_KEY, kept.size) { play(kept[it]) },
+            Listed(SKIPS_KEY, skips.size) { play(skips[it]) },
+            logged?.let { Listed(INTERACTIONS_KEY, it.size) { at -> interaction(it[at]) } },
+        )
+        var parts = 1
+        var used = 0L
+        lists.forEach { list ->
+            for (item in 0 until list.size) {
+                // Its JSON and the comma before it.
+                val size = list.json(item).toString().encodeToByteArray().size + 1L
+                if (used > 0 && used + size > partBytes - PART_FRAME_BYTES) {
+                    parts++
+                    used = 0
+                }
+                used += size
+                list.parts[item] = parts - 1
+            }
+        }
+        // Each part's lists the oldest first, as a section in one part has them.
+        return object : AbstractList<String>() {
+            override val size: Int = parts
+
+            override fun get(index: Int): String =
+                JsonObject(lists.associate { list -> list.key to JsonArray((list.size - 1 downTo 0).filter { list.parts[it] == index }.map(list.json)) }).toString()
+        }
+    }
+
+    /** One of the plays section's lists, its items by their place ([json]), and the part each goes in ([parts]). */
+    private class Listed(val key: String, val size: Int, val json: (Int) -> JsonObject) {
+        val parts = IntArray(size)
+    }
 
     private fun play(play: LoggedPlay): JsonObject = JsonObject(
         buildMap {
@@ -110,12 +155,33 @@ internal object SectionJson {
     /**
      * The plays, then the skips (none in a backup from before), each read on its own: one without a path or a start is
      * left out, and so is a skip that is none. What a play keeps is read as `plays.db` reads it ([playStartOf],
-     * [playEndedOf], [zoneOffsetOf]); one with nothing heard that counted is an import's.
+     * [playEndedOf], [zoneOffsetOf]); one with nothing heard that counted is an import's. The interactions (none in a
+     * backup from before) as `plays.db` reads them ([interactionOf]).
      */
-    fun plays(text: String): List<LoggedPlay>? {
+    fun plays(text: String): BackupPlays? {
         val root = jsonObject(text) ?: return null
         val plays = (root[PLAYS_KEY] as? JsonArray ?: return null).mapNotNull(::play)
-        return plays + (root[SKIPS_KEY] as? JsonArray).orEmpty().mapNotNull(::play).filter { it.isShort }
+        val skips = (root[SKIPS_KEY] as? JsonArray).orEmpty().mapNotNull(::play).filter { it.isShort }
+        return BackupPlays(plays + skips, (root[INTERACTIONS_KEY] as? JsonArray).orEmpty().mapNotNull(::interaction))
+    }
+
+    /** An interaction, a key for each part it has, codes as `plays.db` keeps them. */
+    private fun interaction(interaction: Interaction): JsonObject = JsonObject(
+        buildMap {
+            put(AT_KEY, JsonPrimitive(interaction.at))
+            put(KIND_KEY, JsonPrimitive(codeOf(interaction.kind)))
+            interaction.zoneOffsetMinutes?.let { put(ZONE_KEY, JsonPrimitive(it)) }
+            interaction.target?.let { target ->
+                put(TARGET_KEY, JsonPrimitive(codeOf(target.kind)))
+                put(TARGET_KEY_KEY, JsonPrimitive(target.key))
+            }
+            interaction.words?.let { put(WORDS_KEY, JsonPrimitive(it)) }
+        },
+    )
+
+    private fun interaction(element: JsonElement): Interaction? {
+        val stored = element as? JsonObject ?: return null
+        return interactionOf(stored.long(AT_KEY), stored.text(KIND_KEY), stored.long(ZONE_KEY), stored.text(TARGET_KEY), stored.text(TARGET_KEY_KEY), stored.text(WORDS_KEY))
     }
 
     private fun play(element: JsonElement): LoggedPlay? {
@@ -360,6 +426,13 @@ internal object SectionJson {
     private const val ZONE_KEY: String = "zoneOffset"
     private const val ENDED_KEY: String = "ended"
     private const val ENDED_AT_KEY: String = "endedAtMs"
+    private const val INTERACTIONS_KEY: String = "interactions"
+
+    /** Room in a part for its keys and brackets around the lists: `{"plays":[],"skips":[],"interactions":[]}`. */
+    private const val PART_FRAME_BYTES: Int = 64
+    private const val TARGET_KEY: String = "target"
+    private const val TARGET_KEY_KEY: String = "targetKey"
+    private const val WORDS_KEY: String = "words"
     private const val PLACE_KEY: String = "placeMs"
     private const val BOOKMARKS_KEY: String = "bookmarks"
     private const val POSITION_KEY: String = "positionMs"

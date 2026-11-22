@@ -57,6 +57,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -81,6 +82,8 @@ import app.lyrify.media.NowPlaying
 import app.lyrify.media.SweepProgress
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.Settings
+import app.lyrify.stats.StatsGraph
+import app.lyrify.stats.TargetKind
 import app.lyrify.tones.ToneListStore
 import app.lyrify.tones.TonesState
 import kotlinx.coroutines.CancellationException
@@ -241,6 +244,11 @@ fun AppShell(
     }
     LaunchedEffect(checkAnswers) {
         checkAnswers.messages.collect { toasts.say(resources, it) }
+    }
+    // The interaction log: each album, artist and playlist page asked for, once (a song's Song info is noted where it opens).
+    LaunchedEffect(nav) {
+        val interactions = StatsGraph.interactions(context)
+        snapshotFlow { nav.opened }.collect { opened -> opened.page?.let(::targetOf)?.takeIf { it.kind != TargetKind.FOLDER }?.let(interactions::opened) }
     }
     // The page layer follows every move, and Back over it (pages and the tab history).
     PagesBack(nav, pages, swipe, reduced)

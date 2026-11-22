@@ -10,6 +10,8 @@ import app.lyrify.library.search.LyricHit
 import app.lyrify.library.search.Match
 import app.lyrify.library.search.MatchKind
 import app.lyrify.library.song
+import app.lyrify.stats.Target
+import app.lyrify.stats.TargetKind
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -39,6 +41,17 @@ class SearchScreenTest {
         lists = (1..4).map { Hit(ListRow(Page.Playlist("p$it"), "Lantern list $it", 3, 0), "Lantern list $it", at) },
         lyrics = lyricHits(listOf(songs[0], bell, songs[1], songs[2], songs[3])),
     )
+
+    @Test
+    fun `the interaction log notes a page by its kind and key, and a built-in list or a tool as nothing`() {
+        assertEquals(Target(TargetKind.ALBUM, "[\"Kit Calloway\",\"Harbour Glass\"]"), targetOf(Page.Album("[\"Kit Calloway\",\"Harbour Glass\"]")))
+        assertEquals(Target(TargetKind.ARTIST, "Kit Calloway"), targetOf(Page.Artist("Kit Calloway")))
+        assertEquals(Target(TargetKind.FOLDER, "Music/Lanterns"), targetOf(Page.Folder("Music/Lanterns")))
+        assertEquals(Target(TargetKind.PLAYLIST, "p1"), targetOf(results.lists.first().item.page))
+        assertNull(targetOf(Page.BuiltIn(BuiltInList.MOST_PLAYED)))
+        assertNull(targetOf(Page.Genre("Folk")))
+        assertNull(targetOf(Page.Duplicates))
+    }
 
     @Test
     fun `groups show in order, each with its count, empty ones left out`() {

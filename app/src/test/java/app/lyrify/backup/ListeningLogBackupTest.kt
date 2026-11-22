@@ -114,7 +114,7 @@ class ListeningLogBackupTest {
                 LoggedPlay(SongRef(water.path), T0 + 1, 0, counted = true, imported = true),
                 LoggedPlay(SongRef(bell.path), T0 + 2, 0, counted = false),
             ),
-            SectionJson.plays(old),
+            SectionJson.plays(old)?.plays,
         )
     }
 
@@ -138,7 +138,7 @@ class ListeningLogBackupTest {
                 LoggedPlay(SongRef(bell.path), T0 + 1, 300, counted = false),
             ),
             // Among the skips, only skips: a play that counted there is none.
-            SectionJson.plays(damaged),
+            SectionJson.plays(damaged)?.plays,
         )
     }
 
