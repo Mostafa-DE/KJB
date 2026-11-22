@@ -131,6 +131,19 @@ class OpenedFilesTest {
     }
 
     @Test
+    fun `a copy in KJB's cache is the library's song when exactly one has its name and size, nothing outside the copies`() {
+        val root = temp.newFolder("opened")
+        val copy = File(root, "1800000000000/0/Quiet Orchard.m4b").apply { parentFile!!.mkdirs(); writeBytes(ByteArray(1_234)) }
+        val book = orchard.copy(sizeBytes = 1_234)
+        assertEquals(book, copyMatch(copy, root, listOf(tide, book)))
+        assertNull("the size differs", copyMatch(copy, root, listOf(tide, orchard)))
+        assertNull("two songs match", copyMatch(copy, root, listOf(book, song("Music/Backup/Quiet Orchard.m4b").copy(sizeBytes = 1_234))))
+        val outside = File(temp.newFolder("elsewhere"), "Quiet Orchard.m4b").apply { writeBytes(ByteArray(1_234)) }
+        assertNull("not a copy", copyMatch(outside, root, listOf(book)))
+        assertNull("gone", copyMatch(File(root, "1800000000000/1/Quiet Orchard.m4b"), root, listOf(book)))
+    }
+
+    @Test
     fun `the name and size are read by their columns, whatever order the opening app gives them in`() {
         // A provider that hands back more columns than asked for, the size not first.
         val row = rows(listOf(OpenableColumns.DISPLAY_NAME, "_data_length", OpenableColumns.SIZE), listOf("Quiet Orchard.m4b", 7L, 512_000_000L))

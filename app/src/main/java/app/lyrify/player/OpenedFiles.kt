@@ -92,6 +92,20 @@ fun openedRef(address: String, songs: List<Song>, tell: (String) -> Openable, co
     return if (content) copy(address, told.value.name) else null
 }
 
+/**
+ * The library's song a copy of an opened file is, by its name and size ([matchNamed]): [file] in KJB's copies under
+ * [root]; null for any other file, or one gone. Blocking.
+ */
+fun copyMatch(file: File, root: File, songs: List<Song>): Song? {
+    val inside = try {
+        file.canonicalPath.startsWith(root.canonicalPath + "/")
+    } catch (e: IOException) {
+        false
+    }
+    if (!inside || !file.isFile) return null
+    return matchNamed(Openable(file.name, file.length()), songs)
+}
+
 /** [column] of the first row of [row] as a number, found by its name; null without a row, or with the column missing or empty. */
 internal fun firstLong(row: Cursor, column: String): Long? {
     val at = row.getColumnIndex(column)
@@ -358,6 +372,9 @@ object OpenedFiles {
      */
     fun song(context: Context, ref: SongRef): Song? =
         held.value[ref.path] ?: ref.path.takeIf { it.startsWith(folder(context).path + "/") }?.let { plainSong(File(it), readTags = false) }
+
+    /** The library's song the copy at [path] is, by its name and size ([copyMatch]); null for any other path. Blocking. */
+    fun libraryCopy(context: Context, path: String, songs: List<Song>): Song? = copyMatch(File(path), folder(context), songs)
 
     /**
      * The embedded cover of the copy at [path], decoded at the largest halving still at least [px] on its longer side

@@ -17,6 +17,7 @@ import app.lyrify.LOG_TAG
 import app.lyrify.R
 import app.lyrify.books.BookState
 import app.lyrify.books.asBook
+import app.lyrify.books.resumeAsBook
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryRepository
@@ -302,7 +303,7 @@ class PlayerConnection(
     }
 
     fun resume(queueId: String) {
-        switchAsBook { it.resume(queueId, core.now()) }
+        core.switch { it.resumeAsBook(queueId, library(), books.value, core.now()) }
         send { it.play() }
     }
 
@@ -336,8 +337,11 @@ class PlayerConnection(
 
     /** [change], or the book's own queue when the song it starts is a book's file ([asBook]): a book always plays as a book. */
     private fun switchAsBook(change: (QueueBook) -> Switched) {
-        core.switch { book -> book.asBook(change(book), (repository.state.value as? LibraryState.Ready)?.library, books.value, core.now()) }
+        core.switch { book -> book.asBook(change(book), library(), books.value, core.now()) }
     }
+
+    /** The library as read now, not as [library] last passed it on: a book started right after the read is known. */
+    private fun library(): Library? = (repository.state.value as? LibraryState.Ready)?.library
 
     // The controller
 
