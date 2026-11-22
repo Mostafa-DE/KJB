@@ -148,9 +148,11 @@ object QueuesJson {
     /** A queue's members but its two lists ([Encoder] adds them). */
     private fun head(queue: Queue): Map<String, JsonElement> = buildMap {
         put(ID_KEY, JsonPrimitive(queue.id))
-        // A list KJB suggested is stored as picked songs with a mark: an older KJB, which knows no such list, keeps its songs.
+        // A list KJB suggested, or a card a friend sent, is stored as picked songs with a mark: an older KJB, which knows no
+        // such list, keeps its songs.
         val suggested = queue.source.kind == SourceKind.SUGGESTIONS
-        val kind = if (suggested) SourceKind.PICKED else queue.source.kind
+        val sent = queue.source.kind == SourceKind.HUDDLE
+        val kind = if (suggested || sent) SourceKind.PICKED else queue.source.kind
         put(
             SOURCE_KEY,
             JsonObject(
@@ -159,6 +161,7 @@ object QueuesJson {
                     put(KEY_KEY, JsonPrimitive(queue.source.key))
                     put(NAME_KEY, JsonPrimitive(queue.source.name))
                     if (suggested) put(SUGGESTIONS_KEY, JsonPrimitive(true))
+                    if (sent) put(HUDDLE_KEY, JsonPrimitive(true))
                 },
             ),
         )
@@ -188,7 +191,11 @@ object QueuesJson {
         val id = stored[ID_KEY]?.text() ?: return null
         val source = stored[SOURCE_KEY] as? JsonObject ?: return null
         val named = source[KIND_KEY]?.text()?.let { name -> SourceKind.entries.firstOrNull { it.name == name } } ?: return null
-        val kind = if ((source[SUGGESTIONS_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true) SourceKind.SUGGESTIONS else named
+        val kind = when {
+            (source[SUGGESTIONS_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true -> SourceKind.SUGGESTIONS
+            (source[HUDDLE_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true -> SourceKind.HUDDLE
+            else -> named
+        }
         val all = (stored[ITEMS_KEY] as? JsonArray).orEmpty()
         val items = all.mapNotNull(::item).distinctBy { it.uid }.distinctBy { it.song.path }
         if (items.size < all.size) onDropped(all.size - items.size)
@@ -277,6 +284,7 @@ object QueuesJson {
     private const val SUGGESTED_KEY: String = "suggested"
     private const val SMART_KEY: String = "smart"
     private const val SUGGESTIONS_KEY: String = "suggestions"
+    private const val HUDDLE_KEY: String = "huddle"
 }
 
 /** The stored form of [PlaybackPlace]: read leniently, a field it cannot use as its default; null when it is no JSON object. */

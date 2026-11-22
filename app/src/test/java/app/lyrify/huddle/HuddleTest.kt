@@ -364,6 +364,18 @@ class HuddleTest {
     }
 
     @Test
+    fun `a card opened stays a card, and dismissed it is put away too`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        juniper.accept(juniper.parse(link(wren, song))!!)
+        val id = juniperState.now.inbox.single().id
+        assertTrue(juniper.opened(id))
+        assertEquals(true to false, juniperState.now.inbox.single().let { it.opened to it.dismissed })
+        assertTrue(juniper.opened(id, dismissed = true))
+        assertEquals(true to true, juniperState.now.inbox.single().let { it.opened to it.dismissed })
+    }
+
+    @Test
     fun `a card held for a longer toast goes only once it ends, and Undo works until then`() = runTest {
         val (wren, wrenState) = phone("Wren")
         val (juniper, _) = phone("Juniper")

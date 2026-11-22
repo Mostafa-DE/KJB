@@ -656,6 +656,7 @@ fun sourceLabel(resources: Resources, source: QueueSource): String = when (sourc
     SourceKind.PLAYLIST -> resources.getString(R.string.lib_source_playlist, source.name)
     SourceKind.SEARCH -> resources.getString(R.string.lib_source_search, source.name)
     SourceKind.PICKED -> resources.getString(R.string.lib_source_picked, source.name)
+    SourceKind.HUDDLE -> resources.getString(R.string.huddle_from, source.name)
     SourceKind.FAVOURITES -> resources.getString(R.string.lib_favourites)
     SourceKind.MOST_PLAYED -> resources.getString(R.string.lib_most_played)
     SourceKind.RECENTLY_PLAYED -> resources.getString(R.string.lib_recently_played)

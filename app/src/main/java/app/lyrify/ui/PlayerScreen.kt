@@ -910,8 +910,8 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
     ) {
         PlayerCloseButton(onClose)
         // Where it plays from, without the time the queue started that the queue lists add; "Autoplay · after Road trip"
-        // once Autoplay keeps the music going after the queue's end.
-        val queueName = ui.queue.name ?: sourceLabel(context, ui.queue.source, ui.queue.items.size)
+        // once Autoplay keeps the music going after the queue's end. A friend's card names its sender as it is: "From Wren".
+        val queueName = ui.queue.name ?: ui.queue.source.name.takeIf { ui.queue.source.kind == SourceKind.HUDDLE } ?: sourceLabel(context, ui.queue.source, ui.queue.items.size)
         val name = if (ui.item.suggested == Suggested.AUTOPLAY) stringResource(R.string.suggest_from_autoplay, queueName) else queueName
         val bold = if (ui.item.suggested == Suggested.AUTOPLAY) stringResource(R.string.suggest_autoplay) else name
         Text(

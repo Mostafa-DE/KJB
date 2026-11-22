@@ -294,9 +294,9 @@ class Huddle(
     /** Listen privately until [until] (wall-clock millis; [HuddleState.FOREVER] until turned back on), or no longer (null). */
     suspend fun listenPrivately(until: Long?): Boolean = withContext(NonCancellable) { storage.change { it.copy(privateUntil = until) } }
 
-    /** The card [receivedId] was played, looked at or put away: it leaves the start screen. */
-    suspend fun opened(receivedId: String): Boolean = withContext(NonCancellable) {
-        storage.change { state -> state.copy(inbox = state.inbox.map { if (it.id == receivedId) it.copy(opened = true) else it }) }
+    /** The card [receivedId] was played or looked at; [dismissed]: put away, it also leaves the start screen. */
+    suspend fun opened(receivedId: String, dismissed: Boolean = false): Boolean = withContext(NonCancellable) {
+        storage.change { state -> state.copy(inbox = state.inbox.map { if (it.id == receivedId) it.copy(opened = true, dismissed = it.dismissed || dismissed) else it }) }
     }
 
     /**

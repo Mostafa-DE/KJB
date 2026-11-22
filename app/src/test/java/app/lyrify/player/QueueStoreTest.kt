@@ -90,6 +90,17 @@ class QueueStoreTest {
     }
 
     @Test
+    fun `a card a friend sent is stored as picked songs with a mark, so an older KJB keeps its songs`() {
+        val card = QueueBook().play(listOf(song("Glass Steps"), song("Copper Moon", 4)), 0, QueueSource(SourceKind.HUDDLE, "card-1", "Wren"), now = 5).book
+        val text = QueuesJson.encode(card)
+        assertEquals(card.copy(jumps = 0), QueuesJson.decode(text))
+        assertFalse("HUDDLE" in text)
+        val older = QueuesJson.decode(text.replace(Regex(""","?huddle"?:true"""), ""))!!.current!!
+        assertEquals(SourceKind.PICKED, older.source.kind)
+        assertEquals(card.current!!.items, older.items)
+    }
+
+    @Test
     fun `a queue stored before start times were kept starts at its last play`() {
         val old = QueuesJson.encode(book()).replace(Regex(""","?startedAt"?:\d+"""), "")
         val read = QueuesJson.decode(old)!!

@@ -75,10 +75,14 @@ fun huddleEntry(state: HuddleState): EntryRow = when {
     else -> EntryRow(ToolLine.Text(R.string.huddle_tool_none), null)
 }
 
-/** The card the start screen's "From <name>" row shows: the newest not opened yet, from a friend still here; null for none. */
+/**
+ * The card the start screen's "From <name>" row shows, from a friend still here: the newest not opened yet, else the newest
+ * card, opened, until it is dismissed (an older one never takes its place); null for none.
+ */
 fun newestCard(state: HuddleState): Received? {
     val here = state.friends.mapTo(HashSet()) { it.id }
     return state.inbox.filter { !it.opened && it.friend in here }.maxByOrNull { it.at }
+        ?: state.inbox.filter { it.friend in here }.maxByOrNull { it.at }?.takeUnless { it.dismissed }
 }
 
 /** Friends as Send to a friend lists them: the one you sent to last first, then the others by the name you see. */
@@ -178,9 +182,9 @@ fun HuddleHost(invite: String?, onInviteTaken: () -> Unit) {
 }
 
 /**
- * The start screen's row (plan part 3; at the top of Library's Songs, where For you sits too): the newest card a friend sent
- * that you have not opened, "From <name>" over what it is. A tap opens it ([ReceivedHost]); Dismiss puts it away, and it
- * stays on the Huddle page. Nothing without one.
+ * The start screen's row (plan part 3; at the top of Library's Songs, where For you sits too): the card [newestCard] picks,
+ * "From <name>" over what it is, in coral until it is opened, so who sent what plays stays in view. A tap opens it
+ * ([ReceivedHost]); Dismiss puts it away, and it stays on the Huddle page. Nothing without one.
  */
 @Composable
 fun HuddleFromRow() {
@@ -194,8 +198,8 @@ fun HuddleFromRow() {
         NavRow(
             title = stringResource(R.string.huddle_from, name),
             sub = cardLine(received.card),
-            lead = { Tile(R.drawable.ic_send, brand.highlightContainer, brand.onHighlightContainer) },
-            trailing = { ChromeIconButton(R.drawable.ic_close, stringResource(R.string.huddle_dismiss), { scope.launch { huddle.opened(received.id) } }, glass = false) },
+            lead = { if (received.opened) Tile(R.drawable.ic_send) else Tile(R.drawable.ic_send, brand.highlightContainer, brand.onHighlightContainer) },
+            trailing = { ChromeIconButton(R.drawable.ic_close, stringResource(R.string.huddle_dismiss), { scope.launch { huddle.opened(received.id, dismissed = true) } }, glass = false) },
         ) { opened = received.id }
     }
     ReceivedHost(opened) { opened = null }

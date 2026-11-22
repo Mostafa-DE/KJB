@@ -127,7 +127,7 @@ fun queueLabels(context: Context, book: QueueBook): Map<String, String> = queueN
 private fun madeName(context: Context, queue: Queue): String =
     context.getString(R.string.queue_name_made, sourceLabel(context, queue.source, queue.items.size), DateFormat.getTimeFormat(context).format(Date(queue.startedAt)))
 
-/** A source as the app names it; a picked queue by its size ("Picked · 3 songs"). */
+/** A source as the app names it; a picked queue by its size ("Picked · 3 songs"), a friend's card by its sender ("From Wren"). */
 fun sourceLabel(context: Context, source: QueueSource, songs: Int): String {
     val kind = when (source.kind) {
         SourceKind.SONGS -> return context.getString(R.string.queue_source_songs)
@@ -138,6 +138,7 @@ fun sourceLabel(context: Context, source: QueueSource, songs: Int): String {
         SourceKind.OPENED -> return context.getString(R.string.open_queue)
         SourceKind.SUGGESTIONS -> return source.name
         SourceKind.PICKED -> return context.getString(R.string.queue_source_picked, context.resources.getQuantityString(R.plurals.queue_songs, songs, songs))
+        SourceKind.HUDDLE -> return context.getString(R.string.huddle_from, source.name)
         SourceKind.ALBUM -> R.string.queue_source_album
         SourceKind.ARTIST -> R.string.queue_source_artist
         SourceKind.FOLDER -> R.string.queue_source_folder

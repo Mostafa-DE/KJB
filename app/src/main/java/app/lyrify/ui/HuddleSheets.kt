@@ -53,7 +53,8 @@ import app.lyrify.huddle.match
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
-import app.lyrify.player.pickedSource
+import app.lyrify.player.QueueSource
+import app.lyrify.player.SourceKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -190,10 +191,11 @@ internal fun ReceivedHost(id: String?, playNow: Boolean = false, onClose: () -> 
 }
 
 /**
- * The card, opened (it leaves the start screen): from whom, the note, and its songs found in this library ([match]): a song
- * found plays; one found only loosely asks "Is this the song?" first; one not here says so, with Ask <name> (your phone's
- * share sheet, any chat) and Search on YouTube. An album or a playlist lists each song with how it was found, plays the
- * ones you have, and asks for the rest at once. What plays is a queue of its own, "From <name>", and the player shows.
+ * The card, opened (the start screen keeps it, out of coral): from whom, the note, and its songs found in this library
+ * ([match]): a song found plays; one found only loosely asks "Is this the song?" first; one not here says so, with Ask
+ * <name> (your phone's share sheet, any chat) and Search on YouTube. An album or a playlist lists each song with how it was
+ * found, plays the ones you have, and asks for the rest at once. What plays is the card's own queue, "From <name>" (the
+ * name you see), and the player shows.
  */
 @Composable
 private fun ReceivedSheet(id: String, playNow: Boolean, said: Map<Int, Boolean>, onSaid: (Pair<Int, Boolean>) -> Unit, onYouTube: (String) -> Unit, onDismiss: () -> Unit) {
@@ -231,7 +233,7 @@ private fun ReceivedSheet(id: String, playNow: Boolean, said: Map<Int, Boolean>,
     }.orEmpty()
     val missing = found?.indices?.filter { at -> found[at] == Match.Missing || (found[at] is Match.Maybe && said[at] == false) }.orEmpty()
     val play = { songs: List<Song> ->
-        Lyrify.playback(context).play(songs.map { it.ref }, 0, pickedSource(resources.getString(R.string.huddle_from, from)))
+        Lyrify.playback(context).play(songs.map { it.ref }, 0, QueueSource(SourceKind.HUDDLE, received.id, from))
         onDismiss()
         nav.show(FullScreen.Player)
     }

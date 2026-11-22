@@ -79,9 +79,12 @@ data class PendingJoin(
     val card: Card? = null,
 )
 
-/** A card [friend] (their id) sent, [at] when, under its message [id]; [opened] once you played it, looked at it or put it away. */
+/**
+ * A card [friend] (their id) sent, [at] when, under its message [id]; [opened] once you played it, looked at it or put it
+ * away, [dismissed] once you put it away from the start screen.
+ */
 @Serializable
-data class Received(val id: String, val friend: String, val at: Long, val card: Card, val opened: Boolean = false)
+data class Received(val id: String, val friend: String, val at: Long, val card: Card, val opened: Boolean = false, val dismissed: Boolean = false)
 
 /** A play [friend] (their id) shared, started [at]; [favourite] when the song was one of theirs. */
 @Serializable
