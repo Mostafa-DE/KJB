@@ -479,7 +479,10 @@ object BackupBundle {
                 } ?: return BackupRead.Unreadable(BackupRead.Why.TOO_BIG)
                 partsLeft -= text.size
                 val more = SectionJson.plays(text.decodeToString()) ?: return notABackup
-                contents = contents.copy(plays = contents.plays.orEmpty() + more.plays, interactions = contents.interactions + more.interactions)
+                // A later part holds older ones: they go first, the plays and the skips apart, as one part reads them.
+                val (plays, skips) = contents.plays.orEmpty().partition { !it.isShort }
+                val (olderPlays, olderSkips) = more.plays.partition { !it.isShort }
+                contents = contents.copy(plays = olderPlays + plays + olderSkips + skips, interactions = more.interactions + contents.interactions)
             }
         }
         return BackupRead.Read(contents.copy(tooNew = tooNew.sorted(), unknown = unknown))

@@ -94,6 +94,9 @@ class LongHistoryBackupTest {
 
     private fun noId(play: LoggedPlay): LoggedPlay = play.copy(song = SongRef(play.song.path))
 
+    /** [plays] as a plays section in one part reads them: the plays, then the skips, each the oldest first. */
+    private fun asOnePart(plays: List<LoggedPlay>): List<LoggedPlay> = (plays.filterNot { it.isShort } + plays.filter { it.isShort }).map(::noId)
+
     // The rules, with small parts
 
     @Test
@@ -122,8 +125,10 @@ class LongHistoryBackupTest {
         assertEquals(plays.filterNot { it.isShort }.takeLast(first.size).map(::noId), first)
 
         val read = contents(bytes)
-        assertEquals(plays.map(::noId).sortedBy { it.startedAt }, read.plays?.sortedBy { it.startedAt })
-        assertEquals(interactions, read.interactions.sortedBy { it.at })
+        // Read back in the order one part has: nothing lost, doubled or moved.
+        assertEquals(asOnePart(plays), read.plays)
+        assertEquals(interactions, read.interactions)
+        assertEquals(contents(backup(plays, interactions)).plays, read.plays)
     }
 
     @Test
@@ -160,8 +165,9 @@ class LongHistoryBackupTest {
         assertEquals(plays.filterNot { it.isShort }.takeLast(first.size).map(::noId), first)
 
         val read = contents(bytes)
-        assertEquals(plays.map(::noId), read.plays?.sortedBy { it.startedAt })
-        assertEquals(interactions, read.interactions.sortedBy { it.at })
+        // Compared whole, not printed: a failure's message would be the history twice.
+        assertTrue("plays as one part has them", asOnePart(plays) == read.plays)
+        assertTrue("interactions as written", interactions == read.interactions)
     }
 
     private companion object {
