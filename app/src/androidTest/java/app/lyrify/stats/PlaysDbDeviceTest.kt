@@ -178,7 +178,7 @@ class PlaysDbDeviceTest {
     }
 
     @Test
-    fun theTopListsOnTenThousandPlaysTakeUnder50Ms() = runBlocking<Unit> {
+    fun theTopListsOnTenThousandPlaysTakeUnder50MsAndInsightsUnderHalfASecond() = runBlocking<Unit> {
         val songs = (1..SONGS).map { n ->
             Song(SongRef("$MUSIC/Made Up $n.mp3", n.toLong()), "Made Up $n", "Artist ${n % 40}", "Album ${n % 60}", null, 200_000, n % 12, null, 2020, null, "Music/KJB test/", T0, T0, 4_000_000, "audio/mpeg")
         }
@@ -199,17 +199,19 @@ class PlaysDbDeviceTest {
         val now = T0 + PLAYS * 60_000L
         val zone = ZoneId.of("Europe/Berlin")
 
+        // Insights (KJB 3.2, which replaced Your listening's queries) read every play heard, as milestones, streaks and the
+        // nudges look at all time: a page's worth of work, not a list's.
         val queries = listOf(
-            "most played" to suspend { stats.mostPlayed(50) },
-            "recently played" to suspend { stats.recentlyPlayed(50) },
-            "all time" to suspend { stats.listening(ListeningPeriod.ALL_TIME, now, zone, DayOfWeek.MONDAY) },
-            "week" to suspend { stats.listening(ListeningPeriod.WEEK, now, zone, DayOfWeek.MONDAY) },
+            Triple("most played", MAX_MS, suspend { stats.mostPlayed(50) }),
+            Triple("recently played", MAX_MS, suspend { stats.recentlyPlayed(50) }),
+            Triple("insights all time", MAX_INSIGHTS_MS, suspend { stats.insights(ListeningPeriod.ALL_TIME, now, zone, DayOfWeek.MONDAY) }),
+            Triple("insights week", MAX_INSIGHTS_MS, suspend { stats.insights(ListeningPeriod.WEEK, now, zone, DayOfWeek.MONDAY) }),
         )
-        queries.forEach { (name, query) ->
+        queries.forEach { (name, most, query) ->
             query()
             val millis = List(5) { measureNanoTime { query() } / 1_000_000 }.sorted()[2]
             Log.i(LOG_TAG, "plays device test: $name over $PLAYS plays in $millis ms")
-            assertTrue("$name took $millis ms", millis < MAX_MS)
+            assertTrue("$name took $millis ms", millis < most)
         }
         assertEquals(50, stats.mostPlayed(50).size)
     }
@@ -221,6 +223,7 @@ class PlaysDbDeviceTest {
         const val SONGS = 500
         const val PLAYS = 10_000
         const val MAX_MS: Long = 50
+        const val MAX_INSIGHTS_MS: Long = 500
 
         /** 3.1.0's PlaysSchema.PUT, word for word: how 3.1.0 writes a play. */
         const val PUT_310: String = "INSERT INTO plays (path, started_at, media_id, heard_ms, counted) VALUES (?, ?, ?, ?, ?) " +
