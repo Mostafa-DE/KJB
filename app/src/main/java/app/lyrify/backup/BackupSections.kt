@@ -88,14 +88,49 @@ internal object SectionJson {
      * their own that 3.1.0 does not read, so it restores the plays it knew and none it never kept. No key marks an
      * import's play: its shape does (nothing heard, counted), as `plays.db`'s own upgrade finds them. The [interactions]
      * (none when the log could not be read) under a key of their own too, which 3.1.1 and before do not read.
+     *
+     * In parts of at most [partBytes] each (UTF-8; one item bigger alone has a part of its own), each in this same form:
+     * the first holds the newest plays, as many as fit, so a KJB that reads only the first (3.1.1 and before) restores
+     * those; then the older plays, the skips and the interactions, the newest first. One part when all fit, as before.
+     * Each part is made as it is asked for, so a long history never stands in memory whole as JSON.
      */
-    fun plays(plays: List<LoggedPlay>, interactions: List<Interaction>? = null): String = JsonObject(
-        buildMap {
-            put(PLAYS_KEY, JsonArray(plays.filterNot { it.isShort }.map(::play)))
-            put(SKIPS_KEY, JsonArray(plays.filter { it.isShort }.map(::play)))
-            interactions?.let { put(INTERACTIONS_KEY, JsonArray(it.map(::interaction))) }
-        },
-    ).toString()
+    fun plays(plays: List<LoggedPlay>, interactions: List<Interaction>? = null, partBytes: Int = Int.MAX_VALUE): List<String> {
+        // Each list the newest first, the order the parts are filled in.
+        val kept = plays.filterNot { it.isShort }.asReversed()
+        val skips = plays.filter { it.isShort }.asReversed()
+        val logged = interactions?.asReversed()
+        val lists = listOfNotNull(
+            Listed(PLAYS_KEY, kept.size) { play(kept[it]) },
+            Listed(SKIPS_KEY, skips.size) { play(skips[it]) },
+            logged?.let { Listed(INTERACTIONS_KEY, it.size) { at -> interaction(it[at]) } },
+        )
+        var parts = 1
+        var used = 0L
+        lists.forEach { list ->
+            for (item in 0 until list.size) {
+                // Its JSON and the comma before it.
+                val size = list.json(item).toString().encodeToByteArray().size + 1L
+                if (used > 0 && used + size > partBytes - PART_FRAME_BYTES) {
+                    parts++
+                    used = 0
+                }
+                used += size
+                list.parts[item] = parts - 1
+            }
+        }
+        // Each part's lists the oldest first, as a section in one part has them.
+        return object : AbstractList<String>() {
+            override val size: Int = parts
+
+            override fun get(index: Int): String =
+                JsonObject(lists.associate { list -> list.key to JsonArray((list.size - 1 downTo 0).filter { list.parts[it] == index }.map(list.json)) }).toString()
+        }
+    }
+
+    /** One of the plays section's lists, its items by their place ([json]), and the part each goes in ([parts]). */
+    private class Listed(val key: String, val size: Int, val json: (Int) -> JsonObject) {
+        val parts = IntArray(size)
+    }
 
     private fun play(play: LoggedPlay): JsonObject = JsonObject(
         buildMap {
@@ -392,6 +427,9 @@ internal object SectionJson {
     private const val ENDED_KEY: String = "ended"
     private const val ENDED_AT_KEY: String = "endedAtMs"
     private const val INTERACTIONS_KEY: String = "interactions"
+
+    /** Room in a part for its keys and brackets around the lists: `{"plays":[],"skips":[],"interactions":[]}`. */
+    private const val PART_FRAME_BYTES: Int = 64
     private const val TARGET_KEY: String = "target"
     private const val TARGET_KEY_KEY: String = "targetKey"
     private const val WORDS_KEY: String = "words"

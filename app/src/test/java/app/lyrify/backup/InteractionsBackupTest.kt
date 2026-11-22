@@ -8,11 +8,9 @@ import app.lyrify.backup.BackupFixtures.lantern
 import app.lyrify.backup.BackupFixtures.newBell
 import app.lyrify.backup.BackupFixtures.newLantern
 import app.lyrify.backup.BackupFixtures.newLibrary
+import app.lyrify.backup.BackupFixtures.plays311
 import app.lyrify.backup.BackupFixtures.water
 import app.lyrify.backup.BackupFixtures.zip
-import app.lyrify.backup.SectionJson.flag
-import app.lyrify.backup.SectionJson.long
-import app.lyrify.backup.SectionJson.text
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
 import app.lyrify.stats.Interaction
@@ -20,14 +18,8 @@ import app.lyrify.stats.InteractionKind
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.Target
 import app.lyrify.stats.TargetKind
-import app.lyrify.stats.playEndedOf
-import app.lyrify.stats.playStartOf
-import app.lyrify.stats.zoneOffsetOf
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -159,30 +151,5 @@ class InteractionsBackupTest {
         assertEquals(listOf(Section.PLAYS), result.failed)
         assertEquals(emptyList<Interaction>(), failing.log.interactions)
         assertEquals(emptyList<LoggedPlay>(), failing.log.plays)
-    }
-
-    private companion object {
-        /** 3.1.1's reading of the plays section (backup/BackupSections.kt at v3.1.1), word for word. */
-        fun plays311(text: String): List<LoggedPlay>? {
-            val root = SectionJson.jsonObject(text) ?: return null
-            val plays = (root["plays"] as? JsonArray ?: return null).mapNotNull(::play311)
-            return plays + (root["skips"] as? JsonArray).orEmpty().mapNotNull(::play311).filter { it.isShort }
-        }
-
-        private fun play311(element: JsonElement): LoggedPlay? {
-            val play = element as? JsonObject ?: return null
-            val heardMs = play.long("heardMs")?.coerceAtLeast(0) ?: 0
-            val counted = play.flag("counted") ?: false
-            return LoggedPlay(
-                song = SongRef(play.text("path")?.takeIf(String::isNotEmpty) ?: return null),
-                startedAt = play.long("startedAt")?.takeIf { it > 0 } ?: return null,
-                heardMs = heardMs,
-                counted = counted,
-                start = playStartOf(play.text("startedBy"), play.text("source"), play.flag("shuffled"), play.text("songKey")),
-                zoneOffsetMinutes = zoneOffsetOf(play.long("zoneOffset")),
-                end = playEndedOf(play.text("ended"), play.long("endedAtMs")),
-                imported = counted && heardMs == 0L,
-            )
-        }
     }
 }
