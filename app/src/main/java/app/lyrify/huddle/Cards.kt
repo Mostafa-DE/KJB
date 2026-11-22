@@ -7,17 +7,21 @@ import app.lyrify.backup.SectionJson.long
 import app.lyrify.backup.SectionJson.text
 import app.lyrify.backup.SongMatcher
 import app.lyrify.library.Song
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
 /** A song as Huddle sends it: what a friend's KJB needs to find it in their own library, never the file. */
+@Serializable
 data class CardSong(val title: String, val artist: String?, val album: String?, val durationMs: Long)
 
+@Serializable
 enum class CardKind { SONG, ALBUM, PLAYLIST }
 
 /** What a friend sends: one song, an album or a playlist ([songs] in order), the album's or playlist's [name], and a [note]. */
+@Serializable
 data class Card(val kind: CardKind, val songs: List<CardSong>, val name: String? = null, val note: String? = null)
 
 /** One message between two friends, sealed in its mailbox: [id] is random (a copy the server sends again is dropped), [at] when it was made. */
