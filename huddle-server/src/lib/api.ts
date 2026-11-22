@@ -1,3 +1,4 @@
+import { isIPv6 } from "node:net"
 import { z } from "zod"
 import { LIMITS } from "@/lib/limits"
 
@@ -42,33 +43,50 @@ export function dataSize(data: string) {
 }
 
 // In-process, fixed-window counters for the one Railway replica. They reset on a redeploy; a second replica would
-// need a shared store.
+// need a shared store. The Map keeps them in order of last use.
 const rateWindows = new Map<string, { used: number; endsAt: number }>()
 
-function sweepRateWindows(now: number) {
+function makeRoomForRateWindows(now: number) {
   for (const [key, window] of rateWindows) {
     if (window.endsAt <= now) rateWindows.delete(key)
   }
-  // Still too many live keys means a flood of distinct addresses or mailboxes: forget them all rather than grow.
-  if (rateWindows.size >= LIMITS.rateKeys) rateWindows.clear()
+  // Still too many live windows means a flood of distinct addresses or mailboxes: forget the least recently used
+  // tenth, never all of them, so the busy windows (a flood's own among them) keep counting.
+  for (const key of rateWindows.keys()) {
+    if (rateWindows.size < LIMITS.rateKeys * 0.9) break
+    rateWindows.delete(key)
+  }
 }
 
 /** Counts `cost` against `key`, or throws `429 rate_limited` with the seconds left in the window. */
 export function enforceRate(key: string, rule: { limit: number; windowMs: number }, cost = 1) {
   const now = Date.now()
-  if (rateWindows.size >= LIMITS.rateKeys) sweepRateWindows(now)
   const window = rateWindows.get(key)
   const current = window && window.endsAt > now ? window : { used: 0, endsAt: now + rule.windowMs }
   if (current.used + cost > rule.limit) {
     const retryAfter = Math.max(1, Math.ceil((current.endsAt - now) / 1000))
     throw new ApiError(429, "rate_limited", { "Retry-After": String(retryAfter) })
   }
+  rateWindows.delete(key)
+  if (rateWindows.size >= LIMITS.rateKeys) makeRoomForRateWindows(now)
   rateWindows.set(key, { used: current.used + cost, endsAt: current.endsAt })
 }
 
-/** The caller's address. Railway's edge sets X-Real-IP to it (docs.railway.com, public networking specs). */
+/**
+ * The caller's address as the limits count it. Railway's edge sets X-Real-IP to it (docs.railway.com, public
+ * networking specs). An IPv6 caller counts by its /64, the block one home or phone gets; an IPv4 address written as
+ * IPv6 counts as the IPv4 address.
+ */
 export function clientIp(request: Request) {
-  return request.headers.get("x-real-ip")?.trim() || "unknown"
+  const ip = request.headers.get("x-real-ip")?.trim().toLowerCase() || "unknown"
+  if (!isIPv6(ip)) return ip
+  if (ip.includes(".")) return ip.slice(ip.lastIndexOf(":") + 1)
+
+  const [head, tail] = ip.split("::")
+  const left = head ? head.split(":") : []
+  const right = tail ? tail.split(":") : []
+  const groups = tail === undefined ? left : [...left, ...Array(8 - left.length - right.length).fill("0"), ...right]
+  return `${groups.slice(0, 4).map((group) => group.replace(/^0+(?=.)/, "")).join(":")}::/64`
 }
 
 async function readJsonBody(request: Request) {
@@ -97,10 +115,23 @@ async function readJsonBody(request: Request) {
   }
 }
 
+/**
+ * What a log may say about an error: the kind and code of it and its causes, never a message, which can quote the
+ * failing query's values (Drizzle's does: ciphertext and hashes).
+ */
+export function describeError(error: unknown) {
+  const parts = []
+  for (let cause = error; cause instanceof Error && parts.length < 3; cause = cause.cause) {
+    const code = (cause as { code?: unknown }).code
+    parts.push(typeof code === "string" ? `${cause.constructor.name} ${code}` : cause.constructor.name)
+  }
+  return parts.join(" < ") || typeof error
+}
+
 /** The answer for anything thrown while handling a request. Unexpected errors are logged without request data. */
 export function errorResponse(error: unknown) {
   if (error instanceof ApiError) return json(error.status, { error: error.code }, error.headers)
-  console.error("huddle: unexpected error:", error instanceof Error ? error.message : String(error))
+  console.error("huddle: unexpected error:", describeError(error))
   return json(500, { error: "server_error" })
 }
 

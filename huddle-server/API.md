@@ -96,8 +96,9 @@ read or delete it.
 { "invite": "<id>", "owner": "<id>" }
 ```
 
-`201 {"expiresAt": 1764424800000}`. Unaccepted invites expire 7 days after creation. Errors: `400`, `409
-invite_exists`, `429` (30 per hour per IP), `503 storage_full`.
+`invite` and `owner` must differ (`400` with `"field":"owner"` otherwise). `201 {"expiresAt": 1764424800000}`.
+Unaccepted invites expire 7 days after creation. Errors: `400`, `409 invite_exists`, `429` (30 per hour per IP),
+`503 storage_full`.
 
 ### `POST /api/v1/invites/accept`
 
@@ -168,7 +169,7 @@ album or playlist lists before sealing.
 
 `201 {"id": "1734", "sentAt": 1763820000000, "expiresAt": 1766412000000}`. Keep `id` and `mailbox` for "Undo".
 Errors: `400`, `409 mailbox_full`, `413 too_large`, `429` (240 sends per hour into one mailbox; 16 MiB of data per
-hour per IP), `503 storage_full`.
+hour and 24 MiB per day per IP), `503 storage_full`.
 
 ### `POST /api/v1/messages/inbox`
 
@@ -204,8 +205,10 @@ every waiting message comes back. `200`:
 
 - Mailboxes come back in the order asked. Messages come oldest first.
 - At most 100 messages per mailbox and about 1 MiB of data per response. `more: true` means there is more: call again
-  with `after` set to the last id you got.
-- Plays in the answer are deleted on the server as they are returned. Cards and profiles stay until `ack`.
+  with `after` set to the last id you got (or without `after` if that mailbox returned nothing this time). Once an
+  answer is full, the mailboxes after it come back with no messages, and `more` says whether any wait.
+- Plays in the answer are deleted on the server as they are returned, and each play goes to one call only: two calls
+  at the same moment never both get it. Cards and profiles stay until `ack`.
 - `now` is the server's clock, for showing "2 minutes ago" correctly on a phone whose clock is off.
 
 ### `POST /api/v1/messages/ack`
@@ -267,14 +270,15 @@ At 10 friends with the Huddle page open, a phone makes about 2 calls a minute, f
 | Kept: card, profile / play / waiting invite / accepted invite | 30 days / 24 h / 7 days / 7 days after accept |
 | `inbox` | 64 mailboxes, 100 messages each, about 1 MiB of data per answer |
 | `ack` / `mailboxes/delete` / `messages/delete` | 64 entries / 64 ids / 100 ids |
-| All `/api/v1` calls and `/health`, per IP | 600 per 10 minutes |
+| All `/api/v1` calls, and all pages and `/health` together, per IP | 600 per 10 minutes each |
 | `invites/create`, per IP | 30 per hour |
 | `invites/accept`, per IP | 30 per hour |
-| Data sent (`messages/send` plus `invites/accept`), per IP | 16 MiB per hour |
+| Data sent (`messages/send` plus `invites/accept`), per IP | 16 MiB per hour, and 24 MiB per day |
 | Sends into one mailbox | 240 per hour |
 | Storage guard (all messages and invites) | 1 GiB by default (`HUDDLE_MAX_STORE_MB`); writes get `503 storage_full` above it |
 
 Rate limits are counted in the server's memory (one Railway replica), in fixed windows, and reset on a redeploy.
+"Per IP" is the address Railway's edge reports; an IPv6 address counts by its /64 network.
 Expired rows are never returned, and a cleanup deletes them when the server starts and then once a day.
 
 ## What the server can see

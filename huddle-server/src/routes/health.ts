@@ -1,17 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { sql } from "drizzle-orm"
 import { db } from "@/db"
-import { ApiError, clientIp, enforceRate, errorResponse, json } from "@/lib/api"
-import { LIMITS } from "@/lib/limits"
+import { describeError, json } from "@/lib/api"
 
-export async function handleHealth(request: Request) {
+// Counted against the caller's address in src/server.ts, with the pages.
+export async function handleHealth() {
   try {
-    enforceRate(`ip:${clientIp(request)}`, LIMITS.rate.ip)
     await db.execute(sql`select 1`)
     return json(200, { ok: true })
   } catch (error) {
-    if (error instanceof ApiError) return errorResponse(error)
-    console.error("huddle: health check found no database:", error instanceof Error ? error.message : String(error))
+    console.error("huddle: health check found no database:", describeError(error))
     return json(503, { ok: false })
   }
 }
@@ -19,7 +17,7 @@ export async function handleHealth(request: Request) {
 export const Route = createFileRoute("/health")({
   server: {
     handlers: {
-      GET: ({ request }) => handleHealth(request),
+      GET: () => handleHealth(),
     },
   },
 })

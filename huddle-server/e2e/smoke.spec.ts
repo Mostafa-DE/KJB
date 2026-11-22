@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process"
 import { randomBytes } from "node:crypto"
 import { request as httpRequest } from "node:http"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { LIMITS } from "../src/lib/limits"
 
 const PORT = 3000 + Math.floor(Math.random() * 2000)
 const BASE = `http://127.0.0.1:${PORT}`
@@ -143,6 +144,15 @@ describe("the built server", () => {
 
     expect(response.status).toBe(404)
     expect(response.body).toEqual({ error: "not_found" })
+  })
+
+  it("limits pages per address, as it limits API calls", async () => {
+    const headers = { "X-Real-IP": "10.200.0.1" }
+    const statuses: number[] = []
+    for (let i = 0; i <= LIMITS.rate.ip.limit; i++) statuses.push((await fetch(`${BASE}/`, { headers })).status)
+
+    expect(statuses.filter((status) => status === 200)).toHaveLength(LIMITS.rate.ip.limit)
+    expect(statuses.at(-1)).toBe(429)
   })
 
   it("answers an unknown page with 404 and its own page", async () => {

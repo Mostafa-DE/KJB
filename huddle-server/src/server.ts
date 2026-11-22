@@ -1,6 +1,6 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry"
 import { deleteExpiredRows } from "@/data-access/store"
-import { json } from "@/lib/api"
+import { clientIp, describeError, enforceRate, errorResponse, json } from "@/lib/api"
 import { LIMITS } from "@/lib/limits"
 
 // The pages run TanStack's own inline hydration scripts, hence 'unsafe-inline'; nothing else may load or frame them.
@@ -19,7 +19,7 @@ async function cleanUp() {
     const deleted = await deleteExpiredRows(new Date())
     console.info(`huddle: cleanup removed ${deleted.messages} messages and ${deleted.invites} invites`)
   } catch (error) {
-    console.error("huddle: cleanup failed:", error instanceof Error ? error.message : String(error))
+    console.error("huddle: cleanup failed:", describeError(error))
   }
 }
 
@@ -29,11 +29,19 @@ setInterval(cleanUp, LIMITS.cleanupEveryMs).unref()
 
 export default createServerEntry({
   async fetch(request, opts) {
-    // Every API call is a POST (API.md): any other method, a browser's GET or a CORS preflight, gets a JSON refusal.
-    const response =
-      new URL(request.url).pathname.startsWith("/api/") && request.method !== "POST"
-        ? json(405, { error: "method_not_allowed" }, { Allow: "POST" })
-        : await handler.fetch(request, opts)
+    const api = new URL(request.url).pathname.startsWith("/api/")
+    let response: Response
+    try {
+      // API calls count against the address in apiRoute; pages and /health count here (srvx serves /assets first).
+      if (!api) enforceRate(`ip:${clientIp(request)}`, LIMITS.rate.ip)
+      // Every API call is a POST (API.md): any other method, a browser's GET or a CORS preflight, gets a JSON refusal.
+      response =
+        api && request.method !== "POST"
+          ? json(405, { error: "method_not_allowed" }, { Allow: "POST" })
+          : await handler.fetch(request, opts)
+    } catch (error) {
+      response = errorResponse(error)
+    }
     const headers = new Headers(response.headers)
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value)
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers })

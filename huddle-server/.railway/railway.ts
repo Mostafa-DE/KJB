@@ -11,6 +11,8 @@ export default defineRailway(() => {
     preDeploy: "pnpm db:migrate",
     healthcheck: "/health",
     healthcheckTimeout: 120,
+    // The rate limits are counted in the server's memory (src/lib/api.ts): one replica only.
+    replicas: 1,
     deploy: { restartPolicyType: "ON_FAILURE", restartPolicyMaxRetries: 5, sleepApplication: false },
     env: { DATABASE_URL: database.env.DATABASE_URL },
   })

@@ -3,7 +3,7 @@ import { handleHealth } from "@/routes/health"
 
 describe("GET /health", () => {
   it("is ok when the database answers", async () => {
-    const answer = await handleHealth(new Request("https://huddle.test/health", { headers: { "X-Real-IP": "10.9.9.9" } }))
+    const answer = await handleHealth()
 
     expect(answer.status).toBe(200)
     expect(answer.headers.get("Cache-Control")).toBe("no-store")
