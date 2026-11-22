@@ -102,14 +102,13 @@ internal fun FriendFace(
     playing: Boolean = false,
     mail: Boolean = false,
 ) {
-    val reduced = LocalReducedMotion.current
     // Not right now: the colour a little greyed, toward the mean of its channels.
     val mean = (color.red + color.green + color.blue) / 3
     val ground = if (ring == FaceRing.IDLE) lerp(color, Color(mean, mean, mean), IDLE_GREY) else color
     val letter = with(LocalDensity.current) { (size * INITIAL_SHARE).toSp() }
     Box(modifier.size(size).clearAndSetSemantics {}) {
         when (ring) {
-            FaceRing.LIVE -> LiveRing(color, reduced)
+            FaceRing.LIVE -> LiveRing(color)
             FaceRing.IDLE -> Box(Modifier.matchParentSize().border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))
             FaceRing.NONE -> Unit
         }
@@ -166,9 +165,9 @@ internal fun SeatFace(size: Dp, modifier: Modifier = Modifier, word: String? = n
 
 /** The live ring: a sweep of the friend's colour, gold and coral turning once in [RING_TURN_MS], over a breathing glow; still when motion is off. */
 @Composable
-private fun BoxScope.LiveRing(color: Color, reduced: Boolean) {
+private fun BoxScope.LiveRing(color: Color) {
     val coral = LocalBrandColors.current.highlight
-    val motion = if (reduced) null else rememberInfiniteTransition(label = "live ring")
+    val motion = if (huddleMoves()) rememberInfiniteTransition(label = "live ring") else null
     val turn = motion?.animateFloat(0f, 360f, infiniteRepeatable(tween(RING_TURN_MS, easing = LinearEasing)), label = "turn")
     val glow = motion?.animateFloat(0f, 1f, infiniteRepeatable(tween(GLOW_MS, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "glow")
     Canvas(Modifier.matchParentSize()) {
@@ -184,24 +183,20 @@ private fun BoxScope.LiveRing(color: Color, reduced: Boolean) {
 @Composable
 private fun MailBadge(gap: Color, modifier: Modifier) {
     val brand = LocalBrandColors.current
-    val tilt = if (LocalReducedMotion.current) {
-        null
-    } else {
-        rememberInfiniteTransition(label = "mail").animateFloat(
-            0f,
-            0f,
-            infiniteRepeatable(
-                keyframes {
-                    durationMillis = NUDGE_MS
-                    0f at NUDGE_MS * 70 / 100
-                    -14f at NUDGE_MS * 76 / 100
-                    12f at NUDGE_MS * 84 / 100
-                    -6f at NUDGE_MS * 92 / 100
-                },
-            ),
-            label = "nudge",
-        )
-    }
+    val tilt = if (huddleMoves()) rememberInfiniteTransition(label = "mail").animateFloat(
+        0f,
+        0f,
+        infiniteRepeatable(
+            keyframes {
+                durationMillis = NUDGE_MS
+                0f at NUDGE_MS * 70 / 100
+                -14f at NUDGE_MS * 76 / 100
+                12f at NUDGE_MS * 84 / 100
+                -6f at NUDGE_MS * 92 / 100
+            },
+        ),
+        label = "nudge",
+    ) else null
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
@@ -220,7 +215,7 @@ private fun MailBadge(gap: Color, modifier: Modifier) {
  */
 @Composable
 internal fun Equaliser(color: Color, modifier: Modifier = Modifier) {
-    val motion = if (LocalReducedMotion.current) null else rememberInfiniteTransition(label = "equaliser")
+    val motion = if (huddleMoves()) rememberInfiniteTransition(label = "equaliser") else null
     val bars = EQ_MS.indices.map { at ->
         motion?.animateFloat(0.2f, 1f, infiniteRepeatable(tween(EQ_MS[at], easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(EQ_OFFSET_MS[at], StartOffsetType.FastForward)), label = "bar")
     }
@@ -267,6 +262,10 @@ internal fun BoxScope.FriendGlow(song: Song?, color: Color, blur: Dp, modifier: 
     )
 }
 
+/** Whether Huddle's endless motion runs here: the phone's animations are on, and this layer shows (a kept dock root that is not showing stops it). */
+@Composable
+internal fun huddleMoves(): Boolean = !LocalReducedMotion.current && LocalLayerHeaded.current
+
 /** [content] on a ground that is dark in either theme (a friend's card, the empty card): KJB's dark theme for it, light words. */
 @Composable
 internal fun DarkGround(content: @Composable () -> Unit) {
@@ -298,16 +297,17 @@ internal fun NewMark() {
 internal fun HaveChip(match: Match?, modifier: Modifier = Modifier, some: Pair<Int, Int>? = null) {
     val brand = LocalBrandColors.current
     val colors = MaterialTheme.colorScheme
-    val (ground, ink, icon) = when {
-        some != null && some.first == some.second || match is Match.Found -> Triple(brand.suggestionContainer, brand.suggestion, R.drawable.ic_check)
-        some != null && some.first > 0 || match is Match.Maybe -> Triple(colors.surfaceContainerHighest, colors.onSurface, R.drawable.ic_help)
-        else -> Triple(brand.highlightContainer, brand.onHighlightContainer, R.drawable.ic_close)
+    val have = haveOf(match, some)
+    val (ground, ink, icon) = when (have) {
+        Have.ALL -> Triple(brand.suggestionContainer, brand.suggestion, R.drawable.ic_check)
+        Have.SOME, Have.MAYBE -> Triple(colors.surfaceContainerHighest, colors.onSurface, R.drawable.ic_help)
+        Have.NONE -> Triple(brand.highlightContainer, brand.onHighlightContainer, R.drawable.ic_close)
     }
-    @StringRes val words = when {
-        some != null && some.first in 1 until some.second -> null
-        some != null && some.first == some.second || match is Match.Found -> R.string.huddle_found
-        match is Match.Maybe -> R.string.huddle_maybe
-        else -> R.string.huddle_not_found
+    @StringRes val words = when (have) {
+        Have.ALL -> R.string.huddle_found
+        Have.SOME -> null
+        Have.MAYBE -> R.string.huddle_maybe
+        Have.NONE -> R.string.huddle_not_found
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -502,8 +502,7 @@ internal fun HuddleHeading(title: String, count: String? = null, action: (@Compo
  */
 @Composable
 internal fun EmptyCard(onInvite: () -> Unit, onPaste: () -> Unit) {
-    val reduced = LocalReducedMotion.current
-    val bob = if (reduced) null else rememberInfiniteTransition(label = "empty cards").animateFloat(0f, 1f, infiniteRepeatable(tween(BOB_MS, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bob")
+    val bob = if (huddleMoves()) rememberInfiniteTransition(label = "empty cards").animateFloat(0f, 1f, infiniteRepeatable(tween(BOB_MS, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bob") else null
     Column(
         Modifier
             .padding(horizontal = ScreenPadding)

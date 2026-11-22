@@ -7,8 +7,10 @@ import app.lyrify.huddle.CardSong
 import app.lyrify.huddle.Friend
 import app.lyrify.huddle.FriendPlay
 import app.lyrify.huddle.HuddleState
+import app.lyrify.huddle.Match
 import app.lyrify.huddle.PendingInvite
 import app.lyrify.huddle.Received
+import app.lyrify.library.song
 import app.lyrify.settings.LibraryTab
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -70,9 +72,10 @@ class HuddleScreenTest {
         val sheets = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText()
         // A card's song, album or playlist: the card's own place, under the name you see. A friend's song (Play it, Play
         // along) plays as theirs too.
-        val plays = Regex("""(Lyrify\.playback\(context\)\.play|PlayerGraph\.connection\(context\)\.playFrom)\([^\n]*""").findAll(sheets).map { it.value }.toList()
-        assertEquals(3, plays.size)
+        val plays = Regex("""Lyrify\.playback\(context\)\.play\([^\n]*""").findAll(sheets).map { it.value }.toList()
+        assertEquals(2, plays.size)
         assertTrue(plays.all { "QueueSource(SourceKind.HUDDLE, " in it })
+        assertTrue(sheets.contains("val source = QueueSource(SourceKind.HUDDLE, \"\${play.friend}:\${play.at}\", name)"))
         assertTrue(sheets.contains("Lyrify.playback(context).play(songs.map { it.ref }, 0, QueueSource(SourceKind.HUDDLE, received.id, from))"))
         assertTrue(File("src/main/java/app/lyrify/player/PlayerConnection.kt").readText().contains("SourceKind.HUDDLE -> return context.getString(R.string.huddle_from, source.name)"))
         assertTrue(File("src/main/java/app/lyrify/ui/SongActions.kt").readText().contains("SourceKind.HUDDLE -> resources.getString(R.string.huddle_from, source.name)"))
@@ -147,6 +150,49 @@ class HuddleScreenTest {
         assertEquals("a clock a little behind theirs", 0L, playAlongMs(play, 999_000))
         assertEquals(lantern.durationMs - PLAY_ALONG_END_MS, playAlongMs(play, 1_000_000 + 250_000))
         assertEquals("no length known: from the top", 0L, playAlongMs(play.copy(song = lantern.copy(durationMs = 0)), 1_072_000))
+    }
+
+    @Test
+    fun `a friend's song plays only when it is yours, asks Is this the song for a loose match, and asks the friend only once matched`() {
+        val mine = song("Music/Kit Calloway/Paper Lantern.mp3", title = "Paper Lantern", artist = "Kit Calloway")
+        assertEquals(PeekOffer.Waiting, peekOffer(null, null))
+        assertEquals(PeekOffer.Play(mine), peekOffer(Match.Found(mine), null))
+        assertEquals(PeekOffer.Ask(mine), peekOffer(Match.Maybe(mine), null))
+        assertEquals(PeekOffer.Play(mine), peekOffer(Match.Maybe(mine), true))
+        assertEquals(PeekOffer.Missing, peekOffer(Match.Maybe(mine), false))
+        assertEquals(PeekOffer.Missing, peekOffer(Match.Missing, null))
+    }
+
+    @Test
+    fun `a card says you have it all, some of it, maybe, or none, an album by its songs and not by its first`() {
+        val mine = song("Music/Kit Calloway/Paper Lantern.mp3", title = "Paper Lantern", artist = "Kit Calloway")
+        assertEquals(Have.ALL, haveOf(Match.Found(mine), null))
+        assertEquals(Have.MAYBE, haveOf(Match.Maybe(mine), null))
+        assertEquals(Have.NONE, haveOf(Match.Missing, null))
+        assertEquals(Have.SOME, haveOf(Match.Found(mine), 3 to 12))
+        assertEquals(Have.ALL, haveOf(Match.Found(mine), 12 to 12))
+        assertEquals(Have.NONE, haveOf(Match.Missing, 0 to 12))
+        assertEquals(Have.SOME, haveOf(Match.Missing, 1 to 12))
+    }
+
+    @Test
+    fun `Huddle's endless motion stops when animations are off or its layer is hidden, and so do its clocks`() {
+        val files = listOf("HuddleParts.kt", "HuddleInvite.kt", "HuddleScreen.kt", "HuddleSheets.kt", "HuddleEverywhere.kt").associateWith { File("src/main/java/app/lyrify/ui/$it").readText() }
+        val endless = files.flatMap { (name, text) -> text.lines().filter { "rememberInfiniteTransition(" in it }.map { name to it } }
+        assertTrue(endless.size >= 7)
+        endless.forEach { (name, line) -> assertTrue("$name: $line", "if (huddleMoves()) rememberInfiniteTransition(" in line) }
+        assertTrue(files.getValue("HuddleScreen.kt").contains("        while (shown) {"))
+    }
+
+    @Test
+    fun `Play along moves the player to the friend's place even when their song's queue plays already, and Join and play is for a song`() {
+        val sheets = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText()
+        assertTrue(sheets.contains("if (connection.ui.value?.queue?.from(source) == true) {"))
+        assertTrue(sheets.contains("connection.seekTo(at)"))
+        val invite = File("src/main/java/app/lyrify/ui/HuddleInvite.kt").readText()
+        assertTrue(invite.contains("if (card?.kind == CardKind.SONG && found is Match.Found) {"))
+        assertTrue(invite.contains("val ticket = rememberSaveable { UUID.randomUUID().toString() }"))
+        assertTrue(invite.contains("huddle.ticketLink(ticket, card)"))
     }
 
     @Test

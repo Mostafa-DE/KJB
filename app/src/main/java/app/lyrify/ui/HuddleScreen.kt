@@ -94,6 +94,7 @@ import app.lyrify.huddle.Received
 import app.lyrify.huddle.match
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
+import app.lyrify.library.Song
 import app.lyrify.lyrics.TrackNames
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibraryTab
@@ -187,6 +188,48 @@ fun playAlongMs(play: FriendPlay, now: Long): Long {
 /** Play along never starts in a song's last 10 s: something is left to hear. */
 const val PLAY_ALONG_END_MS: Long = 10_000
 
+/** What a friend's song's sheet offers for it, as this library has it ([peekOffer]). */
+sealed interface PeekOffer {
+    /** Not matched yet (the library is being read): neither Play nor Ask. */
+    data object Waiting : PeekOffer
+
+    /** Yours: Play along and Play it. */
+    data class Play(val song: Song) : PeekOffer
+
+    /** Only a loose match ([Match.Maybe]): "Is this the song?" first. */
+    data class Ask(val song: Song) : PeekOffer
+
+    /** Not here, or not the one: Ask the friend and Search on YouTube. */
+    data object Missing : PeekOffer
+}
+
+/** What a friend's song's sheet offers for its [match] here (null: not matched yet), after [said] to "Is this the song?". */
+fun peekOffer(match: Match?, said: Boolean?): PeekOffer = when (match) {
+    null -> PeekOffer.Waiting
+    is Match.Found -> PeekOffer.Play(match.song)
+    is Match.Maybe -> when (said) {
+        null -> PeekOffer.Ask(match.song)
+        true -> PeekOffer.Play(match.song)
+        false -> PeekOffer.Missing
+    }
+    Match.Missing -> PeekOffer.Missing
+}
+
+/** How much of a card you have: all of it, some of an album's or playlist's songs, maybe (a loose match), or none. */
+enum class Have { ALL, SOME, MAYBE, NONE }
+
+/** How much of a card you have: a song by its [match]; an album or a playlist by its songs found, [some] (found to all). */
+fun haveOf(match: Match?, some: Pair<Int, Int>?): Have = when {
+    some != null -> when (some.first) {
+        0 -> Have.NONE
+        some.second -> Have.ALL
+        else -> Have.SOME
+    }
+    match is Match.Found -> Have.ALL
+    match is Match.Maybe -> Have.MAYBE
+    else -> Have.NONE
+}
+
 /** What Huddle asks before anything else: your name ([NAME], the first time), or another one ([NEW_NAME], taken in a friend's list). */
 enum class NameGate { NAME, NEW_NAME }
 
@@ -245,12 +288,18 @@ internal fun ago(at: Long, now: Long): String = DateUtils.getRelativeTimeSpanStr
 internal fun whenSent(context: Context, at: Long, now: Long): String =
     if (DateUtils.isToday(at)) DateFormat.getTimeFormat(context).format(Date(at)) else DateUtils.getRelativeTimeSpanString(at, now, DateUtils.DAY_IN_MILLIS).toString()
 
-/** The wall clock, worked out again every [everyMs]; read only where it shows, so only that redraws. */
+/**
+ * The wall clock, worked out again every [everyMs]; read only where it shows, so only that redraws. It stops while its
+ * layer is hidden (a kept dock root that is not showing) and catches up as it comes back.
+ */
 @Composable
-internal fun rememberNow(everyMs: Long = TICK_MS): State<Long> = produceState(System.currentTimeMillis(), everyMs) {
-    while (true) {
-        delay(everyMs)
-        value = System.currentTimeMillis()
+internal fun rememberNow(everyMs: Long = TICK_MS): State<Long> {
+    val shown = LocalLayerHeaded.current
+    return produceState(System.currentTimeMillis(), everyMs, shown) {
+        while (shown) {
+            value = System.currentTimeMillis()
+            delay(everyMs)
+        }
     }
 }
 

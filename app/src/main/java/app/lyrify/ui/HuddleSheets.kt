@@ -61,6 +61,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import app.lyrify.Lyrify
 import app.lyrify.R
@@ -530,12 +531,16 @@ internal fun HuddleSheetsHost(sheet: HuddleSheet?, ledger: LedgerState, onPlayer
         HuddleSheet.Ticket -> InviteTicketSheet(card = null, onDismiss = close)
         HuddleSheet.Privately -> PrivatelySheet(state, onDismiss = close)
         is HuddleSheet.SendTo -> {
-            val library = (LibraryGraph.repository(context).state.value as? LibraryState.Ready)?.library
-            val song = sheet.song?.let { library?.song(it) }
-            if (song != null) {
-                SendToFriendSheet(listOf(song), CardKind.SONG, null, to = sheet.friend, onDismiss = close)
-            } else {
-                SongPickerScreen(ledger, onDismiss = close) { entry -> onSheet(sheet.copy(song = entry.path)) }
+            val library by remember(context) { LibraryGraph.repository(context).state }.collectAsStateWithLifecycle()
+            val read = (library as? LibraryState.Ready)?.library
+            val picked = sheet.song
+            when {
+                picked == null -> SongPickerScreen(ledger, onDismiss = close) { entry -> onSheet(sheet.copy(song = entry.path)) }
+                // Picked while the library is read: Send to waits for it.
+                read == null -> Unit
+                // Gone from the library meanwhile: pick again.
+                else -> read.song(picked)?.let { SendToFriendSheet(listOf(it), CardKind.SONG, null, to = sheet.friend, onDismiss = close) }
+                    ?: SongPickerScreen(ledger, onDismiss = close) { entry -> onSheet(sheet.copy(song = entry.path)) }
             }
         }
         is HuddleSheet.Rename -> {
@@ -571,9 +576,21 @@ internal fun HuddleSheetsHost(sheet: HuddleSheet?, ledger: LedgerState, onPlayer
     }
 }
 
-/** Plays [song] from where [play]'s friend is in it ([playAlongMs]), as a queue from them named [name], and shows the player. */
+/**
+ * Plays [song] from where [play]'s friend is in it ([playAlongMs]), as a queue from them named [name], and shows the
+ * player; their song's queue playing already (Play it, a Play along before) moves there too.
+ */
 internal fun playAlong(context: Context, song: Song, play: FriendPlay, name: String, onPlayer: () -> Unit) {
-    PlayerGraph.connection(context).playFrom(listOf(song.ref), 0, playAlongMs(play, System.currentTimeMillis()), QueueSource(SourceKind.HUDDLE, "${play.friend}:${play.at}", name))
+    val connection = PlayerGraph.connection(context)
+    val source = QueueSource(SourceKind.HUDDLE, "${play.friend}:${play.at}", name)
+    val at = playAlongMs(play, System.currentTimeMillis())
+    // playFrom goes on where that queue is when it plays already: the friend's place is asked for, so it goes there.
+    if (connection.ui.value?.queue?.from(source) == true) {
+        connection.seekTo(at)
+        connection.play()
+    } else {
+        connection.playFrom(listOf(song.ref), 0, at, source)
+    }
     onPlayer()
 }
 
@@ -597,7 +614,10 @@ private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, 
     val play = current?.play
     val playing = current?.playing == true
     val found = remember(matcher, play) { play?.let { matcher?.match(it.song) } }
-    val song = (found as? Match.Found)?.song ?: (found as? Match.Maybe)?.song
+    // The answer to "Is this the song?" for a loose match of this play.
+    var said by rememberSaveable(play?.at) { mutableStateOf<Boolean?>(null) }
+    val offer = peekOffer(found, said)
+    val song = (offer as? PeekOffer.Play)?.song
     val name = friend.shownName
     val color = friendColor(friend.id)
     val close = { onSheet(null) }
@@ -653,6 +673,25 @@ private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, 
                 }
             }
         }
+        if (play != null && offer is PeekOffer.Ask) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 4.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(colors.surfaceContainerHigh).padding(12.dp).semantics(mergeDescendants = true) {},
+                ) {
+                    SongCover(SongArt(offer.song.path, offer.song.ref.mediaStoreId), size = 48.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.huddle_maybe_title), style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold))
+                        Text(localSong(offer.song), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LyrifyButton(stringResource(R.string.huddle_maybe_no), onClick = { said = false }, modifier = Modifier.weight(1f), kind = ButtonKind.SECONDARY)
+                    LyrifyButton(stringResource(R.string.huddle_yes), onClick = { said = true }, modifier = Modifier.weight(1f))
+                }
+            }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp)) {
             if (play != null && song != null) {
                 if (playing) {
@@ -667,7 +706,8 @@ private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, 
                     onPlayer()
                 }
             }
-            if (play != null && song == null) {
+            // Only once it is known not to be here: before the library is matched, nothing to ask for.
+            if (play != null && offer == PeekOffer.Missing) {
                 PeekTile(R.drawable.ic_send, stringResource(R.string.huddle_ask, name)) { scope.launch { toasts.say(resources, shareMessage(context, resources.getString(R.string.huddle_ask_message, songBy(resources, play.song)))) } }
                 PeekTile(R.drawable.ic_search, stringResource(R.string.huddle_youtube)) { onYouTube(youTubeQuery(play.song)) }
             }
@@ -744,7 +784,11 @@ private fun FriendMenuSheet(friend: Friend, onSheet: (HuddleSheet?) -> Unit) {
         ) {
             onSheet(null)
             scope.launch {
-                if (huddle.sharePlays(friend.id, !sharing)) toasts.show(Toast(resources.getString(if (sharing) R.string.huddle_share_plays_off else R.string.huddle_share_plays_on, name), if (sharing) R.drawable.ic_visibility_off else R.drawable.ic_visibility))
+                if (huddle.sharePlays(friend.id, !sharing)) {
+                    toasts.show(Toast(resources.getString(if (sharing) R.string.huddle_share_plays_off else R.string.huddle_share_plays_on, name), if (sharing) R.drawable.ic_visibility_off else R.drawable.ic_visibility))
+                } else {
+                    toasts.say(resources, R.string.lib_not_saved)
+                }
             }
         }
         ActionRow(R.drawable.ic_edit, stringResource(R.string.lib_rename), supporting = stringResource(R.string.huddle_rename_text)) { onSheet(HuddleSheet.Rename(friend.id)) }

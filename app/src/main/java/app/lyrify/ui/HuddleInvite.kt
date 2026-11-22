@@ -86,6 +86,7 @@ import app.lyrify.huddle.Match
 import app.lyrify.huddle.match
 import kotlin.math.abs
 import kotlinx.coroutines.launch
+import java.util.UUID
 
 // Huddle's invite (the approved mockup's part 3): the ticket you hand a friend, what they see when they open it, and the
 // moment they join.
@@ -105,8 +106,9 @@ internal fun InviteTicketSheet(card: Card?, onDismiss: () -> Unit) {
     val huddle = rememberHuddle()
     val state = rememberHuddleState() ?: return
     val me = state.name.orEmpty()
-    // The link made for this ticket: Share and Copy hand over the same one. Never saved: it opens a friendship.
-    var link by remember { mutableStateOf<String?>(null) }
+    // This ticket's own id, kept across a turn of the phone: Share and Copy hand over the one link made for it
+    // (Huddle.ticketLink), which is never saved, as it opens a friendship.
+    val ticket = rememberSaveable { UUID.randomUUID().toString() }
     var busy by remember { mutableStateOf(false) }
     // The chat message with the link: the card's song, album or playlist named when there is one.
     fun message(link: String): String = when (card?.kind) {
@@ -121,8 +123,8 @@ internal fun InviteTicketSheet(card: Card?, onDismiss: () -> Unit) {
         busy = true
         lifecycle.launch {
             try {
-                val made = link ?: when (val invited = huddle.invite(card)) {
-                    is Invited.Link -> invited.text.also { link = it }
+                val made = when (val invited = huddle.ticketLink(ticket, card)) {
+                    is Invited.Link -> invited.text
                     Invited.NoName, Invited.NoAnswer -> null
                 }
                 if (made == null) toasts.show(Toast(resources.getString(R.string.huddle_no_answer), R.drawable.ic_error, Tone.ERROR)) else use(made)
@@ -176,9 +178,8 @@ internal fun InviteTicketSheet(card: Card?, onDismiss: () -> Unit) {
  */
 @Composable
 private fun Ticket(me: String, card: Card?) {
-    val reduced = LocalReducedMotion.current
     val sheet = LocalChromeColors.current.sheet
-    val shine = if (reduced) null else rememberInfiniteTransition(label = "ticket").animateFloat(1.3f, -0.3f, infiniteRepeatable(tween(SHINE_MS)), label = "shine")
+    val shine = if (huddleMoves()) rememberInfiniteTransition(label = "ticket").animateFloat(1.3f, -0.3f, infiniteRepeatable(tween(SHINE_MS)), label = "shine") else null
     Row(
         Modifier
             .fillMaxWidth()
@@ -322,8 +323,9 @@ internal fun AcceptInviteSheet(link: String, onDismiss: () -> Unit, onPlay: (Str
             if (failed != null && answer != Accepted.NoAnswer) {
                 LyrifyButton(stringResource(R.string.huddle_done), onClick = onDismiss, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY)
             } else {
-                if (card != null && found is Match.Found) {
-                    LyrifyButton(stringResource(R.string.huddle_join_play, cardLine(card).substringBefore(" · ")), onClick = { join(true) }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_play_arrow_fill, enabled = ready)
+                // A song you have plays as you join; an album or a playlist waits in Sent to you.
+                if (card?.kind == CardKind.SONG && found is Match.Found) {
+                    LyrifyButton(stringResource(R.string.huddle_join_play, card.songs.first().title), onClick = { join(true) }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_play_arrow_fill, enabled = ready)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     LyrifyButton(stringResource(R.string.huddle_not_now), onClick = onDismiss, modifier = Modifier.weight(1f), kind = ButtonKind.GHOST, enabled = !busy)
@@ -331,7 +333,7 @@ internal fun AcceptInviteSheet(link: String, onDismiss: () -> Unit, onPlay: (Str
                         stringResource(R.string.huddle_join),
                         onClick = { join(false) },
                         modifier = Modifier.weight(1f),
-                        kind = if (card != null && found is Match.Found) ButtonKind.SECONDARY else ButtonKind.PRIMARY,
+                        kind = if (card?.kind == CardKind.SONG && found is Match.Found) ButtonKind.SECONDARY else ButtonKind.PRIMARY,
                         enabled = ready,
                     )
                 }
@@ -375,27 +377,22 @@ internal fun AcceptInviteSheet(link: String, onDismiss: () -> Unit, onPlay: (Str
 /** Two faces meeting (the join screen): the inviter's with its live ring, yours still an empty seat, a gold note hopping between. Decorative. */
 @Composable
 private fun Meet(inviter: String) {
-    val reduced = LocalReducedMotion.current
     val outline = MaterialTheme.colorScheme.outline
-    val hop = if (reduced) {
-        null
-    } else {
-        rememberInfiniteTransition(label = "meet").animateFloat(
-            0f,
-            0f,
-            infiniteRepeatable(
-                keyframes {
-                    durationMillis = HOP_MS
-                    -1f at 0
-                    0f at HOP_MS / 4
-                    1f at HOP_MS / 2
-                    0f at HOP_MS * 3 / 4
-                    -1f at HOP_MS
-                },
-            ),
-            label = "hop",
-        )
-    }
+    val hop = if (huddleMoves()) rememberInfiniteTransition(label = "meet").animateFloat(
+        0f,
+        0f,
+        infiniteRepeatable(
+            keyframes {
+                durationMillis = HOP_MS
+                -1f at 0
+                0f at HOP_MS / 4
+                1f at HOP_MS / 2
+                0f at HOP_MS * 3 / 4
+                -1f at HOP_MS
+            },
+        ),
+        label = "hop",
+    ) else null
     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp).clearAndSetSemantics {}) {
         Canvas(Modifier.width(70.dp).height(3.dp)) {
             drawLine(outline, Offset(0f, size.height / 2), Offset(size.width, size.height / 2), size.height, pathEffect = PathEffect.dashPathEffect(floatArrayOf(1f, 6.dp.toPx())), cap = StrokeCap.Round)
@@ -455,9 +452,9 @@ internal fun JoinedDialog(friend: Friend, onSend: () -> Unit, onDone: () -> Unit
                         .background(chrome.sheet)
                         .semantics { paneTitle = title },
                 ) {
-                    Confetti(reduced, Modifier.matchParentSize())
+                    Confetti(Modifier.matchParentSize())
                     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 22.dp, bottom = 16.dp)) {
-                        JoinedFaces(state?.name.orEmpty(), name, friendColor(friend.id), reduced)
+                        JoinedFaces(state?.name.orEmpty(), name, friendColor(friend.id))
                         Text(title, style = JoinedTitle, textAlign = TextAlign.Center, color = colors.onSurface, modifier = Modifier.padding(top = 10.dp, bottom = 4.dp).semantics { heading() })
                         Text(stringResource(R.string.huddle_joined_text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.padding(bottom = 14.dp))
                         Row(
@@ -491,8 +488,8 @@ private fun Modifier.pointerTapOutside(onTap: () -> Unit): Modifier = pointerInp
 
 /** Your face and the new friend's, bumping together, with a gold spark popping between them. */
 @Composable
-private fun JoinedFaces(me: String, friend: String, color: Color, reduced: Boolean) {
-    val motion = if (reduced) null else rememberInfiniteTransition(label = "pair")
+private fun JoinedFaces(me: String, friend: String, color: Color) {
+    val motion = if (huddleMoves()) rememberInfiniteTransition(label = "pair") else null
     val bump = motion?.animateFloat(
         0f,
         0f,
@@ -550,8 +547,8 @@ private fun JoinedFaces(me: String, friend: String, color: Color, reduced: Boole
 
 /** Confetti down both sides of the joined card: a few dozen bits of the friends' colours and gold, falling and turning. */
 @Composable
-private fun Confetti(reduced: Boolean, modifier: Modifier) {
-    val fall = if (reduced) null else rememberInfiniteTransition(label = "confetti").animateFloat(0f, 1f, infiniteRepeatable(tween(FALL_MS, easing = LinearEasing)), label = "fall")
+private fun Confetti(modifier: Modifier) {
+    val fall = if (huddleMoves()) rememberInfiniteTransition(label = "confetti").animateFloat(0f, 1f, infiniteRepeatable(tween(FALL_MS, easing = LinearEasing)), label = "fall") else null
     val bits = remember { FriendColors + HuddleGold }
     Canvas(modifier.clearAndSetSemantics {}) {
         repeat(CONFETTI) { at ->
@@ -561,7 +558,7 @@ private fun Confetti(reduced: Boolean, modifier: Modifier) {
             val t = ((fall?.value ?: 0.5f) + (at * 0.37f) % 1f) % 1f
             val y = start + (t * 420f - 160f) * density
             val turn = (at * 47) % 180 + t * 560f
-            val alpha = if (reduced) 1f else (if (t < 0.12f) t / 0.12f else 1f - t).coerceIn(0f, 1f)
+            val alpha = if (fall == null) 1f else (if (t < 0.12f) t / 0.12f else 1f - t).coerceIn(0f, 1f)
             rotate(turn, Offset(x, y)) {
                 val color = bits[at % bits.size].copy(alpha = alpha)
                 if (at % 3 == 0) drawCircle(color, 5.dp.toPx(), Offset(x, y)) else drawRect(color, Offset(x - 4.dp.toPx(), y - 6.5.dp.toPx()), Size(8.dp.toPx(), 13.dp.toPx()))

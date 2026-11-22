@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.security.SecureRandom
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
 /** A message waiting in a mailbox: the server's [seq] in it (its message id), and the sealed [data] (base64url). */
@@ -131,6 +132,9 @@ class Huddle(
 
     private val one = Mutex()
 
+    /** The links of the invite tickets shown in this run ([ticketLink]), by the ticket's id. */
+    private val tickets = ConcurrentHashMap<String, String>()
+
     /**
      * Cards and plays without an answer whose tries ([tryAgain]) are under way: the first one's job tries for them all; 0
      * for none.
@@ -180,6 +184,14 @@ class Huddle(
         return Invited.Link(Invites.link(host, Invite(pair.public, token, name, inLink), random))
     }
 
+    /**
+     * The link of the invite ticket [ticket] (the sheet's own id, kept across a turn of the phone): made with [card] at the
+     * first Share or Copy ([invite]), the same link after, so one ticket is one seat. Kept in memory only: the link opens a
+     * friendship, so it is never in saved state or on disk.
+     */
+    suspend fun ticketLink(ticket: String, card: Card?): Invited =
+        tickets[ticket]?.let(Invited::Link) ?: invite(card).also { if (it is Invited.Link) tickets[ticket] = it.text }
+
     /** The invite in [text] (a link on Huddle's hosts, or a pasted code); null for anything else. */
     fun parse(text: String): Invite? = Invites.parse(text, hosts)
 
@@ -220,7 +232,11 @@ class Huddle(
         var friend = friendOf(join.name, join.outBox, join.inBox, join.outKey, join.inKey, joinId)
         val card = join.card?.let { Received(newId(MESSAGE_ID_BYTES), friend.id, now, it) }
         var asked = false
+        // The same join answered twice (a second tap, the sheet again after a turn of the phone): one friend.
+        var already: Friend? = null
         val kept = storage.change { state ->
+            already = state.friends.firstOrNull { it.joinId == joinId }
+            if (already != null) return@change state.copy(joins = state.joins.filterNot { it.joinId == joinId })
             // The inviter is the newcomer to this phone's list: a name taken here is asked for again, as on theirs.
             friend = newcomer(friend, state.friends)
             val ask = friend.taken?.let { state.name?.let { name -> profile(friend, name, now) } }
@@ -232,6 +248,7 @@ class Huddle(
                 outbox = state.outbox + listOfNotNull(ask),
             )
         }
+        already?.let { return if (kept) Accepted.Already(it) else Accepted.NoAnswer }
         if (kept && asked) scope.launch { flush() }
         return if (kept) Accepted.Joined(friend, card?.id) else Accepted.NoAnswer
     }

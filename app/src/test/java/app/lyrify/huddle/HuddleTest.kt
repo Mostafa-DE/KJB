@@ -2,6 +2,7 @@ package app.lyrify.huddle
 
 import app.lyrify.suggestions.FriendPlay as SuggestionsPlay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -204,6 +205,32 @@ class HuddleTest {
         assertTrue(juniper.sharePlays(wrenOnJuniper.id, false))
         juniper.played(lantern, now)
         assertTrue(server.waiting(wrenOnJuniper.outBox).isEmpty())
+    }
+
+    @Test
+    fun `one ticket is one invite, however often its link is shared or copied, and another ticket is another`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val first = wren.ticketLink("ticket-1", song) as Invited.Link
+        assertEquals(first, wren.ticketLink("ticket-1", song))
+        assertEquals(1, wrenState.now.invites.size)
+        assertEquals(1, server.invites.size)
+        val other = wren.ticketLink("ticket-2", null) as Invited.Link
+        assertTrue(other != first)
+        assertEquals(2, server.invites.size)
+    }
+
+    @Test
+    fun `the same link joined twice at once, a turn of the phone mid-join, makes one friend`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val invite = checkNotNull(juniper.parse(link(wren)))
+        server.acceptDelay = 1_000
+        val one = async { juniper.accept(invite) }
+        val two = async { juniper.accept(invite) }
+        val answers = listOf(one.await(), two.await())
+        assertEquals(1, juniperState.now.friends.size)
+        assertEquals(1, answers.count { it is Accepted.Joined })
+        assertEquals(1, answers.count { it is Accepted.Already })
     }
 
     @Test
