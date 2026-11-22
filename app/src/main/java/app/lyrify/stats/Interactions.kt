@@ -45,16 +45,21 @@ interface InteractionsQuery {
 }
 
 /**
- * An interaction as a row of [PlaysSchema.INTERACTIONS] has it, read as leniently as [loggedPlayOf]: a row without a
- * time, or of a kind this version does not know, is dropped; a target of a kind it does not know, or without its key,
- * is none, and so are blank words and a time zone out of range.
+ * An interaction as `plays.db` or a backup keeps it, read as leniently as [loggedPlayOf]: one without a time, or of a
+ * kind this version does not know, is dropped; a target of a kind it does not know, or without its key, is none, and so
+ * are blank words and a time zone out of range.
  */
-fun interactionOf(row: PlayRow): Interaction? {
-    val at = row.number("at")?.takeIf { it > 0 } ?: return null
-    val kind = enumOf<InteractionKind>(row.text("kind")) ?: return null
-    val target = enumOf<TargetKind>(row.text("target"))?.let { targetKind -> row.text("target_key")?.let { Target(targetKind, it) } }
-    return Interaction(at, kind, zoneOffsetOf(row.number("zone_offset_min")), target, row.text("words")?.takeIf(String::isNotBlank))
+@Suppress("LongParameterList")
+fun interactionOf(at: Long?, kind: String?, zoneOffsetMinutes: Long?, target: String?, targetKey: String?, words: String?): Interaction? {
+    if (at == null || at <= 0) return null
+    val known = enumOf<InteractionKind>(kind) ?: return null
+    val about = enumOf<TargetKind>(target)?.let { targetKind -> targetKey?.takeIf(String::isNotEmpty)?.let { Target(targetKind, it) } }
+    return Interaction(at, known, zoneOffsetOf(zoneOffsetMinutes), about, words?.takeIf(String::isNotBlank))
 }
+
+/** An interaction as a row of [PlaysSchema.INTERACTIONS] has it ([interactionOf]). */
+fun interactionOf(row: PlayRow): Interaction? =
+    interactionOf(row.number("at"), row.text("kind"), row.number("zone_offset_min"), row.text("target"), row.text("target_key"), row.text("words"))
 
 /**
  * Notes the interactions as they happen, in order, in [scope], so a screen never waits for `plays.db`: each with the

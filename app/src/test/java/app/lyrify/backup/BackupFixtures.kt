@@ -44,6 +44,7 @@ import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
 import app.lyrify.library.search.withSearch
 import app.lyrify.stats.FakePlayLog
+import app.lyrify.stats.Interaction
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.tags.AlbumRecord
 import app.lyrify.tags.CoversTagsMemory
@@ -281,7 +282,9 @@ class MemoryStores(
 
     override suspend fun plays(): List<LoggedPlay>? = log.all()
 
-    override suspend fun addPlays(plays: List<LoggedPlay>): Boolean = Section.PLAYS !in failing && log.putAll(plays)
+    override suspend fun interactions(): List<Interaction>? = log.interactions()
+
+    override suspend fun addPlays(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean = Section.PLAYS !in failing && log.putAll(plays, interactions)
 
     override suspend fun songState(): SongState = songState
 

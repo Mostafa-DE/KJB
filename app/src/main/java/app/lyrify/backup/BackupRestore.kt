@@ -22,7 +22,11 @@ import app.lyrify.player.SongState
 import app.lyrify.player.Speed
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
+import app.lyrify.stats.Interaction
+import app.lyrify.stats.InteractionKind
 import app.lyrify.stats.LoggedPlay
+import app.lyrify.stats.Target
+import app.lyrify.stats.TargetKind
 import app.lyrify.tags.AlbumRecord
 import app.lyrify.tags.CoversTagsMemory
 import app.lyrify.tags.FileMark
@@ -51,8 +55,14 @@ interface BackupStores {
 
     suspend fun plays(): List<LoggedPlay>?
 
-    /** The play log keeps one play per song and start, so plays already there are not added again. */
-    suspend fun addPlays(plays: List<LoggedPlay>): Boolean
+    /** The interaction log, kept beside the plays. */
+    suspend fun interactions(): List<Interaction>?
+
+    /**
+     * [plays] and [interactions] added in one go: the play log keeps one play per song and start, and one interaction
+     * per time and kind, so those already there are not added again.
+     */
+    suspend fun addPlays(plays: List<LoggedPlay>, interactions: List<Interaction> = emptyList()): Boolean
 
     suspend fun songState(): SongState?
 
@@ -123,7 +133,7 @@ interface BackupStores {
 suspend fun BackupStores.snapshot(): BackupSnapshot = BackupSnapshot(
     playlists(), queues(), plays(), songState(), equalizer(), ledger(), settings(),
     repeat = repeat(), aiLyrics = aiLyrics(), tones = tones(), duplicates = duplicates(), coversTags = coversTags(),
-    keptApart = keptApart(), searches = searches(), books = books(),
+    keptApart = keptApart(), searches = searches(), books = books(), interactions = interactions(),
 )
 
 
@@ -166,11 +176,12 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         .associate { it.path to BackupSong(it.path, it.title, it.artist, it.album, it.durationMs) } + contents.songs.associateBy { it.path }
 
     /**
-     * Each song the backup names, by its path there, and the song it is on this phone. Hidden songs are matched too, but
-     * one not here is no song missing: it was not in any list.
+     * Each song the backup names, by its path there, and the song it is on this phone. Hidden songs and the songs of the
+     * interaction log are matched too, but one not here is no song missing: it was not in any list.
      */
     private val found: Map<String, Song> = SongMatcher(phone).match(
-        Section.entries.flatMap(::paths) + contents.tones.orEmpty().map { it.songPath } + contents.settings?.library?.hiddenSongs.orEmpty().map { it.path },
+        Section.entries.flatMap(::paths) + contents.tones.orEmpty().map { it.songPath } + contents.settings?.library?.hiddenSongs.orEmpty().map { it.path } +
+            contents.interactions.mapNotNull { interaction -> interaction.target?.takeIf { it.kind == TargetKind.SONG }?.key },
         known,
     )
 
@@ -249,7 +260,8 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         /** The queues whose songs are here: the one playing, Recent and Saved, with the backup's counters; and Repeat. */
         data class Queues(val book: QueueBook, val repeat: Repeat?) : Prepared
 
-        data class Plays(val plays: List<LoggedPlay>) : Prepared
+        /** The plays of the songs here, and the interactions ([interactionsHere]). */
+        data class Plays(val plays: List<LoggedPlay>, val interactions: List<Interaction>) : Prepared
 
         /** Each song's marks with the song they are for on this phone; the usual speed; the part repeating, on its song. */
         data class Bookmarks(val marks: List<Pair<Song, BackupMarks>>, val usual: Speed?, val part: Pair<Song, AbPart>?) : Prepared
@@ -297,7 +309,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             val ids = queues.map { it.id }.toSet()
             Prepared.Queues(book.copy(queues = queues, currentId = book.currentId?.takeIf { it in ids }, recent = book.recent.filter { it in ids }, saved = book.saved.filter { it in ids }), contents.repeat)
         }
-        Section.PLAYS -> Prepared.Plays(checkNotNull(contents.plays).mapNotNull { play -> ref(play.song)?.let { play.copy(song = it) } })
+        Section.PLAYS -> Prepared.Plays(checkNotNull(contents.plays).mapNotNull { play -> ref(play.song)?.let { play.copy(song = it) } }, interactionsHere())
         Section.BOOKMARKS -> Prepared.Bookmarks(
             checkNotNull(contents.bookmarks).mapNotNull { marks -> found[marks.path]?.let { it to marks } },
             contents.usualSpeed,
@@ -336,6 +348,21 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             // A folder mark names the folder below its volume, the same on this phone.
             val marks = state.marks.copy(songs = here(state.marks.songs), notSongs = here(state.marks.notSongs))
             Prepared.Books(BookState(state.books.values.mapNotNull(::matched).associateBy { it.id }, marks))
+        }
+    }
+
+    /**
+     * The backup's interactions on this phone: one about a song is about it on its path here; a page or the lyrics of a
+     * song not here is left out, and a search whose result was such a song keeps its words without it. Albums,
+     * artists, folders and playlists by their keys, as the backup has them.
+     */
+    private fun interactionsHere(): List<Interaction> = contents.interactions.mapNotNull { interaction ->
+        val target = interaction.target?.takeIf { it.kind == TargetKind.SONG } ?: return@mapNotNull interaction
+        val here = found[target.key]?.path
+        when {
+            here != null -> interaction.copy(target = Target(TargetKind.SONG, here))
+            interaction.kind == InteractionKind.SEARCH -> interaction.copy(target = null)
+            else -> null
         }
     }
 
@@ -386,7 +413,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             counted(written, prepared.book.queues.size)
         }
         // The plays as the summary counted them before the log kept skips: the skips come back, uncounted.
-        is Prepared.Plays -> counted(stores.addPlays(prepared.plays), prepared.plays.count { !it.isShort })
+        is Prepared.Plays -> counted(stores.addPlays(prepared.plays, prepared.interactions), prepared.plays.count { !it.isShort })
         is Prepared.Bookmarks -> {
             var merged: MergedMarks? = null
             val written = stores.updateSongState { now -> mergeMarks(now, prepared.marks, prepared.usual, prepared.part).also { merged = it }.state }

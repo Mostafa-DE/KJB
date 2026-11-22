@@ -43,6 +43,7 @@ import app.lyrify.player.Repeat
 import app.lyrify.player.SongState
 import app.lyrify.settings.BackupSettings
 import app.lyrify.settings.Settings
+import app.lyrify.stats.Interaction
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.StatsGraph
 import app.lyrify.tags.AlbumRecord
@@ -158,7 +159,9 @@ class AppBackupStores(context: Context) : BackupStores {
 
     override suspend fun plays(): List<LoggedPlay>? = StatsGraph.log(app).all()
 
-    override suspend fun addPlays(plays: List<LoggedPlay>): Boolean = StatsGraph.log(app).putAll(plays)
+    override suspend fun interactions(): List<Interaction>? = StatsGraph.log(app).interactions()
+
+    override suspend fun addPlays(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean = StatsGraph.log(app).putAll(plays, interactions)
 
     override suspend fun songState(): SongState = withContext(Dispatchers.Main) {
         val extras = PlayerExtras.of(app)

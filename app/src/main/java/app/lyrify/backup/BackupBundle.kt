@@ -25,7 +25,9 @@ import app.lyrify.player.Speed
 import app.lyrify.settings.BackupSettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
+import app.lyrify.stats.Interaction
 import app.lyrify.stats.LoggedPlay
+import app.lyrify.stats.TargetKind
 import app.lyrify.tags.CoversTagsMemory
 import app.lyrify.tags.NamePair
 import app.lyrify.tones.TonesState
@@ -51,7 +53,7 @@ enum class Section(val key: String, val version: Int) {
     /** The queue playing at its song and second, the saved and recent queues, and Repeat. */
     QUEUES("queues", 1),
 
-    /** The play log (`plays.db`): every play, so each song's play count too. */
+    /** The play log (`plays.db`): every play, so each song's play count too, and the interaction log beside it. */
     PLAYS("plays", 1),
 
     /** `song-state.json`: bookmarks, Remember my place's places, the speeds and the part repeating. */
@@ -129,6 +131,8 @@ data class BackupSnapshot(
     val keptApart: Set<NamePair>? = null,
     val searches: List<String>? = null,
     val books: BookState? = null,
+    /** The interaction log, kept with the plays; null when it could not be read. */
+    val interactions: List<Interaction>? = null,
 )
 
 /**
@@ -175,6 +179,8 @@ data class BackupContents(
     val tooNew: List<Section> = emptyList(),
     /** How many sections this version does not know at all (a newer KJB's): skipped. */
     val unknown: Int = 0,
+    /** With the plays: the interaction log; none in a backup from before it was kept. */
+    val interactions: List<Interaction> = emptyList(),
 ) {
     /** The sections it holds, in the summary's order. */
     val sections: List<Section> get() = Section.entries.filter(::has)
@@ -271,7 +277,7 @@ object BackupBundle {
         val sections = buildList {
             snapshot.playlists?.let { add(Section.PLAYLISTS to PlaylistsJson.encode(bare(it))) }
             snapshot.queues?.let { add(Section.QUEUES to withKeys(QueuesJson.encode(bare(it)), REPEAT_KEY to snapshot.repeat?.name?.let(::JsonPrimitive))) }
-            snapshot.plays?.let { add(Section.PLAYS to SectionJson.plays(it)) }
+            snapshot.plays?.let { add(Section.PLAYS to SectionJson.plays(it, snapshot.interactions)) }
             snapshot.songState?.let { add(Section.BOOKMARKS to SectionJson.marks(it)) }
             snapshot.equalizer?.let { add(Section.EQUALIZER to EqProfilesJson.encode(it.copy(unknownProfiles = emptyMap()))) }
             snapshot.ledger?.let { add(Section.LYRICS to LedgerJson.encode(bare(it))) }
@@ -305,6 +311,7 @@ object BackupBundle {
         snapshot.playlists?.let { state -> state.playlists.forEach { playlist -> playlist.songs.forEach { add(it.path) } }; state.favouriteSongs.forEach { add(it.path) } }
         snapshot.queues?.let { book -> book.queues.forEach { queue -> queue.items.forEach { add(it.song.path) } } }
         snapshot.plays?.forEach { add(it.song.path) }
+        snapshot.interactions?.forEach { interaction -> interaction.target?.takeIf { it.kind == TargetKind.SONG }?.let { add(it.key) } }
         snapshot.songState?.let { state -> addAll(state.places.keys + state.bookmarks.keys + state.speeds.keys + listOfNotNull(state.part?.path)) }
         snapshot.ledger?.let { state -> addAll(bare(state).entries.keys) }
         snapshot.tones?.let { state -> state.tones.values.forEach { add(it.songPath) } }
@@ -440,7 +447,7 @@ object BackupBundle {
         Section.QUEUES -> QueuesJson.decode(text)?.let { book ->
             contents.copy(queues = book, repeat = jsonObject(text)?.text(REPEAT_KEY)?.let { name -> Repeat.entries.firstOrNull { it.name == name } })
         }
-        Section.PLAYS -> SectionJson.plays(text)?.let { contents.copy(plays = it) }
+        Section.PLAYS -> SectionJson.plays(text)?.let { contents.copy(plays = it.plays, interactions = it.interactions) }
         Section.BOOKMARKS -> SectionJson.marks(text)?.let { contents.copy(bookmarks = it.marks, usualSpeed = it.usual, part = it.part) }
         Section.EQUALIZER -> EqProfilesJson.decode(text)?.let { contents.copy(equalizer = it.copy(unknownProfiles = emptyMap())) }
         Section.LYRICS -> ledger(text)?.let { contents.copy(lyrics = bare(it)) }
