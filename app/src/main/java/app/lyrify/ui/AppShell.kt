@@ -195,8 +195,9 @@ fun AppShell(
     val dupes by rememberDuplicates().state.collectAsStateWithLifecycle()
     val tones by remember(context) { ToneListStore.of(context).state }.collectAsStateWithLifecycle(TonesState())
     // Bookmarks' count once they are read: a place kept as music plays changes no count, so it redraws nothing here.
-    val extras = remember(context) { PlayerExtras.of(context) }
-    val bookmarks by remember(extras) { extras.state.combine(extras.ready) { state, read -> state.bookmarks.values.sumOf { it.size }.takeIf { read } } }.collectAsStateWithLifecycle(null)
+    val bookmarks by remember(context) {
+        PlayerExtras.of(context).state.combine(PlayerExtras.of(context).ready) { state, read -> state.bookmarks.values.sumOf { it.size }.takeIf { read } }
+    }.collectAsStateWithLifecycle(null)
     val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsRow(), ai, aiWaiting, downloadsRow(), rememberTrashSongs(), bookmarks, huddleRow())
     val own = rememberOwnNow()
     val followed by NowPlaying.followed.collectAsStateWithLifecycle()

@@ -69,9 +69,8 @@ fun bookmarkGroups(state: SongState, library: Library): List<BookmarkGroup> {
 fun BookmarksPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val nav = LocalNavigator.current
-    val extras = remember(context) { PlayerExtras.of(context) }
-    val state by extras.state.collectAsStateWithLifecycle()
-    val ready by extras.ready.collectAsStateWithLifecycle()
+    val state by remember(context) { PlayerExtras.of(context) }.state.collectAsStateWithLifecycle()
+    val ready by remember(context) { PlayerExtras.of(context) }.ready.collectAsStateWithLifecycle()
     val ui = rememberLibraryUi()
     val library = ui?.library
     // Null until the bookmarks and the library are read.

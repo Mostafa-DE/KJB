@@ -611,8 +611,7 @@ private fun BookmarkNoteDialog(mark: Bookmark, onDismiss: () -> Unit, onSave: (S
 @Composable
 internal fun rememberPlayingMarks(ui: PlayerUi): List<SongMark> {
     val context = LocalContext.current
-    val extras = remember(context) { PlayerExtras.of(context) }
-    val state by extras.state.collectAsStateWithLifecycle()
+    val state by remember(context) { PlayerExtras.of(context) }.state.collectAsStateWithLifecycle()
     val path = ui.path()
     return remember(state, path, ui.library) { state.marksOf(path, ui.library?.bookOf(path)) }
 }
@@ -664,7 +663,6 @@ internal fun BookmarkList(marks: List<SongMark>, book: Book?, onPlay: (SongMark)
     val resources = LocalResources.current
     // The toast outlives the sheet or page the bookmark was removed in: it runs in the activity's scope, not theirs.
     val scope = LocalLifecycleOwner.current.lifecycleScope
-    val extras = remember(context) { PlayerExtras.of(context) }
     var editing by rememberSaveable { mutableStateOf<Long?>(null) }
     marks.forEach { at ->
         key(at.mark.id) {
@@ -674,11 +672,10 @@ internal fun BookmarkList(marks: List<SongMark>, book: Book?, onPlay: (SongMark)
                 onPlay = { onPlay(at) },
                 onEdit = { editing = at.mark.id },
                 onRemove = {
-                    val path = at.song.path
-                    extras.change { it.withoutBookmark(path, at.mark.id) }
+                    PlayerExtras.of(context).change { it.withoutBookmark(at.song.path, at.mark.id) }
                     scope.launch {
                         val undo = toasts.show(Toast(resources.getString(R.string.bookmark_removed), R.drawable.ic_bookmark, action = resources.getString(R.string.player_undo)))
-                        if (undo) extras.change { state -> state.withBookmark(at.song, at.mark.positionMs, at.mark.note, at.mark.addedAt)?.first ?: state }
+                        if (undo) PlayerExtras.of(context).change { state -> state.withBookmark(at.song, at.mark.positionMs, at.mark.note, at.mark.addedAt)?.first ?: state }
                     }
                 },
             )
@@ -687,7 +684,7 @@ internal fun BookmarkList(marks: List<SongMark>, book: Book?, onPlay: (SongMark)
     marks.firstOrNull { it.mark.id == editing }?.let { at ->
         BookmarkNoteDialog(at.mark, onDismiss = { editing = null }) { note ->
             editing = null
-            extras.change { it.withNote(at.song.path, at.mark.id, note) }
+            PlayerExtras.of(context).change { it.withNote(at.song.path, at.mark.id, note) }
         }
     }
 }

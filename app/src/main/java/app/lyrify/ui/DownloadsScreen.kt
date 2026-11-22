@@ -1015,9 +1015,8 @@ fun YouTubeSearchSheet(query: String, onDismiss: () -> Unit, onStarted: () -> Un
         search.search(words)
         onDispose { search.close() }
     }
-    val result = picked
-    if (result != null) {
-        SaveSheet(result.url, onDismiss = { picked = null }) {
+    picked?.let {
+        SaveSheet(it.url, onDismiss = { picked = null }) {
             onStarted()
             onDismiss()
         }
