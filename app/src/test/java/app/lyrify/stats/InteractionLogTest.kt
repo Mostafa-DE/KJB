@@ -187,14 +187,13 @@ class InteractionLogTest {
         log.lyrics(song.key)
         runCurrent()
 
-        val path = SongRef(song.key)
         assertEquals(
             listOf(
-                SuggestionsInteraction(T0, SuggestionsKind.SEARCH_PICK, song = path),
+                SuggestionsInteraction(T0, SuggestionsKind.SEARCH_PICK, song = SongRef(song.key)),
                 SuggestionsInteraction(T0 + 2_000, SuggestionsKind.ALBUM_OPENED, album = album.key),
                 SuggestionsInteraction(T0 + 3_000, SuggestionsKind.ARTIST_OPENED, artist = artist.key),
-                SuggestionsInteraction(T0 + 6_000, SuggestionsKind.SONG_OPENED, song = path),
-                SuggestionsInteraction(T0 + 7_000, SuggestionsKind.LYRICS_OPENED, song = path),
+                SuggestionsInteraction(T0 + 6_000, SuggestionsKind.SONG_OPENED, song = SongRef(song.key)),
+                SuggestionsInteraction(T0 + 7_000, SuggestionsKind.LYRICS_OPENED, song = SongRef(song.key)),
             ),
             log.since(T0),
         )

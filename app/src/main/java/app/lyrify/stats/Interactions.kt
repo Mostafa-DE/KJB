@@ -141,17 +141,16 @@ class InteractionLog(
      */
     override suspend fun since(from: Long): List<SuggestionsInteraction> = interactions(from).mapNotNull { interaction ->
         val target = interaction.target ?: return@mapNotNull null
-        val kind = when (interaction.kind to target.kind) {
-            InteractionKind.SEARCH to TargetKind.SONG -> SuggestionsKind.SEARCH_PICK
-            InteractionKind.OPEN to TargetKind.SONG -> SuggestionsKind.SONG_OPENED
-            InteractionKind.OPEN to TargetKind.ALBUM -> SuggestionsKind.ALBUM_OPENED
-            InteractionKind.OPEN to TargetKind.ARTIST -> SuggestionsKind.ARTIST_OPENED
-            InteractionKind.LYRICS to TargetKind.SONG -> SuggestionsKind.LYRICS_OPENED
-            else -> return@mapNotNull null
-        }
         SuggestionsInteraction(
             interaction.at,
-            kind,
+            when (interaction.kind to target.kind) {
+                InteractionKind.SEARCH to TargetKind.SONG -> SuggestionsKind.SEARCH_PICK
+                InteractionKind.OPEN to TargetKind.SONG -> SuggestionsKind.SONG_OPENED
+                InteractionKind.OPEN to TargetKind.ALBUM -> SuggestionsKind.ALBUM_OPENED
+                InteractionKind.OPEN to TargetKind.ARTIST -> SuggestionsKind.ARTIST_OPENED
+                InteractionKind.LYRICS to TargetKind.SONG -> SuggestionsKind.LYRICS_OPENED
+                else -> return@mapNotNull null
+            },
             song = SongRef(target.key).takeIf { target.kind == TargetKind.SONG },
             album = target.key.takeIf { target.kind == TargetKind.ALBUM },
             artist = target.key.takeIf { target.kind == TargetKind.ARTIST },

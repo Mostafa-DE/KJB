@@ -48,9 +48,9 @@ class SimilarWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         val app = applicationContext
         if (!Lyrify.settings(app).settings.first().library.findSimilarOnline) return Result.success()
         // The plays are joined with the library: none while it can't be read.
-        val library = (LibraryGraph.repository(app).state.first { it !is LibraryState.Loading } as? LibraryState.Ready)?.library ?: return Result.success()
+        if (LibraryGraph.repository(app).state.first { it !is LibraryState.Loading } !is LibraryState.Ready) return Result.success()
         // All time, the most played first.
-        val played = listeningOf(StatsGraph.log(app).totals(), library).artists
+        val played = listeningOf(StatsGraph.log(app).totals(), (LibraryGraph.repository(app).state.value as? LibraryState.Ready)?.library).artists
         val written = withContext(Dispatchers.IO) { SimilarRules.writtenByPath(TagsGraph.undo(app).memory().entries) }
         val client = TagsGraph.client(app)
         SimilarLookups(SimilarGraph.cache(app), MusicBrainz(client), client, BuildConfig.VERSION_CODE, log = { Log.i(LOG_TAG, it) })
