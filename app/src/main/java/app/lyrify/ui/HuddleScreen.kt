@@ -56,6 +56,7 @@ import app.lyrify.huddle.Invited
 import app.lyrify.huddle.PendingInvite
 import app.lyrify.huddle.Received
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -225,15 +226,25 @@ fun HuddlePage(onBack: () -> Unit) {
     var removing by rememberSaveable { mutableStateOf<String?>(null) }
     var privately by rememberSaveable { mutableStateOf(false) }
     var passphrase by rememberSaveable { mutableStateOf(false) }
-    var pasted by rememberSaveable { mutableStateOf<String?>(null) }
+    // Never in the saved state: the clipboard may hold more than the invite.
+    var pasted by remember { mutableStateOf<String?>(null) }
     var opened by rememberSaveable { mutableStateOf<String?>(null) }
     val failed = { scope.launch { toasts.show(Toast(resources.getString(R.string.huddle_no_answer), R.drawable.ic_error, Tone.ERROR)) } }
+    // One invite at a time: a second tap while the first is made is not a second link.
+    var making by remember { mutableStateOf(false) }
     val invite: () -> Unit = {
-        scope.launch {
-            when (val invited = huddle.invite(null)) {
-                is Invited.Link -> toasts.say(resources, shareMessage(context, resources.getString(R.string.huddle_invite_message, invited.text)))
-                Invited.NoName -> naming = true
-                Invited.NoAnswer -> failed()
+        if (!making) {
+            making = true
+            scope.launch {
+                try {
+                    when (val invited = huddle.invite(null)) {
+                        is Invited.Link -> toasts.say(resources, shareMessage(context, resources.getString(R.string.huddle_invite_message, invited.text)))
+                        Invited.NoName -> naming = true
+                        Invited.NoAnswer -> failed()
+                    }
+                } finally {
+                    making = false
+                }
             }
         }
     }
@@ -290,7 +301,8 @@ fun HuddlePage(onBack: () -> Unit) {
             if (shown.invites.isNotEmpty()) {
                 item(key = "invites", contentType = "title") { PageSectionTitle(stringResource(R.string.huddle_waiting_title)) }
                 items(shown.invites, key = { "invite " + it.token }, contentType = { "invite" }) { waiting ->
-                    InviteRow(waiting, now) { scope.launch { if (!huddle.cancel(waiting.token)) failed() } }
+                    // Asked for, it is done even if the page closes meanwhile.
+                    InviteRow(waiting, now) { scope.launch { if (!withContext(NonCancellable) { huddle.cancel(waiting.token) }) failed() } }
                 }
             }
             item(key = "settings", contentType = "settings") {
@@ -330,7 +342,8 @@ fun HuddlePage(onBack: () -> Unit) {
             onConfirm = {
                 removing = null
                 scope.launch {
-                    if (huddle.remove(friend.id)) toasts.show(Toast(resources.getString(R.string.huddle_removed, friend.shownName), R.drawable.ic_person_off)) else failed()
+                    // Asked for, it is done even if the page closes meanwhile.
+                    if (withContext(NonCancellable) { huddle.remove(friend.id) }) toasts.show(Toast(resources.getString(R.string.huddle_removed, friend.shownName), R.drawable.ic_person_off)) else failed()
                 }
             },
             onDismiss = { removing = null },
@@ -518,8 +531,14 @@ private fun PassphraseDialog(onDismiss: () -> Unit) {
             val typed = first.toCharArray()
             onDismiss()
             lifecycle.launch {
-                val set = withContext(Dispatchers.Default) { huddle.setPassphrase(typed) }
-                typed.fill(' ')
+                // Set even if KJB turns or closes meanwhile; the typed characters are wiped either way.
+                val set = withContext(NonCancellable + Dispatchers.Default) {
+                    try {
+                        huddle.setPassphrase(typed)
+                    } finally {
+                        typed.fill(' ')
+                    }
+                }
                 toasts.show(if (set) Toast(resources.getString(R.string.huddle_passphrase_saved), R.drawable.ic_lock) else Toast(resources.getString(R.string.lib_not_saved), R.drawable.ic_error, Tone.ERROR))
             }
         },

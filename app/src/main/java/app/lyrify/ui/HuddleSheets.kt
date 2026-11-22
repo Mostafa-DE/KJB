@@ -55,7 +55,6 @@ import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.player.pickedSource
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -78,20 +77,27 @@ internal fun SendToFriendSheet(songs: List<Song>, kind: CardKind, name: String?,
     val brand = LocalBrandColors.current
     val huddle = rememberHuddle()
     val state = rememberHuddleState() ?: return
+    if (songs.isEmpty()) {
+        // Nothing to send: the songs left the library meanwhile, or the playlist is empty.
+        LaunchedEffect(Unit) { onDismiss() }
+        return
+    }
     var note by rememberSaveable { mutableStateOf("") }
     var typed by rememberSaveable { mutableStateOf("") }
     var nameMissing by remember { mutableStateOf(false) }
+    // One send or invite per sheet: a second tap while the first goes is not a second card.
+    var busy by remember { mutableStateOf(false) }
     val needsName = state.name == null
     // Your name set first when it was not; false while the field holds none.
     suspend fun named(): Boolean = !needsName || huddle.setName(typed)
     fun card() = Messages.card(kind, songs, name, note)
     fun ready(): Boolean = (!needsName || Invites.cleanName(typed) != null).also { nameMissing = !it }
-    val first = songs.firstOrNull()
+    val first = songs.first()
     LyrifySheet(onDismiss = onDismiss, spacing = 12.dp) {
         Text(stringResource(R.string.huddle_send), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         Text(
             when (kind) {
-                CardKind.SONG -> listOfNotNull(first?.title, first?.artist).joinToString(" · ")
+                CardKind.SONG -> listOfNotNull(first.title, first.artist).joinToString(" · ")
                 CardKind.ALBUM -> stringResource(R.string.lib_source_album, name.orEmpty())
                 CardKind.PLAYLIST -> stringResource(R.string.lib_source_playlist, name.orEmpty())
             },
@@ -114,7 +120,8 @@ internal fun SendToFriendSheet(songs: List<Song>, kind: CardKind, name: String?,
                     lead = { Tile(R.drawable.ic_person) },
                     trailing = { Icon(painterResource(R.drawable.ic_send), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp)) },
                 ) {
-                    if (ready()) {
+                    if (!busy && ready()) {
+                        busy = true
                         val card = card()
                         onDismiss()
                         lifecycle.launch {
@@ -133,10 +140,14 @@ internal fun SendToFriendSheet(songs: List<Song>, kind: CardKind, name: String?,
                 lead = { Tile(R.drawable.ic_add, MaterialTheme.colorScheme.surfaceContainerHigh, brand.highlight) },
                 trailing = null,
             ) {
-                if (ready()) {
+                if (!busy && ready()) {
+                    busy = true
                     val card = card()
                     lifecycle.launch {
-                        if (!named()) return@launch
+                        if (!named()) {
+                            busy = false
+                            return@launch
+                        }
                         when (val invited = huddle.invite(card)) {
                             is Invited.Link -> {
                                 onDismiss()
@@ -147,7 +158,10 @@ internal fun SendToFriendSheet(songs: List<Song>, kind: CardKind, name: String?,
                                 }
                                 toasts.say(resources, shareMessage(context, what))
                             }
-                            Invited.NoName, Invited.NoAnswer -> toasts.show(Toast(resources.getString(R.string.huddle_no_answer), R.drawable.ic_error, Tone.ERROR))
+                            Invited.NoName, Invited.NoAnswer -> {
+                                busy = false
+                                toasts.show(Toast(resources.getString(R.string.huddle_no_answer), R.drawable.ic_error, Tone.ERROR))
+                            }
                         }
                     }
                 }
@@ -159,17 +173,20 @@ internal fun SendToFriendSheet(songs: List<Song>, kind: CardKind, name: String?,
 /**
  * A card a friend sent ([id] in Huddle's inbox), opened from the start screen's row, the Huddle page or an invite: the
  * sheet ([ReceivedSheet]), and over it, for a song you do not have, YouTube's search ([YouTubeSearchSheet], KJB
- * Downloads); back from the search the card shows again. [playNow]: a song you have plays at once (Play and add).
+ * Downloads); back from the search the card shows again, with the answers to "Is this the song?" given before.
+ * [playNow]: a song you have plays at once (Play and add).
  */
 @Composable
 internal fun ReceivedHost(id: String?, playNow: Boolean = false, onClose: () -> Unit) {
     var youtube by rememberSaveable { mutableStateOf<String?>(null) }
+    // Answers to "Is this the song?", by the song's place in the card; here, so they outlast the search.
+    var said by rememberSaveable(id) { mutableStateOf(emptyMap<Int, Boolean>()) }
     val query = youtube
     if (query != null) {
         YouTubeSearchSheet(query, onDismiss = { youtube = null }, onStarted = { youtube = null })
         return
     }
-    if (id != null) ReceivedSheet(id, playNow, onYouTube = { youtube = it }, onDismiss = onClose)
+    if (id != null) ReceivedSheet(id, playNow, said, onSaid = { said = said + it }, onYouTube = { youtube = it }, onDismiss = onClose)
 }
 
 /**
@@ -179,7 +196,7 @@ internal fun ReceivedHost(id: String?, playNow: Boolean = false, onClose: () -> 
  * ones you have, and asks for the rest at once. What plays is a queue of its own, "From <name>", and the player shows.
  */
 @Composable
-private fun ReceivedSheet(id: String, playNow: Boolean, onYouTube: (String) -> Unit, onDismiss: () -> Unit) {
+private fun ReceivedSheet(id: String, playNow: Boolean, said: Map<Int, Boolean>, onSaid: (Pair<Int, Boolean>) -> Unit, onYouTube: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -195,8 +212,6 @@ private fun ReceivedSheet(id: String, playNow: Boolean, onYouTube: (String) -> U
         val card = received?.card ?: return@produceState
         value = withContext(Dispatchers.Default) { SongMatcher(songs).let { matcher -> card.songs.map(matcher::match) } }
     }
-    // Answers to "Is this the song?", by the song's place in the card.
-    var said by rememberSaveable { mutableStateOf(emptyMap<Int, Boolean>()) }
     var asking by rememberSaveable { mutableStateOf<Int?>(null) }
     LaunchedEffect(id) { huddle.opened(id) }
     if (received == null || friend == null) {
@@ -242,7 +257,7 @@ private fun ReceivedSheet(id: String, playNow: Boolean, onYouTube: (String) -> U
                     match is Match.Found -> LyrifyButton(stringResource(R.string.huddle_play), onClick = { play(listOf(match.song)) }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_play_arrow_fill)
                     match is Match.Maybe && unsure -> {
                         LyrifyButton(stringResource(R.string.huddle_maybe_yes), onClick = { play(listOf(match.song)) }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_play_arrow_fill)
-                        LyrifyButton(stringResource(R.string.huddle_maybe_no), onClick = { said = said + (0 to false) }, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY)
+                        LyrifyButton(stringResource(R.string.huddle_maybe_no), onClick = { onSaid(0 to false) }, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY)
                     }
                     match != null -> {
                         LyrifyButton(stringResource(R.string.huddle_ask, from), onClick = askAll, modifier = Modifier.fillMaxWidth())
@@ -302,11 +317,11 @@ private fun ReceivedSheet(id: String, playNow: Boolean, onYouTube: (String) -> U
                 icon = R.drawable.ic_help,
                 destructive = false,
                 onConfirm = {
-                    said = said + (at to true)
+                    onSaid(at to true)
                     asking = null
                 },
                 onDismiss = {
-                    said = said + (at to false)
+                    onSaid(at to false)
                     asking = null
                 },
             )
@@ -402,12 +417,13 @@ internal fun AcceptInviteSheet(link: String, onDismiss: () -> Unit, onPlay: (Str
                             when (val accepted = huddle.accept(invite)) {
                                 is Accepted.Joined -> {
                                     onDismiss()
-                                    toasts.show(Toast(resources.getString(R.string.huddle_joined, accepted.friend.shownName), R.drawable.ic_group))
-                                    if (card != null) huddle.state.first().inbox.firstOrNull { it.friend == accepted.friend.id }?.let { onPlay(it.id) }
+                                    // The song first; the message shows meanwhile.
+                                    accepted.received?.let(onPlay)
+                                    lifecycle.launch { toasts.show(Toast(resources.getString(R.string.huddle_joined, accepted.friend.shownName), R.drawable.ic_group)) }
                                 }
                                 is Accepted.Already -> {
                                     onDismiss()
-                                    toasts.show(Toast(resources.getString(R.string.huddle_already, accepted.friend.shownName), R.drawable.ic_group))
+                                    lifecycle.launch { toasts.show(Toast(resources.getString(R.string.huddle_already, accepted.friend.shownName), R.drawable.ic_group)) }
                                 }
                                 else -> answer = accepted
                             }
@@ -467,6 +483,7 @@ internal fun HuddleRestoreRow(checked: Boolean, passphrase: String, wrong: Boole
         if (checked) {
             PassphraseField(passphrase, onPassphrase, stringResource(R.string.huddle_passphrase_field), isError = wrong)
             if (wrong) Text(stringResource(R.string.huddle_restore_wrong), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+            Fact(R.drawable.ic_info, stringResource(R.string.huddle_restore_one_phone))
         }
     }
 }

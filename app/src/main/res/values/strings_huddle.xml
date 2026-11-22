@@ -129,4 +129,5 @@
     <!-- Restore: the backup's friends, with the passphrase. -->
     <string name="huddle_restore_row">Huddle friends</string>
     <string name="huddle_restore_wrong">That passphrase doesn\'t open your Huddle friends. Try again, or untick Huddle friends.</string>
+    <string name="huddle_restore_one_phone">Bring them back on one phone only: two phones with the same friends would take each other\'s songs.</string>
 </resources>
