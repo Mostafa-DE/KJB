@@ -165,7 +165,8 @@ object PlaysSchema {
      * [LoggedPlay.end]), codes by name in lower case ([codeOf]); the plays from before keep NULL there. And `imported`:
      * the plays an import made are marked, found by their shape (nothing heard and counted, which a play heard here never
      * is), so a file 3.1.0 kept after a downgrade gets the imports it made marked on the next upgrade too.
-     * Version 4: the interaction log ([Interaction]), one row per time and kind, codes as in version 3.
+     * Version 4: Insights' real minutes (lane in1's step, empty on this branch until it merges).
+     * Version 5: the interaction log ([Interaction]), one row per time and kind, codes as in version 3.
      */
     val STEPS: List<List<String>> = listOf(
         listOf(
@@ -188,6 +189,7 @@ object PlaysSchema {
             "ALTER TABLE plays ADD COLUMN imported INTEGER NOT NULL DEFAULT 0",
             "UPDATE plays SET imported = 1 WHERE heard_ms = 0 AND counted != 0",
         ),
+        emptyList(),
         listOf(
             "CREATE TABLE IF NOT EXISTS interactions (at INTEGER NOT NULL, kind TEXT NOT NULL, zone_offset_min INTEGER, words TEXT, " +
                 "target TEXT, target_key TEXT, PRIMARY KEY (at, kind)) WITHOUT ROWID",

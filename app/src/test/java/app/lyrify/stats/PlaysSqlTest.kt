@@ -222,7 +222,7 @@ class PlaysSqlTest {
         assertEquals(sql.totals(T0 + 1_000, T0 + 3_000).toSet(), fake.totals(T0 + 1_000, T0 + 3_000).toSet())
     }
 
-    // The interaction log (version 4)
+    // The interaction log (version 5)
 
     private val searched = Interaction(T0, InteractionKind.SEARCH, 180, words = "Harbour Glass")
     private val album = Interaction(T0 + 1_000, InteractionKind.OPEN, 180, Target(TargetKind.ALBUM, """["KJB Test Band","Harbour Glass"]"""))
@@ -243,6 +243,16 @@ class PlaysSqlTest {
         store.note(album)
         store.upgrade(3, PlaysSchema.VERSION)
         assertEquals(listOf(album), store.interactions())
+    }
+
+    @Test
+    fun `the interaction log is a step of its own after version 4, so a file at version 4 gains it too`() = runBlocking {
+        val store = store(version = 4)
+        assertEquals(emptySet<String>(), store.columns("interactions"))
+
+        store.upgrade(4, PlaysSchema.VERSION)
+
+        assertEquals(INTERACTION_COLUMNS, store.columns("interactions"))
     }
 
     @Test
