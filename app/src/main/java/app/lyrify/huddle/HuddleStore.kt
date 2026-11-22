@@ -51,6 +51,11 @@ data class Friend(
     val lastSentAt: Long? = null,
     /** The ids of their latest messages: a copy the server sends again is dropped. */
     val seen: List<String> = emptyList(),
+    /**
+     * Reads of their mailbox in a row that found a message that does not open: it waits on the server, unacknowledged, for
+     * [Huddle.NOT_OPENED_RETRIES] more reads, then goes and this is 0 again, as it is after a read that found none.
+     */
+    val notOpenedReads: Int = 0,
 ) {
     val shownName: String get() = rename ?: name
 }

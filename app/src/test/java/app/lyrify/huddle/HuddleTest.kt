@@ -489,6 +489,58 @@ class HuddleTest {
     }
 
     @Test
+    fun `an inbox kept but not acknowledged is a sync without an answer, and the next acknowledges it`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
+        juniper.send(wrenOnJuniper.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        server.silent = setOf("ack")
+        assertFalse(wren.sync())
+        assertEquals(listOf(song), wrenState.now.inbox.map { it.card })
+        assertEquals(1, server.waiting(juniperOnWren.inBox).size)
+        server.silent = emptySet()
+        assertTrue(wren.sync())
+        assertTrue(server.waiting(juniperOnWren.inBox).isEmpty())
+        assertEquals("the card came once", listOf(song), wrenState.now.inbox.map { it.card })
+    }
+
+    @Test
+    fun `a message that does not open is read again 3 times, unacknowledged, then goes, each time with a reason code only`() = runTest {
+        val logged = ArrayList<String>()
+        val (wren, wrenState) = phone("Wren", log = { logged += it })
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
+        // Something that does not open waits first (another key), then a card that does.
+        server.replay(juniperOnWren.inBox, HuddleCrypto.encode(ByteArray(120) { 7 }))
+        juniper.send(wrenOnJuniper.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        repeat(Huddle.NOT_OPENED_RETRIES) { read ->
+            assertTrue(wren.sync())
+            assertEquals("read ${read + 1}: neither is acknowledged", 2, server.waiting(juniperOnWren.inBox).size)
+        }
+        assertEquals(listOf(song), wrenState.now.inbox.map { it.card })
+        assertTrue(wren.sync())
+        assertTrue("the last read acknowledges both", server.waiting(juniperOnWren.inBox).isEmpty())
+        assertEquals("the card came once", listOf(song), wrenState.now.inbox.map { it.card })
+        assertEquals(
+            List(Huddle.NOT_OPENED_RETRIES) { "huddle: inbox kept 1 that did not open, to read again (not_opened)" } + "huddle: inbox dropped 1 that did not open (not_opened)",
+            logged.filter { "not_opened" in it },
+        )
+        // One that does not open after a card: the card is acknowledged, the other waits, its count started over.
+        val next = Card(CardKind.SONG, listOf(bell))
+        juniper.send(wrenOnJuniper.id, next)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        server.replay(juniperOnWren.inBox, HuddleCrypto.encode(ByteArray(120) { 9 }))
+        assertTrue(wren.sync())
+        assertEquals(listOf(next, song), wrenState.now.inbox.map { it.card })
+        assertEquals(1, server.waiting(juniperOnWren.inBox).size)
+        assertEquals(1, wrenState.now.friends.single().notOpenedReads)
+        val secret = listOf("Wren", "Juniper", lantern.title, bell.title, juniperOnWren.id, juniperOnWren.inBox, juniperOnWren.outBox)
+        assertTrue(logged.none { line -> secret.any { it in line } })
+    }
+
+    @Test
     fun `a sync step without an answer is logged with a reason code, never a name, an id or a title`() = runTest {
         val logged = ArrayList<String>()
         val (wren, wrenState) = phone("Wren", log = { logged += it })

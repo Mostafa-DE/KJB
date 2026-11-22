@@ -466,7 +466,11 @@ class Huddle(
         return answered
     }
 
-    /** Friends' mailboxes: each message opened with its friend's key, kept once, then acknowledged; a goodbye removes the friend. */
+    /**
+     * Friends' mailboxes: each message opened with its friend's key, kept once, then acknowledged; a goodbye removes the
+     * friend. One that does not open is read again at [NOT_OPENED_RETRIES] syncs, unacknowledged with what came after it,
+     * then acknowledged too. False when the server did not answer, the acknowledgement included.
+     */
     private suspend fun fetch(): Boolean {
         val friends = now().friends
         if (friends.isEmpty()) return true
@@ -479,27 +483,38 @@ class Huddle(
         if (posted.isEmpty()) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
         val upTo = HashMap<String, Long>()
         val read = ArrayList<Pair<String, Message>>()
-        var closed = 0
+        // By friend: their Friend.notOpenedReads after this read.
+        val notOpened = HashMap<String, Int>()
+        var kept = 0
+        var dropped = 0
         for (friend in friends) {
-            val box = posted[friend.inBox] ?: continue
+            val box = posted[friend.inBox]?.sortedBy { it.seq } ?: continue
             val key = HuddleCrypto.decode(friend.inKey) ?: continue
-            for (one in box.sortedBy { it.seq }) {
-                upTo[friend.inBox] = maxOf(upTo[friend.inBox] ?: one.seq, one.seq)
-                // A box that does not open (another key, sealed for the other way, changed) is dropped with the rest.
+            // A box that does not open (another key, sealed for the other way, changed, a newer KJB's): its seq.
+            val closed = ArrayList<Long>()
+            for (one in box) {
                 val message = HuddleCrypto.decode(one.data)?.let { HuddleCrypto.open(key, it, friend.inBox.encodeToByteArray()) }?.let(Messages::decode)
-                if (message == null) closed++ else read += friend.id to message
+                if (message == null) closed += one.seq else read += friend.id to message
             }
+            val reads = if (closed.isEmpty()) 0 else friend.notOpenedReads + 1
+            val again = reads in 1..NOT_OPENED_RETRIES
+            notOpened[friend.id] = if (again) reads else 0
+            if (again) kept += closed.size else dropped += closed.size
+            // Read again: acknowledged only up to the first that did not open, so it and what came after it wait.
+            (if (again) box.lastOrNull { it.seq < closed.first() } else box.lastOrNull())?.let { upTo[friend.inBox] = it.seq }
         }
-        if (closed > 0) log("huddle: inbox dropped $closed that did not open (not_opened)")
-        if (!storage.change { it.received(read, now) }) {
+        if (kept > 0) log("huddle: inbox kept $kept that did not open, to read again (not_opened)")
+        if (dropped > 0) log("huddle: inbox dropped $dropped that did not open (not_opened)")
+        if (!storage.change { state -> state.copy(friends = state.friends.map { it.copy(notOpenedReads = notOpened[it.id] ?: it.notOpenedReads) }).received(read, now) }) {
             log("huddle: inbox not kept (not_written)")
             return false
         }
-        if (!server.ack(upTo)) log("huddle: inbox not acknowledged (no_answer)")
+        val acknowledged = server.ack(upTo)
+        if (!acknowledged) log("huddle: inbox not acknowledged (no_answer)")
         read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> friends.firstOrNull { it.id == id } }.forEach { gone ->
             server.dropBoxes(listOf(gone.inBox, gone.outBox))
         }
-        return true
+        return acknowledged
     }
 
     /** This state with [read] messages kept: each once, from friends still here; cards and plays kept within their limits. */
@@ -554,6 +569,9 @@ class Huddle(
 
         /** After a sync or a card without an answer, the waits before each new try: 30 s, 2 min, 10 min; then as usual. */
         val RETRY_MS: List<Long> = listOf(30_000L, 2 * 60_000L, 10 * 60_000L)
+
+        /** A message that does not open is read again at this many syncs, unacknowledged, before it goes. */
+        const val NOT_OPENED_RETRIES: Int = 3
 
         /** An invite nobody joined goes after a week, as the server's does. */
         const val INVITE_KEPT_MS: Long = 7 * DAY_MS

@@ -81,8 +81,9 @@ class FakeServer : HuddleServer {
 
     override suspend fun ack(upTo: Map<String, Long>): Boolean {
         requests += "ack"
-        if (online) upTo.forEach { (box, last) -> boxes[box]?.removeAll { it.seq <= last } }
-        return online
+        if (!online || "ack" in silent) return false
+        upTo.forEach { (box, last) -> boxes[box]?.removeAll { it.seq <= last } }
+        return true
     }
 
     override suspend fun dropBoxes(boxes: List<String>): Boolean {
