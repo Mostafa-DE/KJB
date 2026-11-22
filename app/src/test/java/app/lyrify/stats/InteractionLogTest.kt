@@ -1,5 +1,6 @@
 package app.lyrify.stats
 
+import app.lyrify.library.SongRef
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -8,6 +9,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.ZoneId
+import app.lyrify.suggestions.Interaction as SuggestionsInteraction
+import app.lyrify.suggestions.InteractionKind as SuggestionsKind
 
 /**
  * The interaction log as the screens note into it (IL1): searches with their words and the result tapped, pages and
@@ -162,6 +165,43 @@ class InteractionLogTest {
         assertEquals(2, log.interactions().size)
         store.failing = true
         assertEquals(emptyList<Interaction>(), log.interactions())
+    }
+
+    @Test
+    fun `Suggestions get the songs, albums and artists looked at, never a search's words, a folder or a playlist`() = runTest {
+        val log = log()
+        log.searched("Copper Kettle", result = song)
+        now += 1_000
+        log.searched("Harbour")
+        now += 1_000
+        log.opened(album)
+        now += 1_000
+        log.opened(artist)
+        now += 1_000
+        log.opened(Target(TargetKind.PLAYLIST, "7"))
+        now += 1_000
+        log.searched("Old Pier", result = Target(TargetKind.FOLDER, "Music/Old Pier"))
+        now += 1_000
+        log.opened(song)
+        now += 1_000
+        log.lyrics(song.key)
+        runCurrent()
+
+        val path = SongRef(song.key)
+        assertEquals(
+            listOf(
+                SuggestionsInteraction(T0, SuggestionsKind.SEARCH_PICK, song = path),
+                SuggestionsInteraction(T0 + 2_000, SuggestionsKind.ALBUM_OPENED, album = album.key),
+                SuggestionsInteraction(T0 + 3_000, SuggestionsKind.ARTIST_OPENED, artist = artist.key),
+                SuggestionsInteraction(T0 + 6_000, SuggestionsKind.SONG_OPENED, song = path),
+                SuggestionsInteraction(T0 + 7_000, SuggestionsKind.LYRICS_OPENED, song = path),
+            ),
+            log.since(T0),
+        )
+        // From a time on, that time included; none when the log cannot be read.
+        assertEquals(listOf(T0 + 6_000, T0 + 7_000), log.since(T0 + 6_000).map { it.at })
+        store.failing = true
+        assertEquals(emptyList<SuggestionsInteraction>(), log.since(T0))
     }
 
     @Test

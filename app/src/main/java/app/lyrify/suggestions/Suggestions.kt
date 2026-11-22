@@ -363,6 +363,7 @@ object SuggestionsGraph {
             favourites = { playlists.state.first().let { state -> state.favouriteSongs.associateWith { state.favouriteAdded[it.path] ?: 0L } } },
             settings = Lyrify.settings(app),
             forYouFile = File(app.filesDir, "for-you.json"),
+            interactions = StatsGraph.interactions(app),
             warn = { Log.w(LOG_TAG, it) },
         )
     }.also { suggestions = it }

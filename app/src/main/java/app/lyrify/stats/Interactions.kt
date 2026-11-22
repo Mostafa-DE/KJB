@@ -1,10 +1,14 @@
 package app.lyrify.stats
 
+import app.lyrify.library.SongRef
 import app.lyrify.library.search.fold
+import app.lyrify.suggestions.InteractionSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import java.time.ZoneId
+import app.lyrify.suggestions.Interaction as SuggestionsInteraction
+import app.lyrify.suggestions.InteractionKind as SuggestionsKind
 
 // The interaction log (plan 0b, decided 2026-11-22): what the user does in KJB besides playing, each with its time and
 // the phone's time zone then. Kept in `plays.db` beside the plays and in backups with them; it never leaves the phone
@@ -75,7 +79,7 @@ class InteractionLog(
     private val clock: () -> Long = System::currentTimeMillis,
     private val zone: () -> ZoneId = ZoneId::systemDefault,
     private val log: (String) -> Unit = {},
-) : InteractionsQuery {
+) : InteractionsQuery, InteractionSource {
     private val work = Channel<suspend () -> Unit>(Channel.UNLIMITED)
 
     /** The time given to the last interaction noted. */
@@ -130,6 +134,29 @@ class InteractionLog(
     }
 
     override suspend fun interactions(from: Long?, until: Long?): List<Interaction> = store.interactions(from, until).orEmpty()
+
+    /**
+     * What Suggestions read (suggestions/Sources.kt): a song tapped in Search's results, a song's Song info, an album's or
+     * an artist's page and a song's lyrics. A search's words, folders and playlists never go there.
+     */
+    override suspend fun since(from: Long): List<SuggestionsInteraction> = interactions(from).mapNotNull { interaction ->
+        val target = interaction.target ?: return@mapNotNull null
+        val kind = when (interaction.kind to target.kind) {
+            InteractionKind.SEARCH to TargetKind.SONG -> SuggestionsKind.SEARCH_PICK
+            InteractionKind.OPEN to TargetKind.SONG -> SuggestionsKind.SONG_OPENED
+            InteractionKind.OPEN to TargetKind.ALBUM -> SuggestionsKind.ALBUM_OPENED
+            InteractionKind.OPEN to TargetKind.ARTIST -> SuggestionsKind.ARTIST_OPENED
+            InteractionKind.LYRICS to TargetKind.SONG -> SuggestionsKind.LYRICS_OPENED
+            else -> return@mapNotNull null
+        }
+        SuggestionsInteraction(
+            interaction.at,
+            kind,
+            song = SongRef(target.key).takeIf { target.kind == TargetKind.SONG },
+            album = target.key.takeIf { target.kind == TargetKind.ALBUM },
+            artist = target.key.takeIf { target.kind == TargetKind.ARTIST },
+        )
+    }
 
     /** When something happened: the clock, and how far the phone's time zone was ahead of UTC then. */
     private class Moment(val at: Long, val zoneOffsetMinutes: Int)
