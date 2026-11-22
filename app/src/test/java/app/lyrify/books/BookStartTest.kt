@@ -5,6 +5,7 @@ import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
+import app.lyrify.player.Move
 import app.lyrify.player.Openable
 import app.lyrify.player.PlaybackPlace
 import app.lyrify.player.PlayerCore
@@ -438,6 +439,8 @@ class BookStartTest {
         assertTrue(core.resumeIntoBook(openedId, library, books) { null })
         assertEquals(bookSource(oneFile), core.book.value.current!!.source)
         assertEquals(BookPlace(0, 600_000), books.state.value.placeOf(oneFile))
+        // Like any Resume, a queue started for the play counter (LG1), not a song picked.
+        assertEquals(Move.START, core.takeMove(core.book.value.current!!.current!!.uid))
         // A copy left in Recent; while it is looked up the user starts music: that music stays, nothing is written.
         val copy = SongRef("/data/user/0/app.lyrify/cache/opened/1800000000000/0/Quiet Orchard.m4b")
         val copyLeft = openedLeft(listOf(copy), 0, 700_000, at = 100)
@@ -466,12 +469,15 @@ class BookStartTest {
     fun `every list, queue and car start goes through the book check, the Books tab's own start and Shuffle do not`() {
         // Unit tests run in the module's folder.
         val connection = File("src/main/java/app/lyrify/player/PlayerConnection.kt").readText()
-        listOf("it.play(songs, start, source, core.now())", "it.playFromStart(queueId, core.now())", "it.jump(queueId, index, core.now())").forEach { change ->
-            assertTrue(change, connection.contains("switchAsBook { $change }"))
-        }
+        // Play from start and Shuffle note a queue started for the play counter (LG1), the others a pick.
+        listOf(
+            "switchAsBook { it.play(songs, start, source, core.now()) }",
+            "switchAsBook(Move.START) { it.playFromStart(queueId, core.now()) }",
+            "switchAsBook { it.jump(queueId, index, core.now()) }",
+        ).forEach { start -> assertTrue(start, connection.contains(start)) }
         assertTrue(connection.contains("resuming?.cancel()"))
         assertFalse(connection.contains("core.switch { it.play(songs, start, source"))
-        assertTrue(connection.contains("core.switch { it.shuffle(songs, source"))
+        assertTrue(connection.contains("core.switch(Move.START) { it.shuffle(songs, source"))
         assertTrue(connection.contains("core.switch { book -> book.play(songs, start, source, core.now())"))
         val car = File("src/main/java/app/lyrify/auto/CarBrowse.kt").readText()
         assertTrue(car.contains("it.asBook(it.play(play.songs, play.start, play.source, core.now()), data.library, books.value, core.now())"))

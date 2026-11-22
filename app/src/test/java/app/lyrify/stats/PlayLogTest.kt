@@ -122,7 +122,24 @@ class PlayLogTest {
             val words = sql.uppercase()
             assertFalse(sql, "DROP " in words || "DELETE " in words)
             if (words.startsWith("CREATE ")) assertTrue(sql, "IF NOT EXISTS" in words)
+            // A column added is left out where the table has it ([PlaysSchema.upgrade] with what it has).
+            if (words.startsWith("ALTER ")) assertTrue(sql, words.startsWith("ALTER TABLE PLAYS ADD COLUMN "))
+            // The only change to rows there are: an import's plays marked, which a new import does too.
+            if (words.startsWith("UPDATE ")) assertEquals("UPDATE PLAYS SET IMPORTED = 1 WHERE HEARD_MS = 0 AND COUNTED != 0", words)
         }
+    }
+
+    @Test
+    fun `an upgrade leaves out the columns a table has already, and adds those it lacks`() {
+        val added = PlaysSchema.upgrade(2, PlaysSchema.VERSION).filter { it.startsWith("ALTER ") }
+        assertEquals(8, added.size)
+        // A file a newer KJB left, then 3.1.0 kept: every column there, so no column is added twice.
+        val all = setOf("path", "started_at", "started_by", "source", "shuffled", "zone_offset_min", "song_key", "ended_how", "ended_at_ms", "imported")
+        assertEquals(PlaysSchema.upgrade(2, PlaysSchema.VERSION) - added.toSet(), PlaysSchema.upgrade(2, PlaysSchema.VERSION) { if (it == "plays") all else emptySet() })
+        // One column there: only the others are added.
+        assertEquals(PlaysSchema.upgrade(2, PlaysSchema.VERSION).filterNot { it.contains(" song_key ") }, PlaysSchema.upgrade(2, PlaysSchema.VERSION) { if (it == "plays") setOf("song_key") else emptySet() })
+        // A new file: every step, every statement.
+        assertEquals(PlaysSchema.upgrade(0, PlaysSchema.VERSION), PlaysSchema.upgrade(0, PlaysSchema.VERSION) { emptySet() })
     }
 
     // An unreadable plays.db (the open that finds it runs in PlaysDbDeviceTest)

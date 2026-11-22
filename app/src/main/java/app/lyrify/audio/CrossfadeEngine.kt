@@ -233,6 +233,13 @@ class CrossfadeEngine(
     private var tailRamp: Ramp? = null
     private var activeRamp: Ramp? = null
 
+    /**
+     * Where the song going out of the natural fade beginning now was as it began: read by the listeners while they hear
+     * of the song coming in ([EngineListener.onSongStarted]), where a play ends (stats/); null at any other time.
+     */
+    var fadeFromMs: Long? = null
+        private set
+
     /** A next song that failed to load ahead: its change plays gapless. */
     private var failedAhead: Long? = null
 
@@ -603,7 +610,11 @@ class CrossfadeEngine(
         active = incoming
         activeRamp = Ramp(up = true, lengthMs = lengthMs)
         applyVolumes()
-        incoming.loaded.getOrNull(incoming.index)?.let { uid -> tell { it.onSongStarted(uid, lap = false, natural = true) } }
+        incoming.loaded.getOrNull(incoming.index)?.let { uid ->
+            fadeFromMs = out.positionMs
+            tell { it.onSongStarted(uid, lap = false, natural = true) }
+            fadeFromMs = null
+        }
         tellPlaying()
         tell { it.onChanged() }
     }

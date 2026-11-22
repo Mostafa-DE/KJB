@@ -8,6 +8,7 @@ import app.lyrify.LOG_TAG
 import app.lyrify.library.Library
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
+import app.lyrify.player.SourceKind
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -88,7 +89,7 @@ class PlaysDbDeviceTest {
     fun aVersionOneFileUpgradesWithItsPlays() = runBlocking<Unit> {
         SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
             PlaysSchema.STEPS[0].forEach(db::execSQL)
-            db.execSQL(PlaysSchema.PUT, arrayOf<Any?>(PATH, T0, 12L, 120_000L, 1L))
+            db.execSQL(PUT_310, arrayOf<Any?>(PATH, T0, 12L, 120_000L, 1L))
             db.version = 1
         }
         val store = open()
@@ -103,12 +104,40 @@ class PlaysDbDeviceTest {
     }
 
     @Test
+    fun a310FileUpgradesWithItsPlaysAndTheStepRunsAgainAfterADowngrade() = runBlocking<Unit> {
+        SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
+            PlaysSchema.upgrade(0, 2).forEach(db::execSQL)
+            db.execSQL(PUT_310, arrayOf<Any?>(PATH, T0, 12L, 120_000L, 1L))
+            // An import's play: nothing heard, counted.
+            db.execSQL(PUT_310, arrayOf<Any?>(PATH, T0 - 1, null, 0L, 1L))
+            db.version = 2
+        }
+        val begun = LoggedPlay(SongRef(PATH, 12), T0 + 1_000, 400, counted = false, start = PlayStart(StartedBy.NEXT, SourceKind.ALBUM, false, "k"), zoneOffsetMinutes = 60, end = PlayEnded(PlayEnd.NEXT, 400))
+        open().let { store ->
+            assertEquals(listOf(LoggedPlay(SongRef(PATH), T0 - 1, 0, counted = true, imported = true), LoggedPlay(SongRef(PATH, 12), T0, 120_000, counted = true)), store.all())
+            assertTrue(store.put(begun))
+        }
+        opened.forEach(PlaysDb::close)
+        // 3.1.0 keeps the file (at its version 2) and writes another import's play; the next upgrade adds no column twice.
+        SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL(PUT_310, arrayOf<Any?>(PATH, T0 - 2, null, 0L, 1L))
+            db.version = 2
+        }
+        val store = open()
+
+        assertEquals(LoggedPlay(SongRef(PATH), T0 - 2, 0, counted = true, imported = true), store.all()?.first())
+        assertEquals(begun, store.all()?.last())
+        // The short play is in the log, and in no total.
+        assertEquals(listOf(SongPlays(SongRef(PATH, 12), 3, T0, 120_000)), store.totals())
+    }
+
+    @Test
     fun aNewerKjbsFileIsKeptAsItIs() = runBlocking<Unit> {
         SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
             PlaysSchema.upgrade(0, PlaysSchema.VERSION).forEach(db::execSQL)
             db.execSQL("ALTER TABLE plays ADD COLUMN later INTEGER")
             db.execSQL("CREATE TABLE later (x INTEGER)")
-            db.execSQL(PlaysSchema.PUT, arrayOf<Any?>(PATH, T0, 12L, 120_000L, 1L))
+            db.execSQL(PlaysSchema.PUT, PlaysSchema.putArgs(LoggedPlay(SongRef(PATH, 12), T0, 120_000, counted = true)))
             db.version = PlaysSchema.VERSION + 1
         }
         val store = open()
@@ -160,7 +189,7 @@ class PlaysDbDeviceTest {
         try {
             repeat(PLAYS) { i ->
                 val song = songs[(i * 7919) % SONGS]
-                db.execSQL(PlaysSchema.PUT, arrayOf<Any?>(song.path, T0 + i * 60_000L, song.ref.mediaStoreId, 150_000L, if (i % 5 == 0) 0L else 1L))
+                db.execSQL(PlaysSchema.PUT, PlaysSchema.putArgs(LoggedPlay(song.ref, T0 + i * 60_000L, 150_000L, counted = i % 5 != 0)))
             }
             db.setTransactionSuccessful()
         } finally {
@@ -192,5 +221,10 @@ class PlaysDbDeviceTest {
         const val SONGS = 500
         const val PLAYS = 10_000
         const val MAX_MS: Long = 50
+
+        /** 3.1.0's PlaysSchema.PUT, word for word: how 3.1.0 writes a play. */
+        const val PUT_310: String = "INSERT INTO plays (path, started_at, media_id, heard_ms, counted) VALUES (?, ?, ?, ?, ?) " +
+            "ON CONFLICT (path, started_at) DO UPDATE SET media_id = coalesce(excluded.media_id, media_id), " +
+            "heard_ms = max(heard_ms, excluded.heard_ms), counted = max(counted, excluded.counted)"
     }
 }

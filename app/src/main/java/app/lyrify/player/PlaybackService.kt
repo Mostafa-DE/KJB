@@ -57,6 +57,9 @@ import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.media.QueueSweep
 import app.lyrify.settings.Settings
+import app.lyrify.stats.PlayEnd
+import app.lyrify.stats.PlayStart
+import app.lyrify.stats.songKey
 import app.lyrify.tags.CoverVersions
 import app.lyrify.ui.DESTINATION_PLAYER
 import app.lyrify.ui.EXTRA_DESTINATION
@@ -256,7 +259,7 @@ class PlaybackService : MediaLibraryService() {
         core.flush()
         core.follow(null)
         heardSoFar()
-        tracker.end()
+        tracker.end(PlayEnd.STOPPED)
         parts.forEach { it.stop() }
         session?.release()
         session = null
@@ -348,12 +351,20 @@ class PlaybackService : MediaLibraryService() {
         override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
             offload.songStarted()
             warmCovers()
-            val book = core.book.value
-            val item = book.current?.items?.firstOrNull { it.uid == uid } ?: return
+            // Taken at every start, so a move to a song that never started is never taken for a later one.
+            val move = core.takeMove(uid)
+            val queue = core.book.value.current
+            val item = queue?.items?.firstOrNull { it.uid == uid } ?: return
             if (!lap) core.change { it.at(uid, core.now()) }
             // Every song start, each lap of Repeat one too: the place names the song playing.
             savePlace()
-            tracker.start(item.song, find(item.song)?.durationMs ?: C.TIME_UNSET, engine.positionMs, engine.isPlaying, naturalEnd = natural)
+            val song = find(item.song)
+            val (ended, by) = playTurn(natural, move, item.playNext)
+            // A natural crossfade's song going out is left where its fade began (the engine says so only now).
+            tracker.start(
+                item.song, song?.durationMs ?: C.TIME_UNSET, engine.positionMs, engine.isPlaying,
+                ended = ended, leftAtMs = engine.fadeFromMs, start = PlayStart(by, queue.source.kind, queue.shuffled, song?.let(::songKey)),
+            )
         }
 
         override fun onPlayingChanged(playing: Boolean) {
@@ -368,9 +379,9 @@ class PlaybackService : MediaLibraryService() {
 
         /** The queue ended with Repeat off: KJB waits at its first song, paused. */
         override fun onEnded() {
-            // An emptied player (the queue's last song removed) also ends: that play did not reach its end.
-            if (engine.loaded.isEmpty()) return tracker.end()
-            tracker.end(naturalEnd = true)
+            // An emptied player (the queue's last song removed) also ends: that play stopped where it was.
+            if (engine.loaded.isEmpty()) return tracker.end(PlayEnd.STOPPED)
+            tracker.end(PlayEnd.FINISHED)
             engine.setPlayWhenReady(false)
             engine.seek(0, 0)
         }

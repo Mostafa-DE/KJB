@@ -131,6 +131,17 @@ private val SEEKS_OFFERED: List<Int> = listOf(
     Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
 )
 
+/**
+ * The user's move a controller's seek ([seekCommand]) to another song is: Next, Previous, or a song picked (the car's
+ * queue); null for a seek inside the song.
+ */
+fun moveOf(seekCommand: Int): Move? = when (seekCommand) {
+    Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> Move.NEXT
+    Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> Move.BACK
+    Player.COMMAND_SEEK_TO_MEDIA_ITEM, Player.COMMAND_SEEK_TO_DEFAULT_POSITION -> Move.PICK
+    else -> null
+}
+
 /** The jumps of the seek buttons ("Skip amounts"), for the session's seek back and forward. */
 data class SkipAmounts(val backMs: Long, val forwardMs: Long)
 
@@ -244,6 +255,8 @@ class LyrifyPlayer(
         // Next from the last song (to the first, or the same song again in a queue of one): a jump Media3 did not plan.
         if (seek.tell) discontinuity = Player.DISCONTINUITY_REASON_SEEK
         beforeSeek()
+        // A move to another song: the play counter hears how the song before ended (Next, Previous, a pick).
+        if (seek.index != engine.index) moveOf(seekCommand)?.let { move -> engine.loaded.getOrNull(seek.index)?.let { core.moved(it, move) } }
         seeking = true
         try {
             engine.seek(seek.index, if (positionMs == C.TIME_UNSET) 0 else positionMs)

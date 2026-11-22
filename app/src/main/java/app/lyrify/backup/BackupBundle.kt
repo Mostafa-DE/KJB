@@ -318,11 +318,12 @@ object BackupBundle {
     /** A song as a backup keeps it: by its path only, as a MediaStore id names a file on this phone alone. */
     private fun bare(ref: SongRef): SongRef = if (ref.mediaStoreId == null) ref else SongRef(ref.path)
 
-    /** The playlists without ids, nor what only a newer version could read. */
+    /** The playlists without ids, nor what only a newer version could read; with when each favourite became one. */
     private fun bare(state: PlaylistsState): PlaylistsState = PlaylistsState(
         playlists = state.playlists.map { playlist -> playlist.copy(songs = playlist.songs.map(::bare)) },
         favouriteSongs = state.favouriteSongs.map(::bare),
         favouriteCollections = state.favouriteCollections,
+        favouriteAdded = state.favouriteAdded,
     )
 
     /** Every queue as it is, the one playing at its song and second, without ids. */

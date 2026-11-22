@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.ZoneId
 import kotlin.math.abs
 
 /** "Count a play after": when a play counts. */
@@ -119,8 +120,31 @@ class HeardTime(val durationMs: Long, heardMs: Long = 0, spans: List<HeardSpan> 
     }
 }
 
-/** One play in the log: [song] started at [startedAt] (wall-clock millis), [heardMs] heard in all, and whether it [counted]. */
-data class LoggedPlay(val song: SongRef, val startedAt: Long, val heardMs: Long, val counted: Boolean)
+/** How a play ended ([how]), and where in the song it was left ([atMs]). */
+data class PlayEnded(val how: PlayEnd, val atMs: Long)
+
+/**
+ * One play in the log: [song] started at [startedAt] (wall-clock millis), [heardMs] heard in all, and whether it
+ * [counted]. Then what the log keeps of a play since it keeps more (none of it for a play from before): how it began
+ * ([start]), how far the phone's clock was ahead of UTC then ([zoneOffsetMinutes]), and how it ended ([end]; none while it
+ * goes on). [imported]: a play an import made (backup/ImportPlan.kt), a count from another app with nothing heard.
+ */
+data class LoggedPlay(
+    val song: SongRef,
+    val startedAt: Long,
+    val heardMs: Long,
+    val counted: Boolean,
+    val start: PlayStart? = null,
+    val zoneOffsetMinutes: Int? = null,
+    val end: PlayEnded? = null,
+    val imported: Boolean = false,
+) {
+    /**
+     * Heard under [PlayCounter.MIN_LOGGED_MS] and not counted: a skip, which the log keeps only since it keeps how plays
+     * end. What read the log before leaves it out: the lists, the counts and totals, a backup's count.
+     */
+    val isShort: Boolean get() = !counted && heardMs < PlayCounter.MIN_LOGGED_MS
+}
 
 /**
  * The play counter: takes the player's raw events, keeps each play's [HeardTime], and writes the play to [store] once
@@ -132,9 +156,14 @@ data class LoggedPlay(val song: SongRef, val startedAt: Long, val heardMs: Long,
  *   a restart of the app loses little. After a restart, a play of the song a kept play was of, from within
  *   [RESUME_SLACK_MS] of where it stood, goes on as that play (one count, one row); any other play closes the kept ones
  *   as they stood.
- * - The same play started again (its id and song) is still one play. A play skipped before [MIN_LOGGED_MS] leaves
- *   nothing. At most [MAX_OPEN] plays go on at once (a crossfade has two); one that never ended is closed, as it stands,
- *   when a newer one would be one too many.
+ * - The same play started again (its id and song) is still one play. At most [MAX_OPEN] plays go on at once (a crossfade
+ *   has two); one that never ended is closed, as it stands, when a newer one would be one too many.
+ * - Each play keeps how it began ([PlayEvent.Started.start]) and the phone's time zone then ([zone]), and once closed how
+ *   it ended and where the song was left ([PlayEvent.Ended]): a play closed without an end ends unknown where it stood,
+ *   and a kept play a restart does not go on with ends as stopped where it was kept.
+ * - A skip, a play that sounded but was heard under [MIN_LOGGED_MS] and never counted ([LoggedPlay.isShort]), is
+ *   written once, as it closes, and never kept while it goes on; one that never sounded (a song loaded paused, then
+ *   left) leaves nothing.
  *
  * Events are handled in [scope], one at a time and in order, so the player never waits; [written] counts the writes
  * that landed, so pages showing plays can read them again. The log gets counts and exception names only.
@@ -144,10 +173,15 @@ class PlayCounter(
     private val share: StateFlow<Int?>,
     scope: CoroutineScope,
     private val log: (String) -> Unit = {},
+    private val zone: () -> ZoneId = ZoneId::systemDefault,
 ) : PlayEvents {
-    private class Live(val song: SongRef, var startedAt: Long, var heard: HeardTime, var resumable: StoredPlay?) {
+    private class Live(val song: SongRef, var startedAt: Long, var heard: HeardTime, var resumable: StoredPlay?, val start: PlayStart?, val zoneOffsetMinutes: Int) {
         var counted: Boolean = false
         var keptAt: Long = startedAt
+
+        /** Whether sound came out at some point: a play that never did is no play, not even a skip. */
+        var sounded: Boolean = false
+        var end: PlayEnded? = null
     }
 
     private val events = Channel<PlayEvent>(Channel.UNLIMITED)
@@ -177,8 +211,12 @@ class PlayCounter(
         when (event) {
             is PlayEvent.Position -> play.heard.position(event.positionMs, event.playing, event.at)
             is PlayEvent.Seeked -> play.heard.seeked(event.fromMs, event.toMs, event.at)
-            is PlayEvent.Ended -> play.heard.ended(event.positionMs, event.at)
+            is PlayEvent.Ended -> {
+                play.heard.ended(event.positionMs, event.at)
+                play.end = PlayEnded(event.how, event.leftAtMs)
+            }
         }
+        if (play.heard.playing) play.sounded = true
         val countsNow = !play.counted && PlayRules.counts(play.heard.durationMs, play.heard.coveredMs, checkNotNull(share.value))
         if (countsNow) play.counted = true
         val paused = wasPlaying && !play.heard.playing
@@ -200,15 +238,19 @@ class PlayCounter(
         }
         while (live.size >= MAX_OPEN) live.remove(live.keys.first())?.let { close(it) }
         val resumable = kept.firstOrNull { it.play.song.path == event.song.path }
-        kept.filter { it !== resumable }.forEach { write(it.play, open = null) }
+        kept.filter { it !== resumable }.forEach { stop(it) }
         kept = emptyList()
-        live[event.playId] = Live(event.song, event.at, HeardTime(event.durationMs), resumable)
+        live[event.playId] = Live(event.song, event.at, HeardTime(event.durationMs), resumable, event.start, zoneOffsetMinutes(zone(), event.at))
     }
+
+    /** A play kept before the app stopped that no play goes on with: it stopped with the app, where it was kept. */
+    private suspend fun stop(stored: StoredPlay) = write(stored.play.copy(end = PlayEnded(PlayEnd.STOPPED, stored.state.positionMs)), open = null)
 
     /** The first word from a play that may go on from [stored]: it does when it is where [stored] stood, else that one closes. */
     private suspend fun resume(play: Live, stored: StoredPlay, positionMs: Long) {
         play.resumable = null
-        if (abs(positionMs - stored.state.positionMs) > RESUME_SLACK_MS) return write(stored.play, open = null)
+        if (abs(positionMs - stored.state.positionMs) > RESUME_SLACK_MS) return stop(stored)
+        // How it began and the time zone then stay as the store first kept them (PlaysSchema.PUT keeps the first).
         play.startedAt = stored.play.startedAt
         play.heard = HeardTime(play.heard.durationMs, stored.play.heardMs, stored.state.spans)
         play.counted = stored.play.counted
@@ -222,9 +264,11 @@ class PlayCounter(
         is PlayEvent.Started -> 0
     }
 
+    /** Logged while it goes on: counted, or heard [MIN_LOGGED_MS] or more. A skip is written only as it closes. */
     private fun logged(play: Live): Boolean = play.counted || play.heard.heardMs >= MIN_LOGGED_MS
 
-    private fun row(play: Live): LoggedPlay = LoggedPlay(play.song, play.startedAt, play.heard.heardMs, play.counted)
+    private fun row(play: Live, end: PlayEnded? = null): LoggedPlay =
+        LoggedPlay(play.song, play.startedAt, play.heard.heardMs, play.counted, play.start, play.zoneOffsetMinutes, end)
 
     private suspend fun keep(play: Live, at: Long) {
         if (!logged(play)) return
@@ -233,8 +277,9 @@ class PlayCounter(
     }
 
     private suspend fun close(play: Live) {
-        play.resumable?.let { write(it.play, open = null) }
-        if (logged(play)) write(row(play), open = null)
+        play.resumable?.let { stop(it) }
+        if (!logged(play) && !play.sounded) return
+        write(row(play, play.end ?: PlayEnded(PlayEnd.UNKNOWN, play.heard.positionMs ?: 0)), open = null)
     }
 
     private suspend fun write(play: LoggedPlay, open: OpenState?) {
@@ -242,7 +287,7 @@ class PlayCounter(
     }
 
     companion object {
-        /** A play heard less than this, and not counted, is not logged: a skip. */
+        /** A play heard less than this, and not counted, is a skip: written only as it closes ([LoggedPlay.isShort]). */
         const val MIN_LOGGED_MS: Long = 1_000
 
         const val MAX_OPEN: Int = 2

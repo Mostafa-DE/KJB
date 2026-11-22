@@ -216,6 +216,20 @@ class OwnPlaybackTest {
     }
 
     @Test
+    fun `a controller's seek to another song is the user's Next, Previous or pick, and one inside the song is no move`() {
+        assertEquals(Move.NEXT, moveOf(Player.COMMAND_SEEK_TO_NEXT))
+        assertEquals(Move.NEXT, moveOf(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM))
+        assertEquals(Move.BACK, moveOf(Player.COMMAND_SEEK_TO_PREVIOUS))
+        assertEquals(Move.BACK, moveOf(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM))
+        // A song tapped in the car's queue, or a controller's own pick.
+        assertEquals(Move.PICK, moveOf(Player.COMMAND_SEEK_TO_MEDIA_ITEM))
+        assertEquals(Move.PICK, moveOf(Player.COMMAND_SEEK_TO_DEFAULT_POSITION))
+        assertNull(moveOf(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM))
+        assertNull(moveOf(Player.COMMAND_SEEK_BACK))
+        assertNull(moveOf(Player.COMMAND_SEEK_FORWARD))
+    }
+
+    @Test
     fun `a book's session offers 30 s back and forward in place of Previous and Next, and no Shuffle or Repeat`() {
         val bookSource = QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Folder Book/|Folder Book", "Folder Book")
         val queues = QueueBook().play(songs.take(3).map { it.ref }, 0, bookSource, now = 1).book

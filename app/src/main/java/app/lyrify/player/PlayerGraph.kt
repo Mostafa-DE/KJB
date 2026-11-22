@@ -171,14 +171,30 @@ class PlayerCore(
         whenReady { _book.value = change(folded()) }
     }
 
-    /** A change that may move the queue left into Recent; null [change] results change nothing. */
-    fun switch(change: (QueueBook) -> Switched?) {
+    /**
+     * A change that may move the queue left into Recent; null [change] results change nothing. The user's [move] to the
+     * song it plays is noted ([moved]): a tap on it ([Move.PICK]), or a list or queue started ([Move.START]).
+     */
+    fun switch(move: Move = Move.PICK, change: (QueueBook) -> Switched?) {
         whenReady {
             val switched = change(folded()) ?: return@whenReady
+            // Before the book: the service follows it at once, so the song may start inside the assignment.
+            switched.book.current?.current?.let { moved(it.uid, move) }
             _book.value = switched.book
             if (switched.toRecent) _toRecent.tryEmit(Unit)
         }
     }
+
+    /** The user's last move to another song ([moved]): the song's uid and how, till a song starts ([takeMove]). */
+    private var move: Pair<Long, Move>? = null
+
+    /** The user moved the player to the song [uid] ([move]), till it starts: how the play before ended (stats/). */
+    fun moved(uid: Long, move: Move) {
+        this.move = uid to move
+    }
+
+    /** At the song [uid]'s start: the user's move to it, if that was the last one noted; none after, whichever song started. */
+    fun takeMove(uid: Long): Move? = move?.takeIf { it.first == uid }?.second.also { move = null }
 
     /** [change] applied now, for a result the caller shows (an Undo); null and nothing changed before the queues are read. */
     fun <T> edit(change: (QueueBook) -> Pair<QueueBook, T>?): T? {

@@ -397,8 +397,9 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
 
         /**
          * The plays to add so each song's count reaches the import's, never lowering one: for each song (its plays
-         * counted in [log], KJB's own) the difference as counted plays, at its last play in the other app, else at
-         * [now], a millisecond apart and never before the first, each at a start its song has no play at yet. At most
+         * counted in [log], KJB's own) the difference as counted plays, marked as an import's (nothing heard here), at
+         * its last play in the other app, else at [now], a millisecond apart and never before the first, each at a start
+         * its song has no play at yet. At most
          * [MAX_PLAYS_PER_SONG] a song and [budget] in all, a song's whole difference or none of it; a last play after
          * [now] is not believed.
          */
@@ -416,7 +417,7 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
                 val busy = taken[path].orEmpty().toSet()
                 val starts = generateSequence(last) { (it - 1).takeIf { at -> at >= 1 } }.filter { it !in busy }.take(missing).toList()
                 left -= starts.size
-                starts.map { LoggedPlay(song.ref, it, 0, counted = true) }
+                starts.map { LoggedPlay(song.ref, it, 0, counted = true, imported = true) }
             }
         }
 

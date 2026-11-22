@@ -263,7 +263,7 @@ class PlayerConnection(
     }
 
     override fun shuffle(songs: List<SongRef>, source: QueueSource) {
-        core.switch { it.shuffle(songs, source, core.shuffleRandom(), core.now()) }
+        core.switch(Move.START) { it.shuffle(songs, source, core.shuffleRandom(), core.now()) }
         send { it.play() }
     }
 
@@ -321,7 +321,7 @@ class PlayerConnection(
     }
 
     fun playFromStart(queueId: String) {
-        switchAsBook { it.playFromStart(queueId, core.now()) }
+        switchAsBook(Move.START) { it.playFromStart(queueId, core.now()) }
         send { it.play() }
     }
 
@@ -348,9 +348,12 @@ class PlayerConnection(
 
     private fun picked(): QueueSource = pickedSource("")
 
-    /** [change], or the book's own queue when the song it starts is a book's file ([asBook]): a book always plays as a book. */
-    private fun switchAsBook(change: (QueueBook) -> Switched) {
-        core.switch { book -> book.asBook(change(book), library(), books.value, core.now()) }
+    /**
+     * [change], or the book's own queue when the song it starts is a book's file ([asBook]): a book always plays as a book.
+     * The user's [move] is noted as [PlayerCore.switch] notes it.
+     */
+    private fun switchAsBook(move: Move = Move.PICK, change: (QueueBook) -> Switched) {
+        core.switch(move) { book -> book.asBook(change(book), library(), books.value, core.now()) }
     }
 
     /** The library as read now, not as [library] last passed it on: a book started right after the read is known. */

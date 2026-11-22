@@ -7,6 +7,7 @@ import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.player.EngineListener
+import app.lyrify.player.Move
 import app.lyrify.player.OpenedFiles
 import app.lyrify.player.PlaybackService
 import app.lyrify.player.PlayerCore
@@ -167,7 +168,7 @@ suspend fun PlayerCore.openedIntoBook(library: Library, books: BookStore, copyOf
  * "Resume" on queue [queueId] from the queues pages ([resumeAsBook]), once the queues are read: an "Opened file" queue's
  * cache copy is looked up by [copyOf] first, and the place an Opened file queue goes on at as its book is kept in
  * `books.json` ([books], [keptFor]). False, changing nothing, when another queue started while the copy was looked up:
- * the later start wins. Main thread.
+ * the later start wins. Like any Resume, a queue started ([Move.START]) for the play counter. Main thread.
  */
 suspend fun PlayerCore.resumeIntoBook(queueId: String, library: Library?, books: BookStore, copyOf: suspend (String) -> Song?): Boolean {
     ready.first { it }
@@ -175,7 +176,7 @@ suspend fun PlayerCore.resumeIntoBook(queueId: String, library: Library?, books:
     val item = book.value.queue(queueId)?.takeIf { it.source.kind == SourceKind.OPENED }?.current?.song
     val copy = if (library != null && item != null) copyOf(item.path) else null
     if (book.value.currentId != was) return false
-    switch { it.resumeAsBook(queueId, library, books.state.value, { ref -> copy?.takeIf { ref == item } }, now()) }
+    switch(Move.START) { it.resumeAsBook(queueId, library, books.state.value, { ref -> copy?.takeIf { ref == item } }, now()) }
     if (item != null) books.change { it.keptFor(book.value, library, now()) }
     return true
 }

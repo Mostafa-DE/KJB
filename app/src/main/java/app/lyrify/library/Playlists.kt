@@ -39,6 +39,11 @@ data class PlaylistsState(
     val playlists: List<Playlist> = emptyList(),
     val favouriteSongs: List<SongRef> = emptyList(),
     val favouriteCollections: List<FavouriteCollection> = emptyList(),
+    /**
+     * When each favourite song became one (wall-clock millis), by its path: none for a song made a favourite before KJB
+     * kept the date, or by an import, which cannot know it. Only favourite songs have one.
+     */
+    val favouriteAdded: Map<String, Long> = emptyMap(),
     /** Playlists this version cannot read (a newer version's), kept as stored and written back so. */
     val unknownPlaylists: List<JsonElement> = emptyList(),
     /** Favourite collections of a kind this version does not know, kept the same way. */
@@ -71,12 +76,17 @@ data class PlaylistsState(
     /** Favourites' custom order: [favouriteSongs] with the songs of [order] put in that order ([arranged]). */
     fun arrangeFavourites(order: List<SongRef>): PlaylistsState = copy(favouriteSongs = arranged(favouriteSongs, order, SongRef::path))
 
-    /** [songs] made favourites, each once and before the earlier ones, or not; a song is known by its path. */
-    fun favourite(songs: List<SongRef>, favourite: Boolean): PlaylistsState {
+    /**
+     * [songs] made favourites, each once and before the earlier ones, those new to Favourites dated [at] when given; or
+     * not, their dates gone with them. A song is known by its path; one a favourite already keeps its date.
+     */
+    fun favourite(songs: List<SongRef>, favourite: Boolean, at: Long? = null): PlaylistsState {
         val paths = songs.map { it.path }.toSet()
-        if (!favourite) return copy(favouriteSongs = favouriteSongs.filterNot { it.path in paths })
+        if (!favourite) return copy(favouriteSongs = favouriteSongs.filterNot { it.path in paths }, favouriteAdded = favouriteAdded - paths)
         val known = favouriteSongs.map { it.path }.toSet()
-        return copy(favouriteSongs = songs.distinctBy { it.path }.filterNot { it.path in known } + favouriteSongs)
+        val added = songs.distinctBy { it.path }.filterNot { it.path in known }
+        val dates = if (at == null) favouriteAdded else favouriteAdded + added.associate { it.path to at }
+        return copy(favouriteSongs = added + favouriteSongs, favouriteAdded = dates)
     }
 
     fun favourite(collection: FavouriteCollection, favourite: Boolean): PlaylistsState = when {
@@ -89,6 +99,7 @@ data class PlaylistsState(
     fun forget(paths: Set<String>): PlaylistsState = copy(
         playlists = playlists.map { playlist -> playlist.copy(songs = playlist.songs.filterNot { it.path in paths }) },
         favouriteSongs = favouriteSongs.filterNot { it.path in paths },
+        favouriteAdded = favouriteAdded - paths,
     )
 
     private fun edit(id: String, change: (Playlist) -> Playlist): PlaylistsState = copy(playlists = playlists.map { if (it.id == id) change(it) else it })
@@ -137,10 +148,12 @@ object PlaylistsJson {
                 SCHEMA_VERSION_KEY to JsonPrimitive(SCHEMA_VERSION),
                 PLAYLISTS_KEY to JsonArray(state.playlists.map(::playlist) + state.unknownPlaylists),
                 FAVOURITES_KEY to JsonObject(
-                    mapOf(
-                        SONGS_KEY to songs(state.favouriteSongs),
-                        COLLECTIONS_KEY to JsonArray(state.favouriteCollections.map(::collection) + state.unknownCollections),
-                    ),
+                    buildMap {
+                        put(SONGS_KEY, songs(state.favouriteSongs))
+                        put(COLLECTIONS_KEY, JsonArray(state.favouriteCollections.map(::collection) + state.unknownCollections))
+                        // Beside the songs, which stay as 3.1.0 reads them; a file without dates is as 3.1.0 wrote it.
+                        if (state.favouriteAdded.isNotEmpty()) put(ADDED_KEY, JsonObject(state.favouriteAdded.mapValues { JsonPrimitive(it.value) }))
+                    },
                 ),
             ),
         ),
@@ -161,14 +174,21 @@ object PlaylistsJson {
         val playlists = (root[PLAYLISTS_KEY] as? JsonArray).orEmpty().map { it to playlist(it, songs) }
         val favourites = root[FAVOURITES_KEY] as? JsonObject
         val collections = (favourites?.get(COLLECTIONS_KEY) as? JsonArray).orEmpty().map { it to collection(it) }
+        val favouriteSongs = songs(favourites?.get(SONGS_KEY))
         return PlaylistsState(
             playlists = playlists.mapNotNull { it.second },
-            favouriteSongs = songs(favourites?.get(SONGS_KEY)),
+            favouriteSongs = favouriteSongs,
             favouriteCollections = collections.mapNotNull { it.second },
+            favouriteAdded = added(favourites?.get(ADDED_KEY), favouriteSongs.mapTo(HashSet()) { it.path }),
             unknownPlaylists = playlists.filter { it.second == null }.map { it.first },
             unknownCollections = collections.filter { it.second == null }.map { it.first },
         ).also { if (dropped > 0) onDropped(dropped) }
     }
+
+    /** The dates of [favourites] in [element], read leniently: one not a time after 1970, or of a song no favourite, is dropped. */
+    private fun added(element: JsonElement?, favourites: Set<String>): Map<String, Long> = (element as? JsonObject).orEmpty()
+        .mapNotNull { (path, at) -> (at as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull?.takeIf { it > 0 && path in favourites }?.let { path to it } }
+        .toMap()
 
     private fun playlist(playlist: Playlist): JsonElement = JsonObject(
         mapOf(
@@ -214,6 +234,7 @@ object PlaylistsJson {
     private const val FAVOURITES_KEY: String = "favourites"
     private const val SONGS_KEY: String = "songs"
     private const val COLLECTIONS_KEY: String = "collections"
+    private const val ADDED_KEY: String = "added"
     private const val ID_KEY: String = "id"
     private const val NAME_KEY: String = "name"
     private const val CREATED_AT_KEY: String = "createdAt"
@@ -345,7 +366,7 @@ class PlaylistsRepository internal constructor(
 
     override val collections: Flow<List<FavouriteCollection>> = state.map { it.favouriteCollections }.distinctUntilChanged()
 
-    override suspend fun setSongs(songs: List<SongRef>, favourite: Boolean): Boolean = write { it.favourite(songs, favourite) }
+    override suspend fun setSongs(songs: List<SongRef>, favourite: Boolean): Boolean = write { it.favourite(songs, favourite, at = clock()) }
 
     override suspend fun setCollection(collection: FavouriteCollection, favourite: Boolean): Boolean = write { it.favourite(collection, favourite) }
 

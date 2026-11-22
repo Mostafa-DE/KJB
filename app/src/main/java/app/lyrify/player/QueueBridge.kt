@@ -3,8 +3,11 @@ package app.lyrify.player
 import app.lyrify.books.inBook
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
+import app.lyrify.stats.PlayEnd
 import app.lyrify.stats.PlayEvent
 import app.lyrify.stats.PlayEvents
+import app.lyrify.stats.PlayStart
+import app.lyrify.stats.StartedBy
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CoroutineScope
@@ -393,12 +396,50 @@ fun skipAfterError(engine: PlaybackEngine, next: Int, failedInARow: Int): AfterE
         }
     }
 
+/** How the user moved the player to another song, noted until that song starts ([PlayerCore.moved]). */
+enum class Move {
+    /** Next: a button, a swipe, the notification, a headset or the car. */
+    NEXT,
+
+    /** Previous, to the song before. */
+    BACK,
+
+    /** A tap on this very song: in a list, a queue, Search or the car, or a bookmark. */
+    PICK,
+
+    /** A list or a queue started without picking its song: Shuffle, Resume, Play from start. */
+    START,
+}
+
+/**
+ * At a song start: how the play before it ended and how the new one began, from the engine's word ([natural]: the song
+ * before played to its end, or Repeat one went round) and the user's [move] to this song, if any. A song that waited
+ * from Play next ([playNext]) is one the user picked, however it came on.
+ */
+fun playTurn(natural: Boolean, move: Move?, playNext: Boolean): Pair<PlayEnd, StartedBy> {
+    val ended = when {
+        natural -> PlayEnd.FINISHED
+        move == Move.NEXT -> PlayEnd.NEXT
+        move == Move.BACK -> PlayEnd.BACK
+        move == Move.PICK || move == Move.START -> PlayEnd.JUMP
+        else -> PlayEnd.UNKNOWN
+    }
+    val by = when {
+        playNext || (!natural && move == Move.PICK) -> StartedBy.PICKED
+        natural -> StartedBy.AUTO
+        move == Move.NEXT -> StartedBy.NEXT
+        move == Move.BACK -> StartedBy.BACK
+        else -> StartedBy.UNKNOWN
+    }
+    return ended to by
+}
+
 /**
  * Tells the play counter ([PlayEvents], stats/) about KJB's own plays, raw, one play at a time: [start] (a song starts,
- * or starts again: each lap of Repeat one is a new play) with its position, the position whenever playing starts or
- * stops and every [POSITION_EVERY_MS] while it plays ([position]), the seeks, and the [end]: at the song's length when it
- * played to its end, else where it was last. The counter works out what was heard. Ids grow from the wall clock, so they
- * never repeat across runs. Main thread.
+ * or starts again: each lap of Repeat one is a new play) with its position and how it began, the position whenever
+ * playing starts or stops and every [POSITION_EVERY_MS] while it plays ([position]), the seeks, and the [end] and how it
+ * came: at the song's length when it played to its end, else where it was last. The counter works out what was heard.
+ * Ids grow from the wall clock, so they never repeat across runs. Main thread.
  */
 class PlayTracker(private val events: PlayEvents, private val wall: () -> Long) {
     private class Play(val id: Long, val song: SongRef, val durationMs: Long, var positionMs: Long)
@@ -406,13 +447,16 @@ class PlayTracker(private val events: PlayEvents, private val wall: () -> Long) 
     private var play: Play? = null
     private var lastId: Long = 0
 
-    /** [song] starts at [positionMs]; the play before ends, at its length when [naturalEnd] (it played to its end). */
-    fun start(song: SongRef, durationMs: Long, positionMs: Long, playing: Boolean, naturalEnd: Boolean = false) {
-        end(naturalEnd)
+    /**
+     * [song] starts at [positionMs], begun as [start] says; the play before ends as [ended] says ([end]), left at
+     * [leftAtMs] when given: where its crossfade began.
+     */
+    fun start(song: SongRef, durationMs: Long, positionMs: Long, playing: Boolean, ended: PlayEnd = PlayEnd.UNKNOWN, leftAtMs: Long? = null, start: PlayStart? = null) {
+        end(ended, leftAtMs)
         val id = maxOf(lastId + 1, wall())
         lastId = id
         play = Play(id, song, durationMs, positionMs)
-        events.onEvent(PlayEvent.Started(id, song, wall(), durationMs))
+        events.onEvent(PlayEvent.Started(id, song, wall(), durationMs, start))
         position(positionMs, playing)
     }
 
@@ -430,11 +474,14 @@ class PlayTracker(private val events: PlayEvents, private val wall: () -> Long) 
         events.onEvent(PlayEvent.Seeked(current.id, current.song, wall(), fromMs, toMs))
     }
 
-    /** The play is over: at the song's length when [naturalEnd], else at its last position. */
-    fun end(naturalEnd: Boolean = false) {
+    /**
+     * The play is over, [how] it ended: heard up to the song's length when it played to its end ([PlayEnd.FINISHED]),
+     * else up to its last position; left there, or at [leftAtMs] when given.
+     */
+    fun end(how: PlayEnd = PlayEnd.UNKNOWN, leftAtMs: Long? = null) {
         val current = play ?: return
-        val at = if (naturalEnd && current.durationMs > 0) current.durationMs else current.positionMs
-        events.onEvent(PlayEvent.Ended(current.id, current.song, wall(), at))
+        val at = if (how == PlayEnd.FINISHED && current.durationMs > 0) current.durationMs else current.positionMs
+        events.onEvent(PlayEvent.Ended(current.id, current.song, wall(), at, how, leftAtMs ?: at))
         play = null
     }
 }

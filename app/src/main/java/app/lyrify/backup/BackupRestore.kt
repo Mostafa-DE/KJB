@@ -286,6 +286,9 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
                 state.copy(
                     playlists = state.playlists.map { playlist -> playlist.copy(songs = playlist.songs.mapNotNull(::ref)) },
                     favouriteSongs = state.favouriteSongs.mapNotNull(::ref).distinctBy { it.path },
+                    // Each date with its song on this phone; two that are one song here, the earlier.
+                    favouriteAdded = state.favouriteAdded.entries.mapNotNull { (path, at) -> ref(SongRef(path))?.let { it.path to at } }
+                        .groupBy({ it.first }, { it.second }).mapValues { (_, dates) -> dates.min() },
                 ),
             )
         }
@@ -382,7 +385,8 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             if (queued && !written) before?.let { book -> stores.updateQueues { book } }
             counted(written, prepared.book.queues.size)
         }
-        is Prepared.Plays -> counted(stores.addPlays(prepared.plays), prepared.plays.size)
+        // The plays as the summary counted them before the log kept skips: the skips come back, uncounted.
+        is Prepared.Plays -> counted(stores.addPlays(prepared.plays), prepared.plays.count { !it.isShort })
         is Prepared.Bookmarks -> {
             var merged: MergedMarks? = null
             val written = stores.updateSongState { now -> mergeMarks(now, prepared.marks, prepared.usual, prepared.part).also { merged = it }.state }
@@ -478,8 +482,8 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
          * it, under its name or its restored name) is not added again: it takes the backup's order, the songs only the
          * phone has after them in theirs ([backupFirst]). One whose name is taken gets [RESTORED] (then " (2)"...). A
          * playlist keeps its id unless the phone uses it, so a favourite playlist stays one. Favourite songs take the
-         * backup's order the same way, those not there yet with them; collections not there yet go after the phone's
-         * own; a favourite playlist follows its playlist's id.
+         * backup's order the same way, those not there yet with them, each with the earlier of its dates (a favourite
+         * since then); collections not there yet go after the phone's own; a favourite playlist follows its playlist's id.
          */
         internal fun mergePlaylists(now: PlaylistsState, restored: PlaylistsState, newId: () -> String): PlaylistsState {
             var state = now
@@ -500,9 +504,14 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             val collections = restored.favouriteCollections.mapNotNull { collection ->
                 if (collection.kind == CollectionKind.PLAYLIST) ids[collection.key]?.let { collection.copy(key = it) } else collection
             }
+            val favourites = backupFirst(state.favouriteSongs, restored.favouriteSongs)
+            val paths = favourites.mapTo(HashSet()) { it.path }
+            val dates = (state.favouriteAdded.keys + restored.favouriteAdded.keys).filter { it in paths }
+                .associateWith { path -> listOfNotNull(state.favouriteAdded[path], restored.favouriteAdded[path]).min() }
             return state.copy(
-                favouriteSongs = backupFirst(state.favouriteSongs, restored.favouriteSongs),
+                favouriteSongs = favourites,
                 favouriteCollections = (state.favouriteCollections + collections).distinct(),
+                favouriteAdded = dates,
             )
         }
 

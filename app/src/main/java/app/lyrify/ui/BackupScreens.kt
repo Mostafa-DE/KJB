@@ -69,7 +69,7 @@ internal data class RestoreRow(val section: Section, val count: Int?, val more: 
 internal fun restoreRows(contents: BackupContents): List<RestoreRow> = listOfNotNull(
     contents.playlists?.let { RestoreRow(Section.PLAYLISTS, it.playlists.size, (it.favouriteSongs.size + it.favouriteCollections.size).takeIf { n -> n > 0 }) },
     contents.queues?.let { book -> RestoreRow(Section.QUEUES, book.queues.size, null) },
-    contents.plays?.let { RestoreRow(Section.PLAYS, it.size, null) },
+    contents.plays?.let { plays -> RestoreRow(Section.PLAYS, plays.count { !it.isShort }, null) },
     contents.bookmarks?.let { songs -> RestoreRow(Section.BOOKMARKS, songs.sumOf { it.bookmarks.size }, songs.count { it.placeMs != null }.takeIf { it > 0 }) },
     contents.equalizer?.let { RestoreRow(Section.EQUALIZER, it.profiles.size, it.presets.size.takeIf { n -> n > 0 }) },
     contents.lyrics?.let { RestoreRow(Section.LYRICS, it.entries.size, null) },

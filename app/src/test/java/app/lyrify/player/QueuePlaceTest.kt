@@ -4,10 +4,12 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -209,6 +211,52 @@ class QueuePlaceTest {
         assertEquals(PlayerAt(uid, positionMs), kjb.player.at)
         assertEquals(uid, kjb.book.current!!.current!!.uid)
         assertTrue(kjb.player.playing.value)
+    }
+
+    @Test
+    fun `a tap, Shuffle or Resume notes the user's move to the song it plays, taken once as that song starts`() = runTest {
+        val core = PlayerCore(Files(), backgroundScope, wall = { currentTime })
+        runCurrent()
+        fun playing(): Long = core.book.value.current!!.current!!.uid
+
+        core.switch { it.play(songs, 3, album, currentTime) }
+        val tapped = playing()
+        assertEquals(Move.PICK, core.takeMove(tapped))
+        // Taken once: the same song starting again later (a lap of Repeat one) is no move.
+        assertEquals(null, core.takeMove(tapped))
+
+        core.switch(Move.START) { it.shuffle(songs, songsTab, Random(7), currentTime) }
+        val first = playing()
+        // Another song starting first: the move is let go, never taken for a later start of its song.
+        assertEquals(null, core.takeMove(first + 1_000))
+        assertEquals(null, core.takeMove(first))
+
+        core.switch(Move.START) { it.resume(it.recent.first(), currentTime) }
+        assertEquals(Move.START, core.takeMove(playing()))
+
+        // The last move noted is the one that counts.
+        core.moved(41, Move.NEXT)
+        core.moved(42, Move.BACK)
+        assertEquals(null, core.takeMove(41))
+        core.moved(42, Move.BACK)
+        assertEquals(Move.BACK, core.takeMove(42))
+    }
+
+    @Test
+    fun `the move is noted before the queue changes, so a player that starts the song at once still finds it`() = runTest {
+        val core = PlayerCore(Files(), backgroundScope, wall = { currentTime })
+        runCurrent()
+        // The service follows the book on the main thread, immediate: the engine can start the new song inside the very
+        // change (Crossfade's swap, the player's own listeners), before switch returns.
+        val taken = mutableListOf<Move?>()
+        backgroundScope.launch(Dispatchers.Unconfined) {
+            core.book.drop(1).collect { book -> book.current?.current?.let { taken += core.takeMove(it.uid) } }
+        }
+
+        core.switch { it.play(songs, 3, album, currentTime) }
+        core.switch(Move.START) { it.shuffle(songs, songsTab, Random(7), currentTime) }
+
+        assertEquals(listOf(Move.PICK, Move.START), taken)
     }
 
     @Test
