@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.media3.session.MediaLibraryService
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
+import app.lyrify.huddle.HuddleGraph
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
@@ -366,6 +367,7 @@ object SuggestionsGraph {
             forYouFile = File(app.filesDir, "for-you.json"),
             interactions = StatsGraph.interactions(app),
             similar = SimilarGraph.cache(app),
+            friends = HuddleGraph.friends(app),
             warn = { Log.w(LOG_TAG, it) },
         )
     }.also { suggestions = it }
