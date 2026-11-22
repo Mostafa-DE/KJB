@@ -36,6 +36,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +58,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -79,19 +81,28 @@ import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Folder
 import app.lyrify.library.Library
 import app.lyrify.library.PLAYED_LIST_SIZE
+import app.lyrify.library.RECENTLY_PLAYED_SIZE
 import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
+import app.lyrify.library.displayTitle
 import app.lyrify.library.recentlyAdded
+import app.lyrify.library.search.fold
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.FavouritesTab
+import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.ListPeriod
 import app.lyrify.settings.SongList
 import app.lyrify.settings.SortSongs
 import app.lyrify.stats.SongPlays
 import app.lyrify.stats.StatsGraph
+import app.lyrify.stats.sinceOf
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
@@ -637,61 +648,113 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     }
 }
 
-/** Most played (with Your listening at its top), Recently played, or Recently added. */
+/**
+ * Most played (with Your listening at its top), Recently played, or Recently added: its period chips (each list keeps
+ * the one it was left on, [ListPeriod]) and Search in this list over its header and songs. The hero's line, the header,
+ * Shuffle and Play all go by the songs shown: the chip's, those the search leaves.
+ */
 @Composable
 private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
     val context = LocalContext.current
+    val change = rememberSettingsChange()
+    val keyboard = LocalSoftwareKeyboardController.current
     val title = stringResource(list.words)
     val (order, onOrder) = rememberListSort(ui, list.songList)
+    val period = ui.settings.library.periodOf(list.songList)
     var sorting by rememberSaveable { mutableStateOf(false) }
-    // Most played and Recently played bring each song's plays; Recently added reads them when sorted by them.
-    // Each song with its plays, for the note after the artist: "12 plays", or when it was played last. Read again on
-    // each play logged, so the list follows it.
+    var words by rememberSaveable { mutableStateOf("") }
+    // Most played and Recently played bring each song's plays in the period, which their order goes by; Recently added
+    // reads every song's when sorted by them. Each song with its plays, for the note after the artist: "12 plays", or
+    // when it was played last. Read again on each play logged, so the list follows it, and as the day turns.
     val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
-    val rows by produceState<List<Pair<Song, SongPlays?>>?>(null, library, list, written) {
+    val today = rememberToday()
+    val rows by produceState<List<Pair<Song, SongPlays?>>?>(null, library, list, written, period, today) {
         val plays = Lyrify.plays(context)
+        val since = sinceOf(period, System.currentTimeMillis(), ZoneId.systemDefault())
         fun found(played: List<SongPlays>) = played.mapNotNull { p -> library.resolver.find(p.song)?.takeIf(library::shows)?.let { it to p } }
         value = when (list) {
-            BuiltInList.MOST_PLAYED -> found(plays.mostPlayed(PLAYED_LIST_SIZE))
-            BuiltInList.RECENTLY_PLAYED -> found(plays.recentlyPlayed(PLAYED_LIST_SIZE))
-            else -> recentlyAdded(library, System.currentTimeMillis()).map { it to null }
+            BuiltInList.MOST_PLAYED -> found(plays.mostPlayed(PLAYED_LIST_SIZE, since))
+            BuiltInList.RECENTLY_PLAYED -> found(plays.recentlyPlayed(RECENTLY_PLAYED_SIZE, since))
+            else -> recentlyAdded(library, since).map { it to null }
         }
     }
-    val sorted = rememberInOrder(rows.orEmpty(), order, ui.settings.library) { it.first }
-    val ordered = sorted.orEmpty()
-    val songs = ordered.map { it.first }
-    val plays = ordered.associate { it.first.path to it.second }
+    val rowPlays = remember(rows, list) { if (list == BuiltInList.RECENTLY_ADDED) null else rows.orEmpty().mapNotNull { (song, p) -> p?.let { song.path to it } }.toMap() }
+    val sorted = rememberInOrder(rows.orEmpty(), order, ui.settings.library, rowPlays) { it.first }
+    // Found off the main thread: Recently added over all time is the whole library.
+    val shown by produceState<List<Song>?>(null, sorted, words, ui.settings.library) {
+        val ordered = sorted ?: return@produceState
+        value = withContext(Dispatchers.Default) { findInList(ordered.map { it.first }, words, ui.settings.library) }
+    }
+    val songs = shown.orEmpty()
     val kind = when (list) {
         BuiltInList.MOST_PLAYED -> SourceKind.MOST_PLAYED
         BuiltInList.RECENTLY_PLAYED -> SourceKind.RECENTLY_PLAYED
         else -> SourceKind.RECENTLY_ADDED
     }
-    val notes = plays.mapValues { (_, p) ->
-        when {
-            p == null -> null
-            list == BuiltInList.MOST_PLAYED -> playsNote(p.count)
-            else -> lastPlayedText(p.lastPlayedAt)
-        }
+    val notes = songs.associate { song ->
+        song.path to rowPlays?.get(song.path)?.let { p -> if (list == BuiltInList.MOST_PLAYED) playsNote(p.count) else lastPlayedText(p.lastPlayedAt) }
     }
     val reduced = LocalReducedMotion.current
-    SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null && sorted != null) { songList ->
+    SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null && shown != null) { songList ->
         item(key = "hero", contentType = "hero") { Box(rowMotion(reduced)) { Hero(title, songsMeta(songs), art = { BuiltInTile(list, HERO) }) } }
         if (list == BuiltInList.MOST_PLAYED) {
             item(key = "listening", contentType = "listening") { ListeningCard(rowMotion(reduced).padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 4.dp)) }
+        }
+        item(key = "periods", contentType = "periods") {
+            // One row that scrolls sideways, opened with the chip picked in view and the one before it.
+            LazyRow(
+                state = rememberLazyListState(initialFirstVisibleItemIndex = (ListPeriod.entries.indexOf(period) - 1).coerceAtLeast(0)),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(horizontal = ScreenPadding),
+                modifier = rowMotion(reduced).selectableGroup().padding(top = 8.dp),
+            ) {
+                items(ListPeriod.entries, key = { it.name }, contentType = { "chip" }) { choice ->
+                    LyrifyChip(
+                        selected = choice == period,
+                        onClick = { change { it.copy(library = it.library.copy(listPeriods = it.library.listPeriods + (list.songList to choice))) } },
+                        role = Role.RadioButton,
+                    ) { Text(choice.days?.let { pluralStringResource(R.plurals.lib_past_days, it, it) } ?: stringResource(R.string.stats_all_time), maxLines = 1) }
+                }
+            }
+        }
+        item(key = "find", contentType = "find") {
+            LyrifySearchField(
+                words,
+                { words = it },
+                stringResource(R.string.lib_find_in_list),
+                rowMotion(reduced).fillMaxWidth().padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp),
+                onSearch = { keyboard?.hide() },
+            ) {
+                if (words.isNotEmpty()) ChromeIconButton(R.drawable.ic_close, stringResource(R.string.search_clear), { words = "" }, glass = false, size = 36.dp)
+            }
         }
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) {
                 ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = sortChip(order, R.string.lib_sort_title), onSort = { sorting = true })
             }
         }
-        if (rows != null && sorted != null && songs.isEmpty()) {
+        if (rows != null && shown != null && songs.isEmpty()) {
             item(key = "empty", contentType = "empty") {
-                EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(if (list == BuiltInList.RECENTLY_ADDED) R.string.lib_added_empty else R.string.lib_played_empty))
+                if (words.isNotBlank() && rows.orEmpty().isNotEmpty()) {
+                    EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match), rowMotion(reduced), action = stringResource(R.string.search_clear), onAction = { words = "" })
+                } else {
+                    EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(if (list == BuiltInList.RECENTLY_ADDED) R.string.lib_added_empty else R.string.lib_played_empty))
+                }
             }
         }
         songRows(songList, note = { notes[it.path] })
     }
     if (sorting) ListSortSheet(list.songList, order, R.string.lib_sort_title, onOrder) { sorting = false }
+}
+
+/**
+ * Search in this list: [songs] whose title as shown ([displayTitle]), artist or album holds [words] as Search compares
+ * them ([fold]: accents, case and marks aside), in their order; all of them while nothing is typed.
+ */
+fun findInList(songs: List<Song>, words: String, settings: LibrarySettings): List<Song> {
+    val folded = fold(words)
+    if (folded.isEmpty()) return songs
+    return songs.filter { song -> listOfNotNull(displayTitle(song, settings), song.artist, song.album).any { fold(it).contains(folded) } }
 }
 
 /**

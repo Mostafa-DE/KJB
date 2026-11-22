@@ -91,8 +91,10 @@ import app.lyrify.library.search.searchQueue
 import app.lyrify.library.search.searchSource
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.SongList
 import app.lyrify.stats.PlaysQuery
 import app.lyrify.stats.StatsGraph
+import app.lyrify.stats.sinceOf
 import app.lyrify.stats.Target
 import app.lyrify.stats.TargetKind
 import kotlinx.coroutines.CoroutineScope
@@ -101,6 +103,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.ZoneId
 
 // Search's pages: the field with recent searches or results, and "View all" of one group.
 
@@ -329,8 +332,8 @@ private fun rememberSearchResults(query: String, lyricPages: LazyListState? = nu
     val index by produceState<Pair<Library, SearchIndex>?>(null, library, shown.showFileNames) {
         value = library?.let { withContext(Dispatchers.Default) { it to SearchGraph.names(it, shown) } }
     }
-    val lists by produceState(emptyList<ListRow>(), library, playlists, names) {
-        value = library?.let { listRows(it, playlists ?: PlaylistsState(), names, Lyrify.plays(context)) }.orEmpty()
+    val lists by produceState(emptyList<ListRow>(), library, playlists, names, shown) {
+        value = library?.let { listRows(it, playlists ?: PlaylistsState(), names, Lyrify.plays(context), shown) }.orEmpty()
     }
     val results by produceState<SearchResults?>(null, query, index, lists, version) {
         val (searched, byName) = index?.takeIf { query.isNotBlank() } ?: run {
@@ -378,14 +381,17 @@ private suspend fun lyricSongs(context: Context, query: String): List<Song> {
     return withContext(Dispatchers.Default) { SearchGraph.lyrics(context).find(query, library, settings).map { it.song } }
 }
 
-/** The built-in lists, then the user's playlists, each with how many of its songs the library shows. Off the main thread. */
-private suspend fun listRows(library: Library, playlists: PlaylistsState, names: Map<BuiltInList, String>, plays: PlaysQuery): List<ListRow> =
+/**
+ * The built-in lists, then the user's playlists, each with how many of its songs the library shows (a built-in list over
+ * the period it was left on, [settings]). Off the main thread.
+ */
+private suspend fun listRows(library: Library, playlists: PlaylistsState, names: Map<BuiltInList, String>, plays: PlaysQuery, settings: LibrarySettings): List<ListRow> =
     withContext(Dispatchers.Default) {
         val counts = mapOf(
             BuiltInList.FAVOURITES to library.listed(playlists.favouriteSongs).size,
-            BuiltInList.MOST_PLAYED to mostPlayed(plays, library).size,
-            BuiltInList.RECENTLY_PLAYED to recentlyPlayed(plays, library).size,
-            BuiltInList.RECENTLY_ADDED to recentlyAdded(library, System.currentTimeMillis()).size,
+            BuiltInList.MOST_PLAYED to mostPlayed(plays, library, sinceOf(settings.periodOf(SongList.MOST_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())).size,
+            BuiltInList.RECENTLY_PLAYED to recentlyPlayed(plays, library, sinceOf(settings.periodOf(SongList.RECENTLY_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())).size,
+            BuiltInList.RECENTLY_ADDED to recentlyAdded(library, sinceOf(settings.periodOf(SongList.RECENTLY_ADDED), System.currentTimeMillis(), ZoneId.systemDefault())).size,
         )
         val icons = mapOf(
             BuiltInList.FAVOURITES to R.drawable.ic_queue_music,

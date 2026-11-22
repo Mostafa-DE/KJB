@@ -6,6 +6,7 @@ import app.lyrify.library.Library
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.albumKey
+import app.lyrify.settings.ListPeriod
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -50,6 +51,14 @@ fun periodOf(period: ListeningPeriod, now: Long, zone: ZoneId, firstDayOfWeek: D
 }
 
 private fun startOf(day: LocalDate, zone: ZoneId): Long = day.atStartOfDay(zone).toInstant().toEpochMilli()
+
+/**
+ * Where a list's [period] chip starts as of [now] (Recently added, Recently played, Most played): the first moment of the
+ * earliest of its days in the phone's calendar ([zone]), today one of them, as the Songs tab counts its last 30 days
+ * (midnight, or that day's first hour where a clock change skips midnight). It has no end, so a song added or played
+ * "later" than now (the clock was changed) is in it. Null for all time.
+ */
+fun sinceOf(period: ListPeriod, now: Long, zone: ZoneId): Long? = period.days?.let { startOf(dateOf(now, zone).minusDays(it - 1L), zone) }
 
 /** A day of the phone's calendar: its [date], and the first moment of the next day ([nextStart], wall-clock millis). */
 data class Day(val date: LocalDate, val nextStart: Long)
@@ -133,6 +142,8 @@ private fun bySong(totals: List<SongPlays>, library: Library, shownOnly: Boolean
 /**
  * Plays per song from [store], joined with the [library] of the moment: Most played, Recently played and Song info
  * ([PlaysQuery]), and Insights with the book log ([books]) and the [favourites]. Sorting and joining run on [compute].
+ * Most played and Recently played over a period's chip read Insights' copy of the log (below), so they count as Insights
+ * do; over all time the log's own totals, as they always did.
  *
  * Insights keep their own copy of the logs between reads, as a heavy listener's history reaches 100,000 plays (lead,
  * 2026-11-22): read whole the first time and after a restore or an import, else only from the earliest play written
@@ -146,15 +157,15 @@ class PlayStats(
     private val books: PlayLogStore? = null,
     private val favourites: suspend () -> List<SongRef> = { emptyList() },
 ) : PlaysQuery {
-    /** The library's songs played most, all time, under their paths now; ties as in [listeningOf]. */
-    override suspend fun mostPlayed(limit: Int): List<SongPlays> {
-        val totals = store.totals()
+    /** The library's songs played most since [since] ([totals]), under their paths now; ties as in [listeningOf]. */
+    override suspend fun mostPlayed(limit: Int, since: Long?): List<SongPlays> {
+        val totals = totals(since)
         return withContext(compute) { listeningOf(totals, library()).songs.take(limit).map(::songPlays) }
     }
 
-    /** The library's songs whose last play that counted is the latest, the latest first. */
-    override suspend fun recentlyPlayed(limit: Int): List<SongPlays> {
-        val totals = store.totals()
+    /** The library's songs whose last play that counted since [since] ([totals]) is the latest, the latest first. */
+    override suspend fun recentlyPlayed(limit: Int, since: Long?): List<SongPlays> {
+        val totals = totals(since)
         return withContext(compute) {
             val library = library() ?: return@withContext emptyList()
             bySong(totals, library, shownOnly = true).filter { it.lastPlayedAt != null }
@@ -162,6 +173,16 @@ class PlayStats(
                 .take(limit)
                 .map(::songPlays)
         }
+    }
+
+    /**
+     * Each song's totals for Most played and Recently played: all time, the log's own (an import's plays too); from
+     * [since] on, those Insights count, from their copy of the plays heard here (an import's and the skips left out).
+     */
+    private suspend fun totals(since: Long?): List<SongPlays> {
+        if (since == null) return store.totals()
+        val heard = logs()?.plays.orEmpty()
+        return withContext(compute) { songPlaysOf(heard.filter { it.startedAt >= since }) }
     }
 
     /** [song]'s plays, hidden or not, those under an old path included; null until one counted. */

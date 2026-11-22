@@ -7,6 +7,7 @@ import app.lyrify.library.VOLUME
 import app.lyrify.library.albumKey
 import app.lyrify.library.song
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.ListPeriod
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -342,6 +343,101 @@ class ListeningTest {
         assertEquals(3 * 120_000L + 40_000L, periods.last()?.heardMs)
         // This week: alder and birch on the 10th, ember on the 11th.
         assertEquals(2, periods.first()?.plays)
+    }
+
+    // The period chips of Recently added, Recently played and Most played (RP1): the days up to today, in the phone's time
+
+    @Test
+    fun `a period of days runs from the first moment of its earliest day, today one of them, in the phone's calendar`() {
+        val now = at("2026-11-22T15:00+01:00[Europe/Berlin]")
+        assertEquals(at("2026-11-08T00:00+01:00[Europe/Berlin]"), sinceOf(ListPeriod.DAYS_15, now, berlin))
+        // Across the clock change of 25 October: midnight in summer time.
+        assertEquals(at("2026-10-24T00:00+02:00[Europe/Berlin]"), sinceOf(ListPeriod.DAYS_30, now, berlin))
+        assertEquals(at("2026-09-24T00:00+02:00[Europe/Berlin]"), sinceOf(ListPeriod.DAYS_60, now, berlin))
+        assertEquals(at("2025-11-23T00:00+01:00[Europe/Berlin]"), sinceOf(ListPeriod.DAYS_365, now, berlin))
+        assertNull(sinceOf(ListPeriod.ALL_TIME, now, berlin))
+        // At the first moment of today, the same days.
+        assertEquals(at("2026-11-08T00:00+01:00[Europe/Berlin]"), sinceOf(ListPeriod.DAYS_15, at("2026-11-22T00:00+01:00[Europe/Berlin]"), berlin))
+    }
+
+    @Test
+    fun `a period's days are the phone's, so half an hour after its midnight the days have moved on`() {
+        // 00:30 on the 22nd in Berlin, still 23:30 on the 21st in UTC.
+        val now = Instant.parse("2026-11-21T23:30:00Z").toEpochMilli()
+        assertEquals(at("2026-11-08T00:00+01:00[Europe/Berlin]"), sinceOf(ListPeriod.DAYS_15, now, berlin))
+        assertEquals(Instant.parse("2026-11-07T00:00:00Z").toEpochMilli(), sinceOf(ListPeriod.DAYS_15, now, ZoneId.of("UTC")))
+    }
+
+    @Test
+    fun `a period whose first day has no midnight starts at that day's first hour`() {
+        // São Paulo's clocks jumped from midnight to 01:00 on Sunday 4 November 2018.
+        val saoPaulo = ZoneId.of("America/Sao_Paulo")
+        assertEquals(Instant.parse("2018-11-04T03:00:00Z").toEpochMilli(), sinceOf(ListPeriod.DAYS_15, at("2018-11-18T12:00-02:00[America/Sao_Paulo]"), saoPaulo))
+    }
+
+    /** The past 15 days as of [lateToday]: from midnight on 8 November 2026 in Berlin. */
+    private val lateToday: Long = at("2026-11-22T15:00+01:00[Europe/Berlin]")
+    private val fifteenDays: Long = at("2026-11-08T00:00+01:00[Europe/Berlin]")
+
+    @Test
+    fun `Most played over a period counts the plays that counted in it, the most first, and all time counts as it always did`() = runBlocking {
+        val stats = stats(
+            play(alder, fifteenDays - 1),
+            play(alder, fifteenDays - 2),
+            play(alder, fifteenDays - 3),
+            play(birch, fifteenDays),
+            play(birch, fifteenDays + HOUR),
+            play(ember, lateToday - HOUR),
+            // Heard a while and never counted ("Count a play after" not reached), and a skip.
+            play(ember, lateToday - 2 * HOUR, heardMs = 20_000, counted = false),
+            LoggedPlay(ember.ref, lateToday - 3 * HOUR, 300, counted = false, end = PlayEnded(PlayEnd.NEXT, 300)),
+            // An import's play, dated in the period by the app it came from.
+            LoggedPlay(salt.ref, lateToday - 4 * HOUR, 0, counted = true, imported = true),
+        )
+
+        assertEquals(listOf(birch.ref to 2, ember.ref to 1), stats.mostPlayed(50, fifteenDays).map { it.song to it.count })
+        assertEquals(listOf(birch.ref), stats.mostPlayed(1, fifteenDays).map { it.song })
+        // All time: the log's totals, an import's plays too, as before the chips.
+        assertEquals(listOf(alder.ref to 3, birch.ref to 2, ember.ref to 1, salt.ref to 1), stats.mostPlayed(50).map { it.song to it.count })
+    }
+
+    @Test
+    fun `Recently played over a period has the songs with a play that counted in it, by that play, the latest first`() = runBlocking {
+        val stats = stats(
+            play(alder, fifteenDays - 1),
+            // In the period, never counted: alder is not played in it.
+            play(alder, fifteenDays + HOUR, heardMs = 20_000, counted = false),
+            play(birch, fifteenDays),
+            play(ember, lateToday - HOUR),
+            LoggedPlay(salt.ref, lateToday - 2 * HOUR, 0, counted = true, imported = true),
+        )
+
+        assertEquals(listOf(ember.ref to lateToday - HOUR, birch.ref to fifteenDays), stats.recentlyPlayed(500, fifteenDays).map { it.song to it.lastPlayedAt })
+        assertEquals(listOf(ember.ref, salt.ref, birch.ref, alder.ref), stats.recentlyPlayed(500).map { it.song })
+    }
+
+    @Test
+    fun `a period's lists leave out books and hidden songs, as all time does`() = runBlocking {
+        val part = song("Music/Rips/Lantern Keeper/01.mp3", album = "Lantern Keeper", genre = "Audiobook", id = 9)
+        val hiding = Library.of(listOf(alder, birch, ember, salt, part), Settings(library = LibrarySettings(hiddenSongs = listOf(birch.ref))))
+        val stats = stats(play(alder, lateToday - HOUR), play(birch, lateToday - 2 * HOUR), play(part, lateToday - 3 * HOUR), library = hiding)
+
+        assertEquals(listOf(alder.ref), stats.mostPlayed(50, fifteenDays).map { it.song })
+        assertEquals(listOf(alder.ref), stats.recentlyPlayed(500, fifteenDays).map { it.song })
+    }
+
+    @Test
+    fun `a period's lists read Insights' copy of the log, and a play written since is in the next read`() = runBlocking {
+        val log = FakePlayLog(listOf(play(alder, lateToday - 2 * HOUR)))
+        val stats = PlayStats(log, { library }, Dispatchers.Unconfined)
+        assertEquals(listOf(alder.ref), stats.recentlyPlayed(500, fifteenDays).map { it.song })
+
+        log.put(play(birch, lateToday - HOUR))
+        // The copy is not read again until the log says a play was written (plays.db does, WatchedPlayLog).
+        assertEquals(listOf(alder.ref), stats.recentlyPlayed(500, fifteenDays).map { it.song })
+        stats.changed(lateToday - HOUR)
+        assertEquals(listOf(birch.ref, alder.ref), stats.recentlyPlayed(500, fifteenDays).map { it.song })
+        assertEquals(listOf(birch.ref to 1, alder.ref to 1), stats.mostPlayed(50, fifteenDays).map { it.song to it.count })
     }
 
     // Last played

@@ -124,11 +124,13 @@ fun <T> inOrderOnce(entries: List<T>, sort: ListSort, settings: LibrarySettings,
 /**
  * [entries] (each a song, [song] of it) in [sort], worked out off the main thread, as natural order compares names piece
  * by piece. The own order at once; a key's order once it and the plays it needs are ready, the order shown before
- * meanwhile (null before the first).
+ * meanwhile (null before the first). [given]: the plays a list sorts by itself (Most played's in its period), else every
+ * song's, read when the key needs them.
  */
 @Composable
-fun <T> rememberInOrder(entries: List<T>, sort: ListSort, settings: LibrarySettings, song: (T) -> Song): List<T>? {
-    val plays = rememberPlays(sort.key?.needsPlays == true)
+fun <T> rememberInOrder(entries: List<T>, sort: ListSort, settings: LibrarySettings, given: Map<String, SongPlays>? = null, song: (T) -> Song): List<T>? {
+    val read = rememberPlays(given == null && sort.key?.needsPlays == true)
+    val plays = given ?: read
     val sorted by produceState<List<T>?>(null, entries, sort, settings, plays) {
         val ready = withContext(Dispatchers.Default) { inOrderOnce(entries, sort, settings, plays, song) }
         if (ready != null) value = ready

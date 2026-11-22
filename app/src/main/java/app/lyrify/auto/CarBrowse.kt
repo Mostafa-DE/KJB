@@ -57,6 +57,8 @@ import app.lyrify.player.queueLabel
 import app.lyrify.player.queueLabels
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
+import app.lyrify.settings.SongList
+import app.lyrify.stats.sinceOf
 import app.lyrify.tags.CoverVersions
 import app.lyrify.tags.TagsGraph
 import com.google.common.collect.ImmutableList
@@ -78,6 +80,7 @@ import java.io.ByteArrayOutputStream
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.security.MessageDigest
+import java.time.ZoneId
 import kotlin.math.roundToInt
 
 /**
@@ -232,7 +235,13 @@ class CarBrowse(
         val (most, recent) = if (!plays) {
             emptyList<Song>() to emptyList()
         } else {
-            withContext(Dispatchers.IO) { Lyrify.plays(context).let { mostPlayed(it, library) to recentlyPlayed(it, library) } }
+            // Each over the period it was left on in the app, as the app shows it.
+            withContext(Dispatchers.IO) {
+                Lyrify.plays(context).let {
+                    mostPlayed(it, library, sinceOf(settings.library.periodOf(SongList.MOST_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())) to
+                        recentlyPlayed(it, library, sinceOf(settings.library.periodOf(SongList.RECENTLY_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault()))
+                }
+            }
         }
         val book = core.book.value
         val queueNames = queueLabels(context, book)

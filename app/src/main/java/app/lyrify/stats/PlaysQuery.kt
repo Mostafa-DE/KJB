@@ -28,11 +28,11 @@ data class SongPlays(val song: SongRef, val count: Int, val lastPlayedAt: Long?,
  * stats/ implements it over `plays.db` ([PlayStats]); [NoPlays] in tests.
  */
 interface PlaysQuery {
-    /** "Most played": the songs played most, all time, the most first. */
-    suspend fun mostPlayed(limit: Int = 50): List<SongPlays>
+    /** "Most played": the songs played most since [since] (wall-clock millis; null: all time), the most first. */
+    suspend fun mostPlayed(limit: Int = 50, since: Long? = null): List<SongPlays>
 
-    /** "Recently played": the songs played last, the latest first. */
-    suspend fun recentlyPlayed(limit: Int = 50): List<SongPlays>
+    /** "Recently played": the songs played last since [since] (null: all time), the latest first. */
+    suspend fun recentlyPlayed(limit: Int = 50, since: Long? = null): List<SongPlays>
 
     /** [song]'s plays; null when it was never played. */
     suspend fun plays(song: SongRef): SongPlays?
@@ -46,9 +46,9 @@ interface PlaysQuery {
 
 /** No song has been played: tests. */
 object NoPlays : PlaysQuery {
-    override suspend fun mostPlayed(limit: Int): List<SongPlays> = emptyList()
+    override suspend fun mostPlayed(limit: Int, since: Long?): List<SongPlays> = emptyList()
 
-    override suspend fun recentlyPlayed(limit: Int): List<SongPlays> = emptyList()
+    override suspend fun recentlyPlayed(limit: Int, since: Long?): List<SongPlays> = emptyList()
 
     override suspend fun plays(song: SongRef): SongPlays? = null
 }

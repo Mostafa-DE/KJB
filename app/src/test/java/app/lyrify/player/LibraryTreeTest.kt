@@ -7,7 +7,9 @@ import app.lyrify.library.SongRef
 import app.lyrify.library.albumKey
 import app.lyrify.library.song
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.ListPeriod
 import app.lyrify.settings.Settings
+import app.lyrify.settings.SongList
 import app.lyrify.ui.BuiltInList
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -15,6 +17,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.ZoneOffset
 import java.util.concurrent.TimeUnit
 
 /**
@@ -357,4 +360,16 @@ class LibraryTreeTest {
         assertTrue(LibraryTree.voice(null, data()) is TreePlay.Shuffle)
         assertNull(LibraryTree.voice(null, data(lib = Library.of(emptyList(), Settings()))))
     }
+
+    @Test
+    fun `the car's Recently added holds the songs of the period it was left on in the app`() {
+        fun added(period: ListPeriod) =
+            children(LibraryTree.RECENTLY_ADDED, TreeData(library, QueueBook(), emptyList(), LibrarySettings(listPeriods = mapOf(SongList.RECENTLY_ADDED to period)), now = now, zone = ZoneOffset.UTC) { "" })
+                .map { it.song!!.path }
+
+        assertEquals(listOf(loose.path), added(ListPeriod.DAYS_30))
+        assertEquals(listOf(loose.path, ember.path), added(ListPeriod.DAYS_60))
+        assertEquals(listOf(loose.path, ember.path) + harbour.map { it.path }, added(ListPeriod.ALL_TIME))
+    }
+
 }
