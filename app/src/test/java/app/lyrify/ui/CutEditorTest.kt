@@ -18,7 +18,9 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.util.Locale
 
 /** The cutter screen's logic: which end a finger takes, the fade labels, the messages, a turn of the phone. */
@@ -101,6 +103,48 @@ class CutEditorTest {
         assertEquals(listOf("first cleaned up", "second began"), events)
         assertEquals(SaveState.Finished(failed), saver.state.value)
         saver.consume()
+        assertEquals(SaveState.Idle, saver.state.value)
+    }
+
+    @Test
+    fun `a Cancel after the save passed its point of no return does not stop it, and its result shows`() = runBlocking {
+        val saver = SaveRunner<CutResult>(CoroutineScope(Dispatchers.Unconfined))
+        val naming = CompletableDeferred<Unit>()
+        val saved = CutResult.Saved(File("/made/up/Harbour Glass/Paper Lanterns (cut).m4a"), tagged = true)
+        var committed: Boolean? = null
+        saver.start { progress ->
+            progress(0.96f)
+            // The cut is whole in its part file: from here it takes its name and is scanned.
+            committed = commit()
+            naming.await()
+            saved
+        }
+        assertEquals(true, committed)
+
+        assertFalse(saver.cancel())
+        assertEquals(SaveState.Saving(0.96f, 1), saver.state.value)
+        naming.complete(Unit)
+        assertEquals(SaveState.Finished(saved), saver.state.value)
+    }
+
+    @Test
+    fun `a Cancel before that point wins, and the save hears it may not keep its file`() = runBlocking {
+        val saver = SaveRunner<CutResult>(CoroutineScope(Dispatchers.Unconfined))
+        val copied = CompletableDeferred<Unit>()
+        var committed: Boolean? = null
+        saver.start {
+            // Copying into the part file is not cancellable: the Cancel comes while it runs, and is heard after.
+            withContext(NonCancellable) {
+                copied.await()
+                committed = commit()
+            }
+            awaitCancellation()
+        }
+        assertTrue(saver.cancel())
+        assertEquals(SaveState.Idle, saver.state.value)
+
+        copied.complete(Unit)
+        assertEquals(false, committed)
         assertEquals(SaveState.Idle, saver.state.value)
     }
 

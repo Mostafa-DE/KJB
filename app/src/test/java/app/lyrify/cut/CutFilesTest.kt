@@ -12,6 +12,10 @@ import app.lyrify.tones.FadeCurve
 import app.lyrify.tones.FadeEnvelope
 import app.lyrify.tones.ToneAudio
 import app.lyrify.tones.ToneEncoder
+import app.lyrify.ui.SaveRunner
+import app.lyrify.ui.SaveState
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -135,6 +139,9 @@ class CutFilesTest {
         val scanned = mutableListOf<File>()
         val logs = mutableListOf<String>()
         var onEncode: (Int) -> Unit = {}
+
+        /** Hears each new file a save makes in a folder (its part file, then its name), just before it is made. */
+        var onCreate: (File) -> Unit = {}
         val files = CutFiles(
             writes = writes,
             work = work,
@@ -147,6 +154,7 @@ class CutFilesTest {
             log = { logs += it },
             io = Dispatchers.Unconfined,
             createFile = { file ->
+                onCreate(file)
                 if (file.parentFile in refusesFiles) throw AccessDeniedException(file.path)
                 Files.createFile(file.toPath())
             },
@@ -483,6 +491,76 @@ class CutFilesTest {
 
         assertTrue(job.isCancelled)
         assertEquals(listOf("read song.mp3", "write cut.m4a"), s.tags.calls)
+        assertEquals(emptyList<String>(), s.others())
+        assertEquals(emptyList<File>(), s.scanned)
+    }
+
+    // Cancel at the last instant: the point of no return
+
+    @Test
+    fun `the save asks to keep its cut once, with the cut whole in its hidden part file and no name taken yet`() = runBlocking {
+        val s = Setup()
+        val seen = mutableListOf<List<String>>()
+        val result = s.files.save(s.request(), commit = {
+            seen += s.album.list().orEmpty().sorted().map { name -> "$name ${File(s.album, name).length()}" }
+            true
+        }) {}
+
+        val cut = File(s.album, "Paper Lanterns (cut).m4a")
+        assertEquals(CutResult.Saved(cut, tagged = true), result)
+        assertEquals(1, seen.size)
+        val part = seen.single().single { CutNames.isPart(it.substringBeforeLast(' ')) }
+        assertEquals("${rate * 4L + TAGS.size}", part.substringAfterLast(' '))
+        // The song and the part, and no file under the cut's name yet.
+        assertEquals(setOf("${s.song.name} ${s.songBytes.size}", part), seen.single().toSet())
+    }
+
+    @Test
+    fun `a save told Cancel came first leaves nothing, its part file neither`() = runBlocking {
+        val s = Setup()
+        val job = launch(Dispatchers.Unconfined) { s.files.save(s.request(), commit = { false }) {} }
+        job.join()
+
+        assertTrue(job.isCancelled)
+        assertEquals(emptyList<String>(), s.others())
+        assertEquals(emptyList<File>(), s.scanned)
+    }
+
+    @Test
+    fun `Cancel pressed as the cut takes its name keeps the cut, and the cutter says Saved`() = runBlocking {
+        val s = Setup()
+        val saver = SaveRunner<CutResult>(CoroutineScope(Dispatchers.Unconfined))
+        val go = CompletableDeferred<Unit>()
+        var cancelled: Boolean? = null
+        s.onCreate = { file -> if (!CutNames.isPart(file.name)) cancelled = saver.cancel() }
+        saver.start { progress ->
+            go.await()
+            s.files.save(s.request(), this::commit, progress)
+        }
+        go.complete(Unit)
+
+        val cut = File(s.album, "Paper Lanterns (cut).m4a")
+        assertEquals(false, cancelled)
+        assertEquals(SaveState.Finished(CutResult.Saved(cut, tagged = true)), saver.state.value)
+        assertEquals(listOf(cut), s.scanned)
+        assertEquals(emptyList<String>(), s.others(cut))
+    }
+
+    @Test
+    fun `Cancel pressed while the cut goes into its part file saves nothing and leaves nothing`() = runBlocking {
+        val s = Setup()
+        val saver = SaveRunner<CutResult>(CoroutineScope(Dispatchers.Unconfined))
+        val go = CompletableDeferred<Unit>()
+        var cancelled: Boolean? = null
+        s.onCreate = { file -> if (CutNames.isPart(file.name)) cancelled = saver.cancel() }
+        saver.start { progress ->
+            go.await()
+            s.files.save(s.request(), this::commit, progress)
+        }
+        go.complete(Unit)
+
+        assertEquals(true, cancelled)
+        assertEquals(SaveState.Idle, saver.state.value)
         assertEquals(emptyList<String>(), s.others())
         assertEquals(emptyList<File>(), s.scanned)
     }

@@ -163,15 +163,19 @@ val CutDraftSaver: Saver<CutDraft, Any> = listSaver(
     },
 )
 
-/** The one cut save that can run at a time, outside any screen's lifetime; cancelling leaves no file. */
+/**
+ * The one cut save that can run at a time, outside any screen's lifetime; cancelling leaves no file, unless the cut was
+ * already whole and taking its name: then it finishes and says Saved.
+ */
 object CutSaving {
     private val runner = SaveRunner<CutResult>(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
 
     val state: StateFlow<SaveState<CutResult>> = runner.state
 
-    fun start(files: CutFiles, request: CutRequest) = runner.start { files.save(request, it) }
+    fun start(files: CutFiles, request: CutRequest) = runner.start { progress -> files.save(request, this::commit, progress) }
 
-    fun cancel() = runner.cancel()
+    /** False when the save was past its point of no return: it goes on, and says Saved. */
+    fun cancel(): Boolean = runner.cancel()
 
     /** The screen showed the result. */
     fun consume() = runner.consume()
@@ -193,7 +197,7 @@ internal fun CutEditorFor(song: Song, onSaved: (CutResult.Saved) -> Unit, onClos
  * to bring the nearer end there; TalkBack actions move each end a quarter second), each end's time with its nudges, the
  * preview (the whole cut, or its end), the fades with their curves, the quality, where the cut goes, and Save cut. While
  * the preview plays, a change plays on from the end it changed ([CutDraft.focus]). Leaving stops the preview and cancels
- * a save.
+ * a save; one already taking its name is not stopped, and the cutter stays until it says Saved.
  */
 @Composable
 private fun CutEditor(song: Song, files: CutFiles, player: TonePlayer, onSaved: (CutResult.Saved) -> Unit, onClose: () -> Unit) {
@@ -233,9 +237,10 @@ private fun CutEditor(song: Song, files: CutFiles, player: TonePlayer, onSaved: 
         follow(previewState.onPlay(draft.preview(song.path)))
     }
     val close = {
-        if (saving is SaveState.Saving) CutSaving.cancel()
-        player.stop()
-        onClose()
+        if (saving !is SaveState.Saving || CutSaving.cancel()) {
+            player.stop()
+            onClose()
+        }
     }
     val writable = folder is CutFolder.NextToSong || folder is CutFolder.InMusic
     val readable = peaks?.isNotEmpty() != false
