@@ -14,7 +14,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -70,8 +69,6 @@ fun bookmarkGroups(state: SongState, library: Library): List<BookmarkGroup> {
 fun BookmarksPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val nav = LocalNavigator.current
-    // The page's own: a bookmark's Undo outlives its card, gone with its last bookmark.
-    val scope = rememberCoroutineScope()
     val extras = remember(context) { PlayerExtras.of(context) }
     val state by extras.state.collectAsStateWithLifecycle()
     val ready by extras.ready.collectAsStateWithLifecycle()
@@ -116,7 +113,7 @@ fun BookmarksPage(onBack: () -> Unit) {
                                     }
                                 }
                                 Column(Modifier.padding(start = 4.dp, end = 4.dp, bottom = 8.dp)) {
-                                    BookmarkList(group.marks, group.book, scope) { at ->
+                                    BookmarkList(group.marks, group.book) { at ->
                                         jumpTo(context, at.song, at.mark.positionMs)
                                         nav.show(FullScreen.Player)
                                     }

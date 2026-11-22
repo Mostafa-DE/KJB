@@ -336,7 +336,7 @@ private fun BookActionsSheet(book: Book, state: BookState, onDismiss: () -> Unit
         }
         if (marks.isNotEmpty()) {
             SectionTitle(stringResource(R.string.bookmarks_title), Modifier.padding(start = 8.dp, top = 12.dp, bottom = 4.dp))
-            BookmarkList(marks, book, scope) { at ->
+            BookmarkList(marks, book) { at ->
                 onDismiss()
                 jumpTo(context, at.song, at.mark.positionMs)
                 nav.show(FullScreen.Player)

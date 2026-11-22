@@ -118,6 +118,16 @@ class PlaybackExtrasTest {
     }
 
     @Test
+    fun `a song's last bookmark removed and put back, as the lists' Undo does, keeps its spot, note and time, and the song's id hint`() {
+        val (state, mark) = SongState().withBookmark(lanternRef, 61_000, "Bridge", addedAt = 1_700_000_000_000)!!
+        val removed = state.withoutBookmark(lantern, mark.id)
+        assertEquals(emptyMap<String, Long>(), removed.ids)
+        val back = removed.withBookmark(lanternRef, mark.positionMs, mark.note, mark.addedAt)!!.first
+        assertEquals(listOf(Triple(61_000L, "Bridge", 1_700_000_000_000L)), back.bookmarksOf(lantern).map { Triple(it.positionMs, it.note, it.addedAt) })
+        assertEquals(state.ids, back.ids)
+    }
+
+    @Test
     fun `a song's bookmarks, or every part's of its book in the book's order, each with its song`() {
         val parts = listOf("1", "2", "3").map { song("Audiobooks/Folder Book/$it.mp3", album = "Folder Book", durationMs = 600_000, id = it.toLong()) }
         val book = Library.of(parts, Settings()).bookOf(parts[0].path)!!

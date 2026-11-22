@@ -72,7 +72,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import app.lyrify.R
 import app.lyrify.books.Book
 import app.lyrify.books.BookKind
@@ -169,8 +171,7 @@ class PlayerExtrasUi internal constructor(
     private val context: Context,
     private val toasts: ToastState,
     private val resources: Resources,
-    /** The player's own: a bookmark's Undo outlives the sheet it was removed in. */
-    internal val scope: CoroutineScope,
+    private val scope: CoroutineScope,
 ) {
     var open: ExtrasSheet? by mutableStateOf(null)
 
@@ -615,9 +616,9 @@ private fun BookmarksSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
     val marks = rememberPlayingMarks(ui)
     LyrifySheet(onDismiss = extras::close, spacing = 4.dp, padding = 12.dp) {
         Text(stringResource(R.string.bookmarks_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp).semantics { heading() })
-        // The last one removed: the sheet stays for its Undo.
+        // The last one removed: the sheet stays open and says so, its Undo on screen.
         if (marks.isEmpty()) Text(stringResource(R.string.tools_bookmarks_none), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp))
-        BookmarkList(marks, ui.library?.bookOf(ui.path()), extras.scope) { at ->
+        BookmarkList(marks, ui.library?.bookOf(ui.path())) { at ->
             extras.close()
             jumpTo(context, at.song, at.mark.positionMs)
         }
@@ -631,13 +632,12 @@ private fun BookmarksSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
 @Composable
 fun SongBookmarks(song: SongRef, close: () -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val extras = remember(context) { PlayerExtras.of(context) }
     val marks = extras.state.collectAsStateWithLifecycle().value.marksOf(song.path, null)
     if (marks.isEmpty()) return
     Column {
         SectionTitle(stringResource(R.string.bookmarks_title), Modifier.padding(bottom = 4.dp))
-        BookmarkList(marks, null, scope) { at ->
+        BookmarkList(marks, null) { at ->
             close()
             jumpTo(context, at.song, at.mark.positionMs)
         }
@@ -647,13 +647,15 @@ fun SongBookmarks(song: SongRef, close: () -> Unit) {
 /**
  * Bookmarks as a list ([marks]: a song's, or a [book]'s parts' in the book's order, a folder book's part named under
  * the note): a tap plays from the spot ([onPlay]); the pencil changes the note in the note dialog; × removes it, with
- * Undo on [scope] (one that outlives the list, so its Undo does too).
+ * Undo, the bookmark back as it was.
  */
 @Composable
-internal fun BookmarkList(marks: List<SongMark>, book: Book?, scope: CoroutineScope, onPlay: (SongMark) -> Unit) {
+internal fun BookmarkList(marks: List<SongMark>, book: Book?, onPlay: (SongMark) -> Unit) {
     val context = LocalContext.current
     val toasts = LocalToasts.current
     val resources = LocalResources.current
+    // The toast outlives the sheet or page the bookmark was removed in: it runs in the activity's scope, not theirs.
+    val scope = LocalLifecycleOwner.current.lifecycleScope
     val extras = remember(context) { PlayerExtras.of(context) }
     var editing by rememberSaveable { mutableStateOf<Long?>(null) }
     marks.forEach { at ->
@@ -668,7 +670,7 @@ internal fun BookmarkList(marks: List<SongMark>, book: Book?, scope: CoroutineSc
                     extras.change { it.withoutBookmark(path, at.mark.id) }
                     scope.launch {
                         val undo = toasts.show(Toast(resources.getString(R.string.bookmark_removed), R.drawable.ic_bookmark, action = resources.getString(R.string.player_undo)))
-                        if (undo) extras.change { state -> state.copy(bookmarks = state.bookmarks + (path to (state.bookmarksOf(path) + at.mark).sortedBy(Bookmark::positionMs))) }
+                        if (undo) extras.change { state -> state.withBookmark(at.song, at.mark.positionMs, at.mark.note, at.mark.addedAt)?.first ?: state }
                     }
                 },
             )
