@@ -445,6 +445,8 @@ class SharedWritesTest {
             "player/QueueStore.kt",
             "player/SongStateStore.kt",
             "settings/SettingsStore.kt",
+            // Similar artists' cache, similar-artists.json, written aside and moved over.
+            "similar/SimilarArtists.kt",
             "stats/PlayLog.kt",
             // Today's For you, in the app's files, written aside and moved over.
             "suggestions/Suggestions.kt",

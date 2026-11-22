@@ -53,14 +53,19 @@ class MetaClientTest {
     // Hosts
 
     @Test
-    fun `requests start only at musicbrainz org and coverartarchive org, over https`() {
+    fun `requests start only at musicbrainz org, coverartarchive org and ListenBrainz's labs, over https`() {
         listOf(
             "https://musicbrainz.org/ws/2/release/?query=x&fmt=json",
             "https://coverartarchive.org/release/$ID_A/front-500",
             "https://MusicBrainz.org/ws/2/release/$ID_A",
             "https://musicbrainz.org:443/ws/2/",
+            // Similar artists (similar/).
+            "https://labs.api.listenbrainz.org/similar-artists/json?artist_mbids=$ID_A&algorithm=x",
         ).forEach { assertTrue(it, MetaHosts.isSource(URI(it))) }
         listOf(
+            "http://labs.api.listenbrainz.org/similar-artists/json",
+            "https://api.listenbrainz.org/1/metadata/lookup/",
+            "https://listenbrainz.org/",
             "http://musicbrainz.org/ws/2/",
             "https://musicbrainz.org:8443/ws/2/",
             "https://beta.musicbrainz.org/ws/2/",
@@ -206,6 +211,15 @@ class MetaClientTest {
         assertEquals(MetaAnswer.Ok("{}"), client.text(json, keep = { it != "{}" }))
         assertEquals(MetaAnswer.Ok("""{"a":1}"""), client.text(json))
         assertEquals(5, web.requests.size)
+    }
+
+    @Test
+    fun `a failed answer carries the status the server answered with, 200 for a body that did not read, none when it never answered`() = runTest {
+        val web = web()
+        web.on(json, status(500), ok("<html>"), FakeWeb.Reply(200, error = IOException("made-up")))
+        val client = client(web)
+
+        assertEquals(listOf<Int?>(500, 200, null), List(3) { (client.text(json) as MetaAnswer.Failed).status })
     }
 
     @Test

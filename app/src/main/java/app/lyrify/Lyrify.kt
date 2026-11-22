@@ -31,6 +31,7 @@ import app.lyrify.player.PlaybackCommands
 import app.lyrify.player.PlayerGraph
 import app.lyrify.settings.SettingsRepository
 import app.lyrify.settings.SettingsStore
+import app.lyrify.similar.SimilarWorker
 import app.lyrify.stats.PlayEvents
 import app.lyrify.stats.PlaysQuery
 import app.lyrify.stats.StatsGraph
@@ -88,6 +89,8 @@ class LyrifyApplication : Application() {
         CoverKey.warm(this, Lyrify.background)
         // So are the covers' versions kept between runs, which the service's first cover uri needs too.
         Lyrify.background.launch { TagsGraph.readCoverVersions(this@LyrifyApplication) }
+        // Similar artists' background lookups follow their switch in Settings (on by default).
+        SimilarWorker.follow(this, Lyrify.background)
     }
 }
 

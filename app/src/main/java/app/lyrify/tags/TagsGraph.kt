@@ -188,8 +188,12 @@ object TagsGraph {
         )
     }.also { coversTags = it }
 
+    /**
+     * The one MusicBrainz, Cover Art Archive and ListenBrainz client behind [lookup]; Similar artists (similar/) asks
+     * through it too, so MusicBrainz's gate holds for both.
+     */
     @Synchronized
-    private fun client(context: Context): MetaClient =
+    fun client(context: Context): MetaClient =
         client ?: MetaClient(MetaCache(File(context.applicationContext.cacheDir, "tag-cache")), log = ::log).also { client = it }
 
     @Synchronized

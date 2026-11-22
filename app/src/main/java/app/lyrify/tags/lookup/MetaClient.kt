@@ -35,8 +35,11 @@ sealed interface MetaAnswer<out T> {
     /** Still 503 after every backoff: "MusicBrainz is busy". */
     data object Busy : MetaAnswer<Nothing>
 
-    /** Offline, refused, too large or unreadable. [reason] is for the log: a status code or an exception class name. */
-    data class Failed(val reason: String) : MetaAnswer<Nothing>
+    /**
+     * Offline, refused, too large or unreadable. [reason] is for the log: a status code or an exception class name.
+     * [status]: the HTTP status the server answered with, when it answered (200 for a body that did not read).
+     */
+    data class Failed(val reason: String, val status: Int? = null) : MetaAnswer<Nothing>
 }
 
 /** What a request fetches, and how much of it may come back. */
@@ -51,14 +54,16 @@ enum class Body(val maxBytes: Int, val accept: String) {
 /**
  * The hosts Covers & tags may talk to, always over https on the default port: requests start at musicbrainz.org or
  * coverartarchive.org; the Cover Art Archive answers with a redirect to archive.org, which redirects again to one of its
- * own servers (`dn721702.ca.archive.org`, `ia800204.us.archive.org`, seen on 2026-11-10).
+ * own servers (`dn721702.ca.archive.org`, `ia800204.us.archive.org`, seen on 2026-11-10). Similar artists (similar/)
+ * also asks ListenBrainz's labs API ([LISTENBRAINZ_LABS]).
  */
 object MetaHosts {
     const val MUSICBRAINZ: String = "musicbrainz.org"
     const val COVER_ART_ARCHIVE: String = "coverartarchive.org"
     const val ARCHIVE: String = "archive.org"
+    const val LISTENBRAINZ_LABS: String = "labs.api.listenbrainz.org"
 
-    private val SOURCES = setOf(MUSICBRAINZ, COVER_ART_ARCHIVE)
+    private val SOURCES = setOf(MUSICBRAINZ, COVER_ART_ARCHIVE, LISTENBRAINZ_LABS)
 
     /** Where a request may start. */
     fun isSource(uri: URI): Boolean = secure(uri) && host(uri) in SOURCES
@@ -202,7 +207,8 @@ class MetaCache(
  * MusicBrainz and the Cover Art Archive over [HttpURLConnection]: MusicBrainz through its [gate]; covers and their
  * redirect hops [COVER_REQUESTS] at a time and never behind that gate, as the Cover Art Archive sets no rate limit
  * (https://musicbrainz.org/doc/Cover_Art_Archive/API: "There are currently no rate limiting rules in place"), and a
- * cover's 503 is a cover that could not load. Https to [MetaHosts] only, redirects followed by hand and each one
+ * cover's 503 is a cover that could not load. ListenBrainz's labs (similar/) goes outside that gate too, among the
+ * covers' requests; Similar artists paces its own. Https to [MetaHosts] only, redirects followed by hand and each one
  * checked, every body capped ([Body]), connect and read timeouts with one more try after a timeout, successes cached
  * ([cache], on disk) unless [fresh][get] ("Check again"). An answer read to its end keeps its connection for the next
  * request. Logs carry only status codes, exception class names and counts, never a URL or a name.
@@ -235,13 +241,14 @@ class MetaClient(
         val key = uri.toString()
         if (!fresh) withContext(io) { cached(key, read) }?.let { return it }
         val cover = MetaHosts.isCover(uri)
+        val musicBrainz = MetaHosts.isMusicBrainz(uri)
         return when (val hop = follow(uri, body)) {
             is Hop.Content -> withContext<MetaAnswer<T>>(io) {
                 try {
                     read(hop.bytes).also { if (keep(it)) cache.put(key, hop.bytes) }.let { MetaAnswer.Ok(it) }
                 } catch (e: IllegalArgumentException) {
                     log("tags: unreadable answer: ${e.javaClass.simpleName}")
-                    MetaAnswer.Failed("unreadable: ${e.javaClass.simpleName}")
+                    MetaAnswer.Failed("unreadable: ${e.javaClass.simpleName}", HttpURLConnection.HTTP_OK)
                 }
             }
             is Hop.Status -> when (hop.code) {
@@ -250,12 +257,12 @@ class MetaClient(
                     log("tags: cover answered HTTP 503")
                     MetaAnswer.Failed("HTTP 503")
                 } else {
-                    log("tags: MusicBrainz still busy, gave up")
+                    log(if (musicBrainz) "tags: MusicBrainz still busy, gave up" else "tags: answered HTTP 503")
                     MetaAnswer.Busy
                 }
                 else -> {
                     log("tags: answered HTTP ${hop.code}")
-                    MetaAnswer.Failed("HTTP ${hop.code}")
+                    MetaAnswer.Failed("HTTP ${hop.code}", hop.code)
                 }
             }
             is Hop.Stop -> {

@@ -76,6 +76,7 @@ class SettingsStoreTest {
             hiddenSongs = listOf(SongRef("/storage/emulated/0/Music/Odds/Glass Steps.mp3", 13), SongRef("/storage/emulated/0/Music/Singles/Copper Moon.mp3")),
             artistSplit = ArtistSplit(enabled = false, separators = listOf(";", "&", "with"), exceptions = listOf("Rowan & Fennick")),
             opensOn = LibraryTab.ALBUMS,
+            findSimilarOnline = false,
         ),
         lyrics = LyricsSettings(showWhenLocked = true, textSize = LyricsSize.XL, textWeight = LyricsWeight.REGULAR, textAlign = LyricsAlign.CENTRE),
         playerUi = PlayerUiSettings(showLyrics = true, flipHintShown = true, recentQueueHintShown = true),
@@ -138,6 +139,8 @@ class SettingsStoreTest {
         assertEquals(listOf(LibraryTab.GENRES), s.library.tabs.filterNot { it.shown }.map { it.tab })
         assertEquals(emptyList<String>(), s.library.foldersToSkip)
         assertFalse(s.library.showFileNames)
+        // Find similar artists online: on (user, 2026-11-22).
+        assertTrue(s.library.findSimilarOnline)
         assertEquals(LyricsSettings(false, LyricsSize.M, LyricsWeight.BOLD, LyricsAlign.LEFT), s.lyrics)
         assertEquals(PlayerUiSettings(showLyrics = false, flipHintShown = false, recentQueueHintShown = false), s.playerUi)
         assertEquals(BackupSettings(automatic = false, folderUri = null), s.backup)
@@ -583,6 +586,14 @@ class SettingsStoreTest {
     }
 
     // Settings' sections
+
+    @Test
+    fun `Find similar artists online reads back off, and a file from before it reads it on`() {
+        val off = Settings(library = LibrarySettings(findSimilarOnline = false))
+        assertEquals(off, SettingsJson.decode(SettingsJson.encode(off)))
+        assertTrue(SettingsJson.decode("""{"version":4,"library":{"showFileNames":true}}""")!!.library.findSimilarOnline)
+        assertFalse(SettingsJson.decode("""{"version":4,"library":{"findSimilarOnline":false}}""")!!.library.findSimilarOnline)
+    }
 
     @Test
     fun `Settings' sections start with Lyrics, AI, Downloads and Backup closed and the others open`() {

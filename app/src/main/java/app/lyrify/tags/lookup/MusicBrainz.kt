@@ -98,6 +98,9 @@ data class MbRecording(val id: String, val title: String, val lengthMs: Long?, v
 /** A page of a release search: the [releases] it lists, and how many it found in all ([total], its `count`). */
 data class ReleaseHits(val releases: List<MbRelease>, val total: Int)
 
+/** An artist found by an artist search: its id, name, sort name, other names ([aliases]) and score (0 to 100). */
+data class MbArtist(val id: String, val name: String, val sortName: String?, val aliases: List<String>, val score: Int?)
+
 /** The year a MusicBrainz date ("1998", "1998-04", "1998-04-17") starts with. */
 internal fun yearOf(date: String?): Int? = date?.let { YEAR.find(it) }?.value?.toInt()?.takeIf { it > 0 }
 
@@ -158,6 +161,12 @@ internal object MusicBrainzUrls {
 
     fun front(releaseId: String, size: CoverSize): URI = URI("$COVERS/release/${checked(releaseId)}/${size.path}")
 
+    /**
+     * An artist search for [name] as plain words, no field named: MusicBrainz then matches names, sort names and aliases,
+     * which finds an artist stored in another script by its Latin alias (an `artist:` query missed those, lb-research.md).
+     */
+    fun artistSearch(name: String): URI = URI("$API/artist/?query=" + URLEncoder.encode(lucene(name), "UTF-8") + "&fmt=json&limit=$SEARCH_LIMIT")
+
     /** [text] with Lucene's special characters escaped and its operators lowercased, so a name is searched as words. */
     fun lucene(text: String): String =
         buildString { text.forEach { if (it in SPECIAL) append('\\'); append(it) } }.replace(OPERATOR) { it.value.lowercase() }
@@ -204,6 +213,12 @@ internal object MusicBrainzJson {
             credit,
             recording.releases.mapNotNull { it.toRelease(fallback = credit, recording = recording) },
         )
+    }
+
+    /** An artist search's hits, as MusicBrainz ranks them; a hit without a proper id is dropped. */
+    fun artists(body: ByteArray): List<MbArtist> = decode<ArtistSearchJson>(body).artists.mapNotNull { hit ->
+        if (!MusicBrainzUrls.isId(hit.id)) return@mapNotNull null
+        MbArtist(hit.id.lowercase(), hit.name, hit.sortName?.takeIf(String::isNotBlank), hit.aliases.map { it.name }.filter(String::isNotBlank), hit.score)
     }
 
     private inline fun <reified T> decode(body: ByteArray): T = json.decodeFromString<T>(body.decodeToString())
@@ -318,7 +333,26 @@ private class ReleaseSearchJson(val count: Int? = null, val releases: List<Relea
 @Serializable
 private class RecordingSearchJson(val recordings: List<RecordingJson> = emptyList())
 
-/** The queries Covers & tags sends, all through the one [client] and its gate. [fresh]: "Check again", skip the cache. */
+@Serializable
+private class AliasJson(val name: String = "")
+
+/** An artist search's hit; [ArtistJson] is a credit's artist, which has no score or aliases. */
+@Serializable
+private class FoundArtistJson(
+    val id: String = "",
+    val name: String = "",
+    @SerialName("sort-name") val sortName: String? = null,
+    val score: Int? = null,
+    val aliases: List<AliasJson> = emptyList(),
+)
+
+@Serializable
+private class ArtistSearchJson(val artists: List<FoundArtistJson> = emptyList())
+
+/**
+ * The queries Covers & tags sends, and Similar artists' artist search, all through the one [client] and its gate.
+ * [fresh]: "Check again", skip the cache.
+ */
 class MusicBrainz(private val client: MetaClient) {
     /** Empty results are never cached. */
     suspend fun searchReleases(album: String, artist: String?, tracks: Int?, fresh: Boolean = false): MetaAnswer<List<MbRelease>> =
@@ -340,6 +374,13 @@ class MusicBrainz(private val client: MetaClient) {
 
     suspend fun searchRecordings(title: String, artist: String?, durationMs: Long?, fresh: Boolean = false): MetaAnswer<List<MbRecording>> =
         client.get(MusicBrainzUrls.recordingSearch(title, artist, durationMs), Body.JSON, fresh, keep = { it.isNotEmpty() }, read = MusicBrainzJson::recordings)
+
+    /**
+     * An artist search by name, for Similar artists (similar/): never read from the cache nor kept there, as the similar
+     * artists' own store keeps what it found.
+     */
+    suspend fun searchArtists(name: String): MetaAnswer<List<MbArtist>> =
+        client.get(MusicBrainzUrls.artistSearch(name), Body.JSON, fresh = true, keep = { false }, read = MusicBrainzJson::artists)
 
     /** The front cover of a release at [size], as the Cover Art Archive has it (JPEG or PNG). */
     suspend fun front(releaseId: String, size: CoverSize, fresh: Boolean = false): MetaAnswer<ByteArray> =
