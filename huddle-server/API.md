@@ -270,7 +270,7 @@ At 10 friends with the Huddle page open, a phone makes about 2 calls a minute, f
 | Kept: card, profile / play / waiting invite / accepted invite | 30 days / 24 h / 7 days / 7 days after accept |
 | `inbox` | 64 mailboxes, 100 messages each, about 1 MiB of data per answer |
 | `ack` / `mailboxes/delete` / `messages/delete` | 64 entries / 64 ids / 100 ids |
-| All `/api/v1` calls, and all pages and `/health` together, per IP | 600 per 10 minutes each |
+| All requests (`/api/v1` calls, pages and `/health` together), per IP | 600 per 10 minutes |
 | `invites/create`, per IP | 30 per hour |
 | `invites/accept`, per IP | 30 per hour |
 | Data sent (`messages/send` plus `invites/accept`), per IP | 16 MiB per hour, and 24 MiB per day |

@@ -146,13 +146,27 @@ describe("the built server", () => {
     expect(response.body).toEqual({ error: "not_found" })
   })
 
-  it("limits pages per address, as it limits API calls", async () => {
+  it("counts pages, API calls and refused methods in one window per address", async () => {
     const headers = { "X-Real-IP": "10.200.0.1" }
+    const ack = JSON.stringify({ acks: [{ mailbox: randomId(), upTo: "1" }] })
     const statuses: number[] = []
-    for (let i = 0; i <= LIMITS.rate.ip.limit; i++) statuses.push((await fetch(`${BASE}/`, { headers })).status)
+    for (let i = 0; i < LIMITS.rate.ip.limit; i++) {
+      const response =
+        i % 2 === 0
+          ? await fetch(`${BASE}/`, { headers })
+          : await fetch(`${BASE}/api/v1/messages/ack`, {
+              method: "POST",
+              headers: { ...headers, "Content-Type": "application/json" },
+              body: ack,
+            })
+      statuses.push(response.status)
+    }
+    const refusedMethod = await fetch(`${BASE}/api/v1/messages/send`, { headers })
+    const unknownPath = await fetch(`${BASE}/api/v1/nothing`, { method: "POST", headers, body: "{}" })
 
     expect(statuses.filter((status) => status === 200)).toHaveLength(LIMITS.rate.ip.limit)
-    expect(statuses.at(-1)).toBe(429)
+    expect(refusedMethod.status).toBe(429)
+    expect(unknownPath.status).toBe(429)
   })
 
   it("answers an unknown page with 404 and its own page", async () => {

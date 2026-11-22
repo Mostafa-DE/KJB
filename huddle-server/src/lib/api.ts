@@ -63,11 +63,13 @@ export function enforceRate(key: string, rule: { limit: number; windowMs: number
   const now = Date.now()
   const window = rateWindows.get(key)
   const current = window && window.endsAt > now ? window : { used: 0, endsAt: now + rule.windowMs }
+  rateWindows.delete(key)
   if (current.used + cost > rule.limit) {
+    // A refused key is in use too: it stays among the newest, so a flood cannot age its own spent window out.
+    rateWindows.set(key, current)
     const retryAfter = Math.max(1, Math.ceil((current.endsAt - now) / 1000))
     throw new ApiError(429, "rate_limited", { "Retry-After": String(retryAfter) })
   }
-  rateWindows.delete(key)
   if (rateWindows.size >= LIMITS.rateKeys) makeRoomForRateWindows(now)
   rateWindows.set(key, { used: current.used + cost, endsAt: current.endsAt })
 }
@@ -75,18 +77,26 @@ export function enforceRate(key: string, rule: { limit: number; windowMs: number
 /**
  * The caller's address as the limits count it. Railway's edge sets X-Real-IP to it (docs.railway.com, public
  * networking specs). An IPv6 caller counts by its /64, the block one home or phone gets; an IPv4 address written as
- * IPv6 counts as the IPv4 address.
+ * IPv6 (::ffff:a.b.c.d, in either form) counts as the IPv4 address.
  */
 export function clientIp(request: Request) {
   const ip = request.headers.get("x-real-ip")?.trim().toLowerCase() || "unknown"
   if (!isIPv6(ip)) return ip
-  if (ip.includes(".")) return ip.slice(ip.lastIndexOf(":") + 1)
 
-  const [head, tail] = ip.split("::")
+  // Eight 16-bit groups: a dotted IPv4 tail becomes the last two, and `::` the zeros it stands for.
+  const dotted = ip.match(/^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/)?.slice(1)
+  const hex = dotted
+    ? `${dotted[0]}${((+dotted[1] << 8) | +dotted[2]).toString(16)}:${((+dotted[3] << 8) | +dotted[4]).toString(16)}`
+    : ip
+  const [head, tail] = hex.split("::")
   const left = head ? head.split(":") : []
   const right = tail ? tail.split(":") : []
-  const groups = tail === undefined ? left : [...left, ...Array(8 - left.length - right.length).fill("0"), ...right]
-  return `${groups.slice(0, 4).map((group) => group.replace(/^0+(?=.)/, "")).join(":")}::/64`
+  const groups = (tail === undefined ? left : [...left, ...Array(8 - left.length - right.length).fill("0"), ...right])
+    .map((group) => parseInt(group, 16))
+  if (groups.slice(0, 5).every((group) => group === 0) && groups[5] === 0xffff) {
+    return [groups[6] >> 8, groups[6] & 255, groups[7] >> 8, groups[7] & 255].join(".")
+  }
+  return `${groups.slice(0, 4).map((group) => group.toString(16)).join(":")}::/64`
 }
 
 async function readJsonBody(request: Request) {
@@ -136,8 +146,9 @@ export function errorResponse(error: unknown) {
 }
 
 /**
- * The shape of every `/api/v1` handler: the per-address limit, a capped JSON body checked by `schema`, then
- * `handle`. Errors become the API's JSON errors; a bad field is named by its path.
+ * The shape of every `/api/v1` handler: a capped JSON body checked by `schema`, then `handle` with the caller's
+ * address for its own limits (src/server.ts has already counted the request). Errors become the API's JSON errors; a
+ * bad field is named by its path.
  */
 export function apiRoute<Schema extends z.ZodType>(
   schema: Schema,
@@ -146,7 +157,6 @@ export function apiRoute<Schema extends z.ZodType>(
   return async (request: Request) => {
     try {
       const ip = clientIp(request)
-      enforceRate(`ip:${ip}`, LIMITS.rate.ip)
       const parsed = schema.safeParse(await readJsonBody(request))
       if (!parsed.success) {
         const field = parsed.error.issues[0]?.path.join(".")

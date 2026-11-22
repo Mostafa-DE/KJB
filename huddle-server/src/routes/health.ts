@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm"
 import { db } from "@/db"
 import { describeError, json } from "@/lib/api"
 
-// Counted against the caller's address in src/server.ts, with the pages.
+// Counted against the caller's address in src/server.ts, like every request.
 export async function handleHealth() {
   try {
     await db.execute(sql`select 1`)

@@ -61,21 +61,13 @@ describe("every /api/v1 call", () => {
     expect(streamed.status).toBe(413)
   })
 
-  it("allows 600 calls per 10 minutes from one address, then again after the window", async () => {
+  it("does not count calls per address itself (src/server.ts counts every request once)", async () => {
     const ip = randomIp()
-    for (let i = 0; i < LIMITS.rate.ip.limit; i++) {
-      const answer = await call(handleAck, ackBody(), { ip })
-      expect(answer.status).toBe(200)
-    }
+    for (let i = 0; i < LIMITS.rate.ip.limit; i++) enforceRate(`ip:${ip}`, LIMITS.rate.ip)
 
-    const refused = await call(handleAck, ackBody(), { ip })
-    advanceClock(10 * MINUTE_MS)
-    const later = await call(handleAck, ackBody(), { ip })
+    const answer = await call(handleAck, ackBody(), { ip })
 
-    expect(refused).toMatchObject({ status: 429, body: { error: "rate_limited" } })
-    expect(Number(refused.headers.get("Retry-After"))).toBeGreaterThan(0)
-    expect(Number(refused.headers.get("Retry-After"))).toBeLessThanOrEqual(600)
-    expect(later.status).toBe(200)
+    expect(answer.status).toBe(200)
   })
 })
 
@@ -101,15 +93,42 @@ describe("an unexpected error", () => {
 describe("the rate counters", () => {
   const rule = { limit: 2, windowMs: 60 * MINUTE_MS }
 
-  it("keep a busy window when they are full, and forget the least used ones", () => {
+  it("allow the limit in a window, then again after it, with the seconds to wait", () => {
+    const key = `test-window:${randomId()}`
+    enforceRate(key, LIMITS.rate.ip, LIMITS.rate.ip.limit)
+
+    let refused: unknown
+    try {
+      enforceRate(key, LIMITS.rate.ip)
+    } catch (error) {
+      refused = error
+    }
+    advanceClock(LIMITS.rate.ip.windowMs)
+
+    expect(refused).toMatchObject({ status: 429, code: "rate_limited" })
+    expect(Number((refused as ApiError).headers["Retry-After"])).toBeGreaterThan(0)
+    expect(Number((refused as ApiError).headers["Retry-After"])).toBeLessThanOrEqual(LIMITS.rate.ip.windowMs / 1000)
+    expect(() => enforceRate(key, LIMITS.rate.ip)).not.toThrow()
+  })
+
+  it("keep busy and spent windows when they are full, and forget the least used ones", () => {
+    const cold = `test-cold:${randomId()}`
     const busy = `test-busy:${randomId()}`
+    const spent = `test-spent:${randomId()}`
+    enforceRate(cold, rule)
     enforceRate(busy, rule)
+    enforceRate(spent, rule, 2)
     for (let i = 0; i < LIMITS.rateKeys; i++) {
       enforceRate(`test-fill:${i}:${randomId()}`, rule)
-      if (i === LIMITS.rateKeys / 2) enforceRate(busy, rule)
+      if (i === LIMITS.rateKeys / 2) {
+        enforceRate(busy, rule)
+        expect(() => enforceRate(spent, rule)).toThrow(ApiError)
+      }
     }
 
+    expect(() => enforceRate(cold, rule, 2)).not.toThrow()
     expect(() => enforceRate(busy, rule)).toThrow(ApiError)
+    expect(() => enforceRate(spent, rule)).toThrow(ApiError)
   })
 })
 
@@ -129,8 +148,14 @@ describe("the address a limit counts", () => {
     expect(addressOf("::1")).toBe(addressOf("0:0:0:0:1::2"))
   })
 
-  it("keeps an IPv4 address written as IPv6 apart from others", () => {
-    expect(addressOf("::ffff:10.1.2.3")).toBe(addressOf("10.1.2.3"))
-    expect(addressOf("::ffff:10.1.2.3")).not.toBe(addressOf("::ffff:10.1.2.4"))
+  it("is the IPv4 address for an IPv4 address written as IPv6, in either form", () => {
+    expect(addressOf("::ffff:10.1.2.3")).toBe("10.1.2.3")
+    expect(addressOf("::ffff:a01:203")).toBe("10.1.2.3")
+    expect(addressOf("::ffff:a01:204")).toBe("10.1.2.4")
+  })
+
+  it("keeps an IPv4 tail on another IPv6 network in that network", () => {
+    expect(addressOf("2001:db8::10.1.2.3")).toBe(addressOf("2001:db8::1"))
+    expect(addressOf("2001:db8::10.1.2.3")).not.toBe("10.1.2.3")
   })
 })

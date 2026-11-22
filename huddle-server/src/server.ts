@@ -32,8 +32,8 @@ export default createServerEntry({
     const api = new URL(request.url).pathname.startsWith("/api/")
     let response: Response
     try {
-      // API calls count against the address in apiRoute; pages and /health count here (srvx serves /assets first).
-      if (!api) enforceRate(`ip:${clientIp(request)}`, LIMITS.rate.ip)
+      // Every request counts once against its address: API calls, pages and /health alike (srvx serves /assets first).
+      enforceRate(`ip:${clientIp(request)}`, LIMITS.rate.ip)
       // Every API call is a POST (API.md): any other method, a browser's GET or a CORS preflight, gets a JSON refusal.
       response =
         api && request.method !== "POST"
