@@ -34,6 +34,25 @@ class LaunchesTest {
     }
 
     @Test
+    fun `a Huddle invite link opens the invite, and only a link with its code`() {
+        val link = "https://kjb-huddle.up.railway.app/i#AQSkZ_-x"
+        assertEquals(Launch.Invite(link), launchOf(LaunchIntent(Intent.ACTION_VIEW, null, link)))
+        assertEquals(Launch.Invite("https://huddle.example.org/i/#AQ"), launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "https://huddle.example.org/i/#AQ")))
+        assertNull("a song's link is no invite", launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "https://example.com/a.mp3")))
+        assertNull("the landing page without a code", launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "https://kjb-huddle.up.railway.app/i")))
+        assertNull(launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "http://kjb-huddle.up.railway.app/i#AQ")))
+    }
+
+    @Test
+    fun `the manifest opens invite links on both of Huddle's hosts, checked as KJB's own`() {
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+        assertTrue(manifest, "android:autoVerify=\"true\"" in manifest)
+        assertTrue(manifest, "android:host=\"\${huddleHost}\"" in manifest)
+        assertTrue(manifest, "android:host=\"\${huddleDomain}\"" in manifest)
+        assertTrue(manifest, "android:path=\"/i\"" in manifest)
+    }
+
+    @Test
     fun `Share with one audio file plays it, and shared text is the downloads' and not opened here`() {
         assertEquals(Launch.Open(listOf(song)), launchOf(LaunchIntent(Intent.ACTION_SEND, "audio/flac", streams = listOf(song))))
         assertEquals(Launch.Open(listOf(song)), launchOf(LaunchIntent(Intent.ACTION_SEND, "application/ogg", streams = listOf(song))))

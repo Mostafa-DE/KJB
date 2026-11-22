@@ -72,6 +72,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.R
+import app.lyrify.huddle.CardKind
 import app.lyrify.library.SongRef
 import app.lyrify.library.displayTitle
 import app.lyrify.player.AbPart
@@ -183,6 +184,7 @@ class PlayerExtrasUi internal constructor(
             PlayerRoute.CUT -> songSheets.show(OpenSheet.Cut(song))
             PlayerRoute.SHARE -> scope.launch { toasts.say(resources, shareSongs(context, listOfNotNull(ui.song)) { displayTitle(it, names) }) }
             PlayerRoute.SHARE_LYRICS -> lyrics?.let { songSheets.show(OpenSheet.ShareLyrics(song, it == LyricsShare.SYNCED)) }
+            PlayerRoute.SEND -> songSheets.show(OpenSheet.SendTo(listOf(song), CardKind.SONG))
             PlayerRoute.MOVE_TO_TRASH -> ui.song?.let { songSheets.show(OpenSheet.Trash(listOf(it.ref))) }
             PlayerRoute.SPEED -> open = ExtrasSheet.SPEED
             PlayerRoute.SLEEP -> open = ExtrasSheet.SLEEP

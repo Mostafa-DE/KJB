@@ -44,6 +44,7 @@ class NavTest {
         assertEquals(DockTab.TOOLS, start.open(Page.HiddenSongs).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.SplitArtists).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.Licences).tab)
+        assertEquals(DockTab.TOOLS, start.open(Page.Huddle).tab)
         assertEquals(DockTab.TOOLS, NavState.start(DockTab.LIBRARY).open(Page.Licence("Media3")).tab)
         assertEquals(DockTab.LIBRARY, NavState.start(DockTab.TOOLS).open(Page.Songs(status = LyricsStatus.AI_ALIGNED)).tab)
         assertEquals(DockTab.SEARCH, start.open(Page.SearchAll(SearchGroup.SONGS, "lantern")).tab)

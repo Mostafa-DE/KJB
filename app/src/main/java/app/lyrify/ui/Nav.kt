@@ -137,6 +137,10 @@ sealed interface Page {
     @Serializable @SerialName("downloads")
     data object Downloads : Page
 
+    /** Huddle: friends, what they sent and play, and invites (HuddleScreen.kt, HA1). */
+    @Serializable @SerialName("huddle")
+    data object Huddle : Page
+
     /** Covers & tags (CoversTagsScreen.kt, T2). */
     @Serializable @SerialName("coversTags")
     data object CoversTags : Page
@@ -487,7 +491,7 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean, docked: List<DockTab> =
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY
         is Page.Check, Page.Duplicates, Page.Trash, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, is Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists,
-        Page.Licences, is Page.Licence, Page.BottomBar -> DockTab.TOOLS
+        Page.Licences, is Page.Licence, Page.BottomBar, Page.Huddle -> DockTab.TOOLS
     }
     return if (home == DockTab.PLAYLISTS && DockTab.PLAYLISTS !in docked) here?.takeUnless { it == DockTab.TOOLS } ?: DockTab.LIBRARY else home
 }

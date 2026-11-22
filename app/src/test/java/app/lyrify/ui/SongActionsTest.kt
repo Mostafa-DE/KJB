@@ -110,7 +110,7 @@ class SongActionsTest {
 
     @Test
     fun `the song sheet shows every row for a song in a list, and the rows of its place, Hide and Move to trash last`() {
-        val common = listOf(SheetRow.PLAY_NEXT, SheetRow.ADD_TO, SheetRow.FAVOURITE, SheetRow.LYRICS, SheetRow.MAKE_TONE, SheetRow.SHARE, SheetRow.SONG_INFO, SheetRow.EDIT_TAGS, SheetRow.BOOK)
+        val common = listOf(SheetRow.PLAY_NEXT, SheetRow.ADD_TO, SheetRow.FAVOURITE, SheetRow.LYRICS, SheetRow.MAKE_TONE, SheetRow.SHARE, SheetRow.SEND, SheetRow.SONG_INFO, SheetRow.EDIT_TAGS, SheetRow.BOOK)
         assertEquals(common + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false))
         assertEquals(common + SheetRow.COVERS_TAGS + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = true, removeFromQueue = true))
         assertEquals(
@@ -126,12 +126,12 @@ class SongActionsTest {
     }
 
     @Test
-    fun `the song sheet has one Share for every song, in Share's place, with lyrics or without`() {
+    fun `the song sheet has one Share for every song, in Share's place, with lyrics or without, and Send to a friend after it`() {
         // A song with lyrics asks Song or Lyrics at the row itself (ShareChoice): no second Share row.
         val rows = sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false)
-        assertEquals(listOf(SheetRow.MAKE_TONE, SheetRow.SHARE, SheetRow.SONG_INFO), rows.subList(rows.indexOf(SheetRow.MAKE_TONE), rows.indexOf(SheetRow.SONG_INFO) + 1))
+        assertEquals(listOf(SheetRow.MAKE_TONE, SheetRow.SHARE, SheetRow.SEND, SheetRow.SONG_INFO), rows.subList(rows.indexOf(SheetRow.MAKE_TONE), rows.indexOf(SheetRow.SONG_INFO) + 1))
         val cut = sheetRows(SheetPlace.Playlist("p1", 0), coversTags = true, removeFromQueue = false, cut = true)
-        assertEquals(listOf(SheetRow.MAKE_TONE, SheetRow.CUT, SheetRow.SHARE, SheetRow.SONG_INFO), cut.subList(cut.indexOf(SheetRow.MAKE_TONE), cut.indexOf(SheetRow.SONG_INFO) + 1))
+        assertEquals(listOf(SheetRow.MAKE_TONE, SheetRow.CUT, SheetRow.SHARE, SheetRow.SEND, SheetRow.SONG_INFO), cut.subList(cut.indexOf(SheetRow.MAKE_TONE), cut.indexOf(SheetRow.SONG_INFO) + 1))
     }
 
     @Test
@@ -145,13 +145,13 @@ class SongActionsTest {
     // An album's or an artist's "⋯"
 
     @Test
-    fun `an album's menu has Play next, Add to, Shuffle, Go to artist, Covers and tags, then Edit album`() {
+    fun `an album's menu has Play next, Add to, Shuffle, Send to a friend, Go to artist, Covers and tags, then Edit album`() {
         assertEquals(
-            listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.GO_TO_ARTIST, CollectionRow.COVERS_TAGS, CollectionRow.EDIT_ALBUM),
+            listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.SEND, CollectionRow.GO_TO_ARTIST, CollectionRow.COVERS_TAGS, CollectionRow.EDIT_ALBUM),
             albumRows(artistPage = true, coversTags = true),
         )
         // An album artist without a page has no Go to artist; until its slot is filled, no Covers & tags.
-        assertEquals(listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.EDIT_ALBUM), albumRows(artistPage = false, coversTags = false))
+        assertEquals(listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.SEND, CollectionRow.EDIT_ALBUM), albumRows(artistPage = false, coversTags = false))
     }
 
     @Test
@@ -172,6 +172,8 @@ class SongActionsTest {
 
             override fun shuffle() { calls += "shuffle" }
 
+            override fun send() { calls += "send" }
+
             override fun goToArtist() { calls += "go to artist" }
 
             override fun coversTags() { calls += "covers and tags" }
@@ -186,6 +188,7 @@ class SongActionsTest {
             CollectionRow.PLAY_NEXT to "play next",
             CollectionRow.ADD_TO to "add to",
             CollectionRow.SHUFFLE to "shuffle",
+            CollectionRow.SEND to "send",
             CollectionRow.GO_TO_ARTIST to "go to artist",
             CollectionRow.COVERS_TAGS to "covers and tags",
             CollectionRow.EDIT_ALBUM to "edit album",

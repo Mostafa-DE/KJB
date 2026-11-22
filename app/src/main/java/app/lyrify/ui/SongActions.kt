@@ -58,6 +58,7 @@ import app.lyrify.library.FavouritesPort
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.cut.CutFormats
+import app.lyrify.huddle.CardKind
 import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistStore
 import app.lyrify.library.PlaylistsState
@@ -96,7 +97,7 @@ sealed interface SheetPlace {
 }
 
 /** The song sheet's rows, in the order they show. Move to trash sits apart at the bottom. */
-enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, CUT, SHARE, SONG_INFO, EDIT_TAGS, BOOK, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
+enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, CUT, SHARE, SEND, SONG_INFO, EDIT_TAGS, BOOK, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
 
 /**
  * The rows the song sheet shows when opened at [place]. [coversTags] and [removeFromQueue]: their slots are filled
@@ -114,9 +115,12 @@ fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean, 
 }
 
 /** The rows of an album's or an artist's "⋯", in the order they show. */
-enum class CollectionRow { PLAY_NEXT, ADD_TO, SHUFFLE, GO_TO_ARTIST, COVERS_TAGS, EDIT_ALBUM, RENAME_ARTIST, MERGE_WITH }
+enum class CollectionRow { PLAY_NEXT, ADD_TO, SHUFFLE, SEND, GO_TO_ARTIST, COVERS_TAGS, EDIT_ALBUM, RENAME_ARTIST, MERGE_WITH }
 
-/** An album's "⋯": Go to artist when its artist has a page ([artistPage]), Covers & tags when its slot is filled. */
+/**
+ * An album's "⋯": Send to a friend (Huddle), Go to artist when its artist has a page ([artistPage]), Covers & tags when
+ * its slot is filled.
+ */
 fun albumRows(artistPage: Boolean, coversTags: Boolean): List<CollectionRow> = CollectionRow.entries.filter { row ->
     when (row) {
         CollectionRow.GO_TO_ARTIST -> artistPage
@@ -138,6 +142,8 @@ interface CollectionActions {
 
     fun shuffle()
 
+    fun send()
+
     fun goToArtist()
 
     fun coversTags()
@@ -154,6 +160,7 @@ fun CollectionActions.act(row: CollectionRow) = when (row) {
     CollectionRow.PLAY_NEXT -> playNext()
     CollectionRow.ADD_TO -> addTo()
     CollectionRow.SHUFFLE -> shuffle()
+    CollectionRow.SEND -> send()
     CollectionRow.GO_TO_ARTIST -> goToArtist()
     CollectionRow.COVERS_TAGS -> coversTags()
     CollectionRow.EDIT_ALBUM -> editAlbum()
@@ -479,6 +486,10 @@ sealed interface OpenSheet {
     /** Share lyrics: as text, and as the `.lrc` for [synced] lyrics. */
     @Serializable @SerialName("shareLyrics")
     data class ShareLyrics(val song: SongRef, val synced: Boolean) : OpenSheet
+
+    /** Huddle's Send to a friend for [songs]: a song, or an album's or a playlist's ([kind]) with its [name] (HuddleSheets.kt). */
+    @Serializable @SerialName("sendTo")
+    data class SendTo(val songs: List<SongRef>, val kind: CardKind, val name: String? = null) : OpenSheet
 }
 
 /**
@@ -486,7 +497,8 @@ sealed interface OpenSheet {
  * and the cutter are their own windows.
  */
 val OpenSheet.inSheet: Boolean
-    get() = this is OpenSheet.Menu || this is OpenSheet.AddTo || this is OpenSheet.Lyrics || this is OpenSheet.Info || this is OpenSheet.More || this is OpenSheet.ShareLyrics
+    get() = this is OpenSheet.Menu || this is OpenSheet.AddTo || this is OpenSheet.Lyrics || this is OpenSheet.Info || this is OpenSheet.More || this is OpenSheet.ShareLyrics ||
+        this is OpenSheet.SendTo
 
 /** Which sheet a page has open ([SongSheetsHost] draws it). Main thread only. */
 @Stable
@@ -517,6 +529,7 @@ private fun songsIn(sheet: OpenSheet): Int = when (sheet) {
     is OpenSheet.NewQueue -> sheet.songs.size
     is OpenSheet.NewPlaylist -> sheet.songs.size
     is OpenSheet.Trash -> sheet.songs.size
+    is OpenSheet.SendTo -> sheet.songs.size
     else -> 1
 }
 
@@ -705,6 +718,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                             sheets.close()
                             scope.launch { toasts.say(resources, shareSongs(context, listOf(song), ui::title)) }
                         }
+                        SheetRow.SEND -> sheets.show(OpenSheet.SendTo(listOf(song.ref), CardKind.SONG))
                         SheetRow.SONG_INFO -> sheets.show(OpenSheet.Info(song.ref))
                         SheetRow.EDIT_TAGS -> {
                             sheets.close()
@@ -776,6 +790,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                     onDismiss = sheets::close,
                 )
             }
+            is OpenSheet.SendTo -> SendToFriendSheet(step.songs.mapNotNull(::songOf), step.kind, step.name, onDismiss = sheets::close)
             else -> Unit
         }
     }

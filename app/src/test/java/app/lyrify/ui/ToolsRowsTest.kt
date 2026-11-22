@@ -36,7 +36,9 @@ class ToolsRowsTest {
 
     @Test
     fun `the rows come in the prototype's order, Trash after Duplicates, Settings last`() {
-        assertEquals(listOf(Tool.CHECK, Tool.DUPLICATES, Tool.TRASH, Tool.TONES, Tool.COVERS_TAGS, Tool.DOWNLOADS, Tool.AI, Tool.SETTINGS), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0).map { it.tool })
+        assertEquals(listOf(Tool.CHECK, Tool.DUPLICATES, Tool.TRASH, Tool.TONES, Tool.COVERS_TAGS, Tool.DOWNLOADS, Tool.AI, Tool.HUDDLE, Tool.SETTINGS), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0).map { it.tool })
+        val huddle = EntryRow(ToolLine.Count(R.plurals.huddle_friends, 2), badge = 1)
+        assertEquals(ToolRow(Tool.HUDDLE, huddle.line, badge = 1), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0, huddle = huddle).single { it.tool == Tool.HUDDLE })
     }
 
     @Test

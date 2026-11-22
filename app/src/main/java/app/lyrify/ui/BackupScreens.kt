@@ -49,6 +49,7 @@ import app.lyrify.backup.MissingSong
 import app.lyrify.backup.RestorePlan
 import app.lyrify.backup.RestoreResult
 import app.lyrify.backup.Section
+import app.lyrify.huddle.HuddleGraph
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
@@ -120,10 +121,24 @@ private const val SHOWN: Int = 50
 
 /** What the restore sheet shows: the summary of a picked backup, or, after the restore, what came back and what did not. */
 private sealed interface RestoreSheet {
-    data class Summary(val plan: RestorePlan, val chosen: Set<Section>, val restoring: Boolean = false) : RestoreSheet
+    /**
+     * [friends]: Huddle's friends ticked, with the [passphrase] they were locked with (memory only, never saved); [wrong]
+     * after one that did not open them.
+     */
+    data class Summary(
+        val plan: RestorePlan,
+        val chosen: Set<Section>,
+        val restoring: Boolean = false,
+        val friends: Boolean = plan.contents.huddle != null,
+        val passphrase: String = "",
+        val wrong: Boolean = false,
+    ) : RestoreSheet
 
-    /** [missing]: the songs of the backup not on this phone; [ai]: the AI lyrics came back on, so their models download again. */
-    data class Done(val result: RestoreResult, val missing: List<MissingSong>, val ai: Boolean) : RestoreSheet
+    /**
+     * [missing]: the songs of the backup not on this phone; [ai]: the AI lyrics came back on, so their models download
+     * again; [friends]: how many Huddle friends came back, null when none were asked for.
+     */
+    data class Done(val result: RestoreResult, val missing: List<MissingSong>, val ai: Boolean, val friends: Int? = null) : RestoreSheet
 }
 
 /**
@@ -227,13 +242,20 @@ fun rememberBackupActions(setAutomatic: (Boolean) -> Unit): BackupActions {
     RestoreSheet(
         sheet,
         onRestore = { summary ->
-            sheet.value = summary.copy(restoring = true)
+            sheet.value = summary.copy(restoring = true, wrong = false)
             scope.launch {
+                // Huddle's friends first: a passphrase that does not open them restores nothing yet, and says so.
+                val huddle = summary.plan.contents.huddle?.takeIf { summary.friends }
+                val friends = huddle?.let { withContext(NonCancellable + Dispatchers.Default) { HuddleGraph.huddle(app).restore(it, summary.passphrase.toCharArray()) } }
+                if (huddle != null && friends == null) {
+                    sheet.value = summary.copy(restoring = false, wrong = true)
+                    return@launch
+                }
                 val result = withContext(NonCancellable) { Backups.restore(app, summary.plan, summary.chosen) }
                 val missing = withContext(Dispatchers.Default) { summary.plan.missing(summary.chosen) }
                 val ai = Section.SETTINGS in result.restored && summary.plan.contents.aiLyrics == true
                 picked.value = null
-                sheet.value = RestoreSheet.Done(result, missing, ai)
+                sheet.value = RestoreSheet.Done(result, missing, ai, friends)
             }
         },
         onClose = {
@@ -285,6 +307,7 @@ private fun RestoreSheet(state: MutableState<RestoreSheet?>, onRestore: (Restore
                 modifier = Modifier.semantics { heading() },
             )
             restoredRows(result).forEach { (section, count) -> CountRow(stringResource(sectionLabel(section)), count) }
+            sheet.friends?.let { CountRow(stringResource(R.string.huddle_restore_row), it) }
             if (sheet.missing.isNotEmpty()) MissingSongs(sheet.missing, after = true)
             if (result.tonesNotFound > 0) Fact(R.drawable.ic_info, pluralStringResource(R.plurals.restore_tones_missing, result.tonesNotFound, formatCount(result.tonesNotFound)))
             if (result.pickAgain.isNotEmpty()) Fact(R.drawable.ic_info, stringResource(R.string.restore_pick_again, result.pickAgain.joinToString(", ")))
@@ -308,13 +331,13 @@ private fun RestoreSheet(state: MutableState<RestoreSheet?>, onRestore: (Restore
             LyrifySheet(
                 onDismiss = { if (!sheet.restoring) onClose() },
                 footer = {
-                    if (rows.isNotEmpty()) {
+                    if (rows.isNotEmpty() || contents.huddle != null) {
                         LyrifyButton(
                             stringResource(R.string.restore_button),
                             onClick = { onRestore(sheet) },
                             modifier = Modifier.fillMaxWidth(),
                             icon = R.drawable.ic_settings_backup_restore,
-                            enabled = sheet.chosen.isNotEmpty() && !sheet.restoring,
+                            enabled = (sheet.chosen.isNotEmpty() || sheet.friends) && !sheet.restoring,
                         )
                     }
                     LyrifyButton(stringResource(R.string.restore_cancel), onClick = onClose, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, enabled = !sheet.restoring)
@@ -323,11 +346,21 @@ private fun RestoreSheet(state: MutableState<RestoreSheet?>, onRestore: (Restore
                 Text(stringResource(R.string.restore_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
                 val made = DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).format(Instant.ofEpochMilli(contents.createdAt).atZone(ZoneId.systemDefault()))
                 Text(stringResource(R.string.restore_made, made, contents.appVersion), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
-                if (rows.isEmpty()) Text(stringResource(R.string.restore_nothing), style = MaterialTheme.typography.bodyLarge)
+                if (rows.isEmpty() && contents.huddle == null) Text(stringResource(R.string.restore_nothing), style = MaterialTheme.typography.bodyLarge)
                 rows.forEach { row ->
                     SectionRow(row, checked = row.section in sheet.chosen, enabled = !sheet.restoring) { on ->
                         state.value = sheet.copy(chosen = if (on) sheet.chosen + row.section else sheet.chosen - row.section)
                     }
+                }
+                if (contents.huddle != null) {
+                    HuddleRestoreRow(
+                        sheet.friends,
+                        sheet.passphrase,
+                        sheet.wrong,
+                        enabled = !sheet.restoring,
+                        onCheck = { state.value = sheet.copy(friends = it, wrong = false) },
+                        onPassphrase = { state.value = sheet.copy(passphrase = it, wrong = false) },
+                    )
                 }
                 contents.tooNew.forEach { Fact(R.drawable.ic_info, stringResource(R.string.restore_too_new, stringResource(sectionLabel(it)))) }
                 if (contents.unknown > 0) Fact(R.drawable.ic_info, pluralStringResource(R.plurals.restore_unknown, contents.unknown, formatCount(contents.unknown)))

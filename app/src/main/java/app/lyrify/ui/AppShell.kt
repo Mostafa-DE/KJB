@@ -189,7 +189,7 @@ fun AppShell(
     )
     val dupes by rememberDuplicates().state.collectAsStateWithLifecycle()
     val tones by remember(context) { ToneListStore.of(context).state }.collectAsStateWithLifecycle(TonesState())
-    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsRow(), ai, aiWaiting, downloadsRow(), rememberTrashSongs())
+    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsRow(), ai, aiWaiting, downloadsRow(), rememberTrashSongs(), huddleRow())
     val own = rememberOwnNow()
     val followed by NowPlaying.followed.collectAsStateWithLifecycle()
     val other = rememberOtherSession(followed?.takeIf { grants.access.notifications })
@@ -398,6 +398,7 @@ private fun PageContent(
         Page.Tones -> TonesPage(lyrics.ledger) { back() }
         Page.Ai -> AiPage(ai, counts, aiWaiting, aiDoneToday, aiActions, onOpenStatus = { nav.open(Page.Songs(it.group, it)) }) { back() }
         Page.Downloads -> DownloadsPage { back() }
+        Page.Huddle -> HuddlePage { back() }
         Page.CoversTags -> CoversTagsPage()
         Page.TagHistory -> TagHistoryPage()
         is Page.Settings -> SettingsScreen(settings, onSettings, grants, ai, aiActions, backup, versionName, onOpen = nav::open, section = page.section) { back() }

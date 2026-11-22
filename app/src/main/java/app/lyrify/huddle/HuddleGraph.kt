@@ -11,6 +11,7 @@ import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
 import app.lyrify.stats.PlayEvent
 import app.lyrify.stats.PlayEvents
+import app.lyrify.suggestions.FriendsSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -71,6 +72,9 @@ object HuddleGraph {
         val server = HuddleClient(BuildConfig.HUDDLE_HOST, USER_AGENT, log = log)
         Huddle(HuddleFiles.of(context), server, BuildConfig.HUDDLE_HOST, hosts, System::currentTimeMillis, SecureRandom(), scope, log)
     }.also { huddle = it }
+
+    /** Friends' plays for Suggestions (handoff/sg1-interfaces.md, section 3): the integration wires it in SuggestionsGraph. */
+    fun friends(context: Context): FriendsSource = HuddleFriends(HuddleFiles.of(context))
 
     /** Where the player's plays go for Friends sharing (player/PlaybackService.kt). */
     fun plays(context: Context): PlayEvents {

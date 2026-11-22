@@ -68,9 +68,9 @@ import java.util.Locale
 
 /**
  * The song sheet: the cover, the title, the artist and the album as links, then [rows] (Play next, Add to, the heart,
- * Lyrics with its status, Make a tone, Cut, Share, Song info, Edit tags and the rows of where it was opened), the
- * [bookmarks] slot, and Move to trash apart at the bottom, in the danger colour. Share asks Song or Lyrics first for a song
- * with lyrics to share ([onShareLyrics], [ShareChoice]).
+ * Lyrics with its status, Make a tone, Cut, Share, Send to a friend, Song info, Edit tags and the rows of where it was
+ * opened), the [bookmarks] slot, and Move to trash apart at the bottom, in the danger colour. Share asks Song or Lyrics
+ * first for a song with lyrics to share ([onShareLyrics], [ShareChoice]).
  */
 @Composable
 internal fun SongMenuSheet(
@@ -101,6 +101,7 @@ internal fun SongMenuSheet(
                     SheetRow.SHARE -> ShareChoice(lyrics = onShareLyrics != null, onSong = { onRow(row) }, onLyrics = { onShareLyrics?.invoke() }) { tap ->
                         ActionRow(R.drawable.ic_share, stringResource(R.string.share), onClick = tap)
                     }
+                    SheetRow.SEND -> ActionRow(R.drawable.ic_send, stringResource(R.string.huddle_send), chevron = true) { onRow(row) }
                     SheetRow.SONG_INFO -> ActionRow(R.drawable.ic_info, stringResource(R.string.lib_song_info)) { onRow(row) }
                     SheetRow.EDIT_TAGS -> ActionRow(R.drawable.ic_sell, stringResource(R.string.lib_edit_tags)) { onRow(row) }
                     SheetRow.BOOK -> {
@@ -153,6 +154,7 @@ internal fun CollectionMenuSheet(title: String, line: String, art: @Composable (
                     CollectionRow.PLAY_NEXT -> ActionRow(R.drawable.ic_queue_play_next, stringResource(R.string.lib_play_next)) { onRow(row) }
                     CollectionRow.ADD_TO -> ActionRow(R.drawable.ic_playlist_add, stringResource(R.string.lib_add_to), chevron = true) { onRow(row) }
                     CollectionRow.SHUFFLE -> ActionRow(R.drawable.ic_shuffle, stringResource(R.string.lib_shuffle)) { onRow(row) }
+                    CollectionRow.SEND -> ActionRow(R.drawable.ic_send, stringResource(R.string.huddle_send), chevron = true) { onRow(row) }
                     CollectionRow.GO_TO_ARTIST -> ActionRow(R.drawable.ic_person, stringResource(R.string.player_menu_artist)) { onRow(row) }
                     CollectionRow.COVERS_TAGS -> ActionRow(R.drawable.ic_album, stringResource(R.string.tools_covers)) { onRow(row) }
                     CollectionRow.EDIT_ALBUM -> ActionRow(R.drawable.ic_edit, stringResource(R.string.lib_edit_album)) { onRow(row) }
