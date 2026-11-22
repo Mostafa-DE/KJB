@@ -239,7 +239,7 @@ private operator fun Period.contains(at: Long): Boolean = at >= from && at < unt
 private fun List<LoggedPlay>.within(period: Period?): List<LoggedPlay> = if (period == null) this else filter { it.startedAt in period }
 
 /** [plays] per song, as the log's totals give them: under the latest play's song, so its id hint is the latest. */
-private fun songPlaysOf(plays: List<LoggedPlay>): List<SongPlays> = plays.groupBy { it.song.path }.map { (_, its) ->
+internal fun songPlaysOf(plays: List<LoggedPlay>): List<SongPlays> = plays.groupBy { it.song.path }.map { (_, its) ->
     SongPlays(its.maxBy { it.startedAt }.song, its.count { it.counted }, its.filter { it.counted }.maxOfOrNull { it.startedAt }, its.sumOf { it.realMs })
 }
 

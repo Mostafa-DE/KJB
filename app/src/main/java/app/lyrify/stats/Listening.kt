@@ -8,6 +8,8 @@ import app.lyrify.library.SongRef
 import app.lyrify.library.albumKey
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.text.Collator
 import java.time.DayOfWeek
@@ -17,6 +19,7 @@ import java.time.YearMonth
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
+import java.util.concurrent.atomic.AtomicLong
 
 /** Your listening's periods: this week, this month, this year, or all time, in the phone's own calendar. */
 enum class ListeningPeriod { WEEK, MONTH, YEAR, ALL_TIME }
@@ -130,6 +133,11 @@ private fun bySong(totals: List<SongPlays>, library: Library, shownOnly: Boolean
 /**
  * Plays per song from [store], joined with the [library] of the moment: Most played, Recently played and Song info
  * ([PlaysQuery]), and Insights with the book log ([books]) and the [favourites]. Sorting and joining run on [compute].
+ *
+ * Insights keep their own copy of the logs between reads, as a heavy listener's history reaches 100,000 plays (lead,
+ * 2026-11-22): read whole the first time and after a restore or an import, else only from the earliest play written
+ * since ([changed], [booksChanged]: its row may have changed, and the plays after it), spliced in. A period that is over
+ * is worked out once and again only when a play in it or before it is written, or the library or Favourites change.
  */
 class PlayStats(
     private val store: PlayLogStore,
@@ -191,16 +199,112 @@ class PlayStats(
 
     /** The months with a recap ([recapMonths]), the latest first. */
     suspend fun recaps(now: Long, zone: ZoneId): List<YearMonth> {
-        val plays = store.listened()
+        val plays = logs()?.plays.orEmpty()
         return withContext(compute) { recapMonths(plays, now, zone, library()) }
     }
 
-    private suspend fun insights(bounds: Period?, previous: Period?, now: Long, zone: ZoneId): Insights {
-        val data = InsightsData(store.listened(), books?.listened().orEmpty(), store.totals(), favourites())
-        return withContext(compute) { insightsOf(data, bounds, previous, now, zone, library()) }
+    /**
+     * A play of [startedAt] written to the play log, or (null) many at once: a restore, an import or its Undo. Called by
+     * the log itself ([WatchedPlayLog]), on any thread.
+     */
+    fun changed(startedAt: Long?) = mark(musicSince, startedAt)
+
+    /** The same for the book log. */
+    fun booksChanged(startedAt: Long?) = mark(booksSince, startedAt)
+
+    private fun mark(since: AtomicLong, startedAt: Long?) {
+        since.accumulateAndGet(startedAt ?: EVERY, ::minOf)
     }
 
+    /**
+     * Insights for [bounds] against [previous]. A period that is over keeps only its own figures (the nudges look at now
+     * and all time, so they are the page's, never a recap's), which is what makes it safe to keep.
+     */
+    private suspend fun insights(bounds: Period?, previous: Period?, now: Long, zone: ZoneId): Insights {
+        val logs = logs()
+        val library = library()
+        val favourites = favourites()
+        val stamp = library to favourites
+        val over = bounds?.takeIf { it.until <= now }
+        held.withLock {
+            if (overFor != stamp) {
+                worked.clear()
+                overFor = stamp
+            }
+            over?.let { worked[it to previous] }?.let { return it }
+        }
+        val insights = withContext(compute) {
+            val all = insightsOf((logs ?: InsightsData(emptyList())).copy(favourites = favourites), bounds, previous, now, zone, library)
+            if (over == null) all else all.copy(neverPlayed = emptyList(), digDeeper = emptyList(), forgotten = emptyList())
+        }
+        // A log that could not be read gives nothing, worked out again next time.
+        if (over != null && logs != null) held.withLock { if (overFor == stamp) worked[over to previous] = insights }
+        return insights
+    }
+
+    /**
+     * The logs as Insights read them, kept between reads (see the class), with the periods over that a write touched let
+     * go; null while the play log cannot be read (read whole again next time).
+     */
+    private suspend fun logs(): InsightsData? = held.withLock {
+        val musicFrom = musicSince.getAndSet(NONE)
+        val booksFrom = booksSince.getAndSet(NONE)
+        val music = music
+        this.music = when {
+            music == null || musicFrom == EVERY -> store.all()?.let { all ->
+                imports = slim(all.filter { it.imported })
+                slim(all.filter { !it.imported && !it.isShort })
+            }
+            musicFrom == NONE -> music
+            else -> spliced(music, musicFrom, store.listened(from = musicFrom))
+        }
+        val bookPlays = this.bookPlays
+        this.bookPlays = when {
+            books == null -> emptyList()
+            bookPlays == null || booksFrom == EVERY -> books.all()?.let { all -> slim(all.filter { !it.isShort }) }
+            booksFrom == NONE -> bookPlays
+            else -> spliced(bookPlays, booksFrom, books.listened(from = booksFrom))
+        }
+        val touched = minOf(musicFrom, booksFrom)
+        if (touched != NONE) worked.keys.removeAll { (period, _) -> touched < period.until }
+        // A log not read (or a read cut short) stays null, so the next read is whole.
+        val read = this.music ?: return@withLock null
+        if (read !== music) ever = songPlaysOf(imports + read)
+        InsightsData(read, this.bookPlays.orEmpty(), ever)
+    }
+
+    /**
+     * [kept] with its plays from [from] on as [read] gives them now; none when the read came short (a play the copy has
+     * from there on is missing: a row is never taken out but by an import's Undo, which reads all), to read whole.
+     */
+    private fun spliced(kept: List<LoggedPlay>, from: Long, read: List<LoggedPlay>): List<LoggedPlay>? {
+        val before = kept.filter { it.startedAt < from }
+        return if (read.size < kept.size - before.size) null else before + slim(read)
+    }
+
+    /** Only what Insights use of [plays] (how each began and ended is not kept), each song's reference once: 100,000 plays stay a few MB. */
+    private fun slim(plays: List<LoggedPlay>): List<LoggedPlay> = plays.map { it.copy(song = refs.getOrPut(it.song) { it.song }, start = null, end = null) }
+
+    /** Insights' copy of the logs and the periods over already worked out, by their bounds and the period before. */
+    private val held = Mutex()
+    private var music: List<LoggedPlay>? = null
+    private var imports: List<LoggedPlay> = emptyList()
+    private var bookPlays: List<LoggedPlay>? = null
+    private var ever: List<SongPlays> = emptyList()
+    private val refs = HashMap<SongRef, SongRef>()
+    private val worked = HashMap<Pair<Period, Period?>, Insights>()
+    private var overFor: Pair<Library?, List<SongRef>>? = null
+
+    /** The earliest start among the plays written since Insights last read each log: [NONE] for none, [EVERY] for a restore or an import. */
+    private val musicSince = AtomicLong(NONE)
+    private val booksSince = AtomicLong(NONE)
+
     private fun songPlays(top: Top<Song>): SongPlays = SongPlays(top.item.ref, top.plays, top.lastPlayedAt, top.heardMs)
+
+    private companion object {
+        const val NONE: Long = Long.MAX_VALUE
+        const val EVERY: Long = Long.MIN_VALUE
+    }
 }
 
 /** When a song was last played, as Song info and Recently played say it. */

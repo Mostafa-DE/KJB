@@ -331,6 +331,18 @@ fun keepAside(file: File, now: Long): File? {
     return aside
 }
 
+/**
+ * [next], telling [changed] the start of each play written, or null for many at once (a restore, an import or its
+ * Undo), once it is written: so Insights read again only what changed ([PlayStats.changed]).
+ */
+class WatchedPlayLog(private val next: PlayLogStore, private val changed: (Long?) -> Unit) : PlayLogStore by next {
+    override suspend fun put(play: LoggedPlay, open: OpenState?): Boolean = next.put(play, open).also { if (it) changed(play.startedAt) }
+
+    override suspend fun putAll(plays: List<LoggedPlay>): Boolean = next.putAll(plays).also { if (it) changed(null) }
+
+    override suspend fun removeAll(plays: List<LoggedPlay>): Boolean = next.removeAll(plays).also { if (it) changed(null) }
+}
+
 /** [PlayLogStore] over [db], on [io]. The log gets exception names only. */
 class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDispatcher = Dispatchers.IO, private val log: (String) -> Unit = {}) : PlayLogStore {
     override suspend fun put(play: LoggedPlay, open: OpenState?): Boolean = withContext(io) {

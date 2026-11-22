@@ -51,6 +51,9 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.library.Album
@@ -72,6 +75,7 @@ import app.lyrify.stats.dayOf
 import app.lyrify.stats.recapMonthOf
 import app.lyrify.stats.whenPlayed
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.YearMonth
@@ -473,16 +477,28 @@ private fun rememberRecap(month: YearMonth): Insights? = rememberStats(month) { 
 @Composable
 private fun rememberRecaps(): List<YearMonth>? = rememberStats(Unit) { context -> StatsGraph.stats(context).recaps(System.currentTimeMillis(), ZoneId.systemDefault()) }
 
-/** What [read] gives for [key], read again whenever a play or a book's is written, the library or Favourites change, or the day turns. */
+/**
+ * What [read] gives for [key], read only while it shows (its layer on its way to the screen or on it, the app on
+ * screen): at once, then again at most every [REREAD_MS] as plays or a book's are written, and at once when the
+ * library or Favourites change or the day turns. PlayStats reads off the main thread, only what changed.
+ */
 @Composable
 private fun <T> rememberStats(key: Any, read: suspend (Context) -> T): T? {
     val context = LocalContext.current
-    val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
-    val books by remember(context) { StatsGraph.bookWritten(context) }.collectAsState()
     val library by remember(context) { LibraryGraph.repository(context).state }.collectAsState()
     val playlists by remember(context) { LibraryGraph.playlists(context).state }.collectAsState(null)
     val today = rememberToday()
-    val value by produceState<T?>(null, key, written, books, library, playlists?.favouriteSongs, today) { value = read(context) }
+    val shown = LocalLayerHeaded.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val value by produceState<T?>(null, key, library, playlists?.favouriteSongs, today, shown) {
+        if (!shown) return@produceState
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            StatsGraph.writes(context).conflate().collect {
+                value = read(context)
+                delay(REREAD_MS)
+            }
+        }
+    }
     return value
 }
 
@@ -555,6 +571,9 @@ fun listenedTime(ms: Long): ListenedTime {
     val minutes = (ms.coerceIn(0, Long.MAX_VALUE / 2) + MINUTE_MS / 2) / MINUTE_MS
     return ListenedTime((minutes / 60).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), (minutes % 60).toInt())
 }
+
+/** Insights read again at most this often while plays are written (one about every 15 s while music plays). */
+private const val REREAD_MS: Long = 3_000
 
 /** How many months Insights lists under Monthly recaps before "View all". */
 private const val RECAPS_SHOWN: Int = 3

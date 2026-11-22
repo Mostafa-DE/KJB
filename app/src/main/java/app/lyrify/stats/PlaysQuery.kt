@@ -12,7 +12,9 @@ import app.lyrify.settings.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -56,16 +58,17 @@ object StatsGraph {
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + logFailures)
     private var store: PlayLogStore? = null
     private var counter: PlayCounter? = null
+    @Volatile
     private var stats: PlayStats? = null
     private var share: StateFlow<Int?>? = null
     private var bookLog: PlayLogStore? = null
     private var bookCounter: PlayCounter? = null
 
-    /** `plays.db` in app-private `databases/`, an unreadable one moved aside there. */
+    /** `plays.db` in app-private `databases/`, an unreadable one moved aside there; what is written tells Insights. */
     @Synchronized
     private fun store(context: Context): PlayLogStore = store ?: run {
         val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
-        SqlPlayLog(PlaysDb(context.applicationContext, log = log), log = log)
+        WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, log = log), log = log)) { startedAt -> stats?.changed(startedAt) }
     }.also { store = it }
 
     /** "Count a play after", from the moment the settings are read and as they change; null until then. */
@@ -87,7 +90,7 @@ object StatsGraph {
     @Synchronized
     fun bookLog(context: Context): PlayLogStore = bookLog ?: run {
         val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
-        SqlPlayLog(PlaysDb(context.applicationContext, name = BOOK_PLAYS, log = log), log = log)
+        WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, name = BOOK_PLAYS, log = log), log = log)) { startedAt -> stats?.booksChanged(startedAt) }
     }.also { bookLog = it }
 
     /** Counts the time heard in books into the book log, as the play counter counts music. */
@@ -109,8 +112,8 @@ object StatsGraph {
         )
     }.also { stats = it }
 
-    /** Writes to the book log, counted as the play counter's [PlayCounter.written] counts its own: Insights read them again. */
-    fun bookWritten(context: Context): StateFlow<Int> = bookCounter(context).written
+    /** Writes to the play log and the book log, counted ([PlayCounter.written]): Insights read again after them. */
+    fun writes(context: Context): Flow<Int> = combine(counter(context).written, bookCounter(context).written) { music, books -> music + books }
 
     fun bookEvents(context: Context): PlayEvents = bookCounter(context)
 

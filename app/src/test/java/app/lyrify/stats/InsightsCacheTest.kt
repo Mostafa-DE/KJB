@@ -1,0 +1,206 @@
+package app.lyrify.stats
+
+import app.lyrify.library.Library
+import app.lyrify.library.SongRef
+import app.lyrify.library.VOLUME
+import app.lyrify.library.song
+import app.lyrify.settings.Settings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.time.DayOfWeek
+import java.time.YearMonth
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import kotlin.system.measureNanoTime
+
+/**
+ * Insights at scale (lead, 2026-11-22): what Insights keep of the logs between reads, so a play written reads again only
+ * that play (and the plays after it), a month that is over is worked out once, and 100,000 plays stay quick. Every
+ * figure is checked against a fresh read of the same logs. The phone is in Berlin; now is Wednesday 11 November 2026,
+ * 15:00. Made-up names only.
+ */
+class InsightsCacheTest {
+    private val berlin = ZoneId.of("Europe/Berlin")
+
+    private fun at(text: String): Long = ZonedDateTime.parse(text).toInstant().toEpochMilli()
+
+    private val now = at("2026-11-11T15:00+01:00[Europe/Berlin]")
+    private val oct15 = at("2026-10-15T12:00+02:00[Europe/Berlin]")
+
+    private val songs = (1..30).map { song("Music/KJB test/Made Up $it.mp3", artist = "Made Up Band ${it % 4}", album = "Made Up Album ${it % 6}", genre = "Folk", id = it.toLong(), addedAt = it.toLong()) }
+    private val library = Library.of(songs, Settings())
+
+    private fun play(i: Int, startedAt: Long, counted: Boolean = true): LoggedPlay =
+        LoggedPlay(songs[i % songs.size].ref, startedAt, 120_000, counted, zoneOffsetMinutes = 60, clockMs = 100_000)
+
+    /** A play every 6 hours from 1 August to now, most of them counted, and one import. */
+    private val history: List<LoggedPlay> = run {
+        val from = at("2026-08-01T00:00+02:00[Europe/Berlin]")
+        val plays = generateSequence(0) { it + 1 }.map { i -> play(i, from + i * 6 * HOUR, counted = i % 7 != 0) }.takeWhile { it.startedAt < now - HOUR }.toList()
+        plays + LoggedPlay(songs[29].ref, from - DAY, 0, counted = true, imported = true)
+    }
+
+    private val book = SongRef(VOLUME + "Audiobooks/Salt Road/part 1.m4b")
+    private val bookHistory = List(20) { LoggedPlay(book, oct15 + it * DAY, 900_000, counted = false, clockMs = 600_000) }
+
+    /** [next], counting the plays its reads give: what Insights read of a log. */
+    private class Counted(private val next: PlayLogStore) : PlayLogStore by next {
+        var rows = 0
+
+        override suspend fun all(): List<LoggedPlay>? = next.all()?.also { rows += it.size }
+
+        override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> = next.listened(from, until).also { rows += it.size }
+    }
+
+    private fun stats(log: PlayLogStore, books: PlayLogStore? = null) = PlayStats(log, { library }, Dispatchers.Unconfined, books = books)
+
+    /** What a fresh read of [log] and [books] gives: the figures the kept ones must match. */
+    private fun fresh(log: PlayLogStore, books: PlayLogStore? = null, ask: suspend PlayStats.() -> Insights): Insights = runBlocking { stats(log, books).ask() }
+
+    private suspend fun PlayStats.month(): Insights = insights(ListeningPeriod.MONTH, now, berlin, DayOfWeek.MONDAY)
+
+    @Test
+    fun `a play written after Insights were read is read again alone, and nothing written reads nothing`() = runBlocking {
+        val log = FakePlayLog(history)
+        val read = Counted(log)
+        val stats = stats(read)
+        val written = WatchedPlayLog(log, stats::changed)
+        val before = stats.month()
+
+        read.rows = 0
+        written.put(play(3, now - 10 * MINUTE), OpenState(200_000, 30_000, emptyList()))
+        val after = stats.month()
+
+        assertEquals(1, read.rows)
+        assertEquals(fresh(log) { month() }, after)
+        assertEquals(before.totals?.plays?.plus(1), after.totals?.plays)
+        // The same play kept again as it goes on, then closed: still only it.
+        written.put(play(3, now - 10 * MINUTE).copy(heardMs = 200_000, clockMs = 190_000))
+        read.rows = 0
+        assertEquals(fresh(log) { month() }, stats.month())
+        assertEquals(1, read.rows)
+        // Nothing written since: nothing read, for any period.
+        read.rows = 0
+        ListeningPeriod.entries.forEach { stats.insights(it, now, berlin, DayOfWeek.MONDAY) }
+        stats.recaps(now, berlin)
+        assertEquals(0, read.rows)
+    }
+
+    @Test
+    fun `a play from earlier written again reads from it on, and a restore or an import reads everything again`() = runBlocking {
+        val log = FakePlayLog(history)
+        val read = Counted(log)
+        val stats = stats(read)
+        val written = WatchedPlayLog(log, stats::changed)
+        stats.month()
+
+        // A play kept before the app stopped, closed now as it stood: the plays from its start on.
+        val kept = history.filter { !it.imported }.takeLast(3).first()
+        read.rows = 0
+        written.put(kept.copy(end = PlayEnded(PlayEnd.STOPPED, 60_000)))
+        assertEquals(fresh(log) { month() }, stats.month())
+        assertEquals(3, read.rows)
+
+        // A restore: every play again, the imported ones too.
+        read.rows = 0
+        written.putAll(listOf(play(5, oct15 + HOUR), LoggedPlay(songs[28].ref, oct15 + 2 * HOUR, 0, counted = true, imported = true)))
+        assertEquals(fresh(log) { month() }, stats.month())
+        assertEquals(log.plays.size, read.rows)
+
+        // An import's Undo.
+        read.rows = 0
+        written.removeAll(listOf(log.plays.first { it.imported && it.startedAt == oct15 + 2 * HOUR }))
+        assertEquals(fresh(log) { month() }, stats.month())
+        assertEquals(log.plays.size, read.rows)
+    }
+
+    @Test
+    fun `a month that is over is worked out once, and again only when a play in it or before it is written`() = runBlocking {
+        val log = FakePlayLog(history)
+        val stats = stats(log)
+        val written = WatchedPlayLog(log, stats::changed)
+        val october = YearMonth.of(2026, 10)
+        val first = stats.recap(october, now, berlin)
+
+        assertSame(first, stats.recap(october, now, berlin))
+        // A play this month leaves October as it was.
+        written.put(play(1, now - MINUTE))
+        assertSame(first, stats.recap(october, now, berlin))
+        // One in October (a play kept from then, closed late) does not.
+        written.put(play(2, oct15 + 30 * MINUTE))
+        val again = stats.recap(october, now, berlin)
+        assertNotSame(first, again)
+        assertEquals(fresh(log) { recap(october, now, berlin) }, again)
+        assertEquals(first.totals?.plays?.plus(1), again.totals?.plays)
+    }
+
+    @Test
+    fun `a book's play written reads the book log again from it alone, and the music log not at all`() = runBlocking {
+        val log = FakePlayLog(history)
+        val books = FakePlayLog(bookHistory)
+        val read = Counted(log)
+        val readBooks = Counted(books)
+        val stats = stats(read, readBooks)
+        val written = WatchedPlayLog(books, stats::booksChanged)
+        val before = stats.month()
+
+        read.rows = 0
+        readBooks.rows = 0
+        written.put(LoggedPlay(book, now - HOUR, 1_200_000, counted = false, clockMs = 1_000_000))
+        val after = stats.month()
+
+        assertEquals(0, read.rows)
+        assertEquals(1, readBooks.rows)
+        assertEquals(fresh(log, books) { month() }, after)
+        assertEquals(before.spoken?.booksMs?.plus(1_000_000), after.spoken?.booksMs)
+    }
+
+    @Test
+    fun `on 100,000 plays Insights are worked out in a second or two, and one more play costs a small part of that`() = runBlocking {
+        val many = (1..3_000).map { song("Music/KJB test/Many $it.mp3", artist = "Made Up Band ${it % 40}", album = "Made Up Album ${it % 60}", genre = "Genre ${it % 9}", id = 1_000L + it, addedAt = it.toLong()) }
+        val big = Library.of(many, Settings())
+        val start = now - PLAYS * 20 * MINUTE
+        val log = FakePlayLog(List(PLAYS) { i -> LoggedPlay(many[(i * 7_919) % many.size].ref, start + i * 20 * MINUTE, 150_000, counted = i % 5 != 0, zoneOffsetMinutes = 60, clockMs = 140_000) })
+        val read = Counted(log)
+        val stats = PlayStats(read, { big }, Dispatchers.Unconfined)
+        val written = WatchedPlayLog(log, stats::changed)
+
+        val cold = measureNanoTime {
+            ListeningPeriod.entries.forEach { stats.insights(it, now, berlin, DayOfWeek.MONDAY) }
+            stats.recaps(now, berlin)
+        } / 1_000_000
+        written.put(LoggedPlay(many[7].ref, now - MINUTE, 150_000, counted = true, zoneOffsetMinutes = 60, clockMs = 140_000))
+        read.rows = 0
+        val warm = measureNanoTime { stats.month() } / 1_000_000
+        println("IN1 measure: Insights on $PLAYS plays, every period and the recaps from cold: $cold ms; this month again after one play: $warm ms")
+
+        assertEquals(1, read.rows)
+        assertTrue("from cold: $cold ms", cold < COLD_MS)
+        assertTrue("after one play: $warm ms", warm < WARM_MS)
+    }
+
+    @Test
+    fun `the app's play log and book log tell Insights each play written`() {
+        val graph = java.io.File("src/main/java/app/lyrify/stats/PlaysQuery.kt").readText()
+        assertTrue(graph.contains("WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, log = log), log = log)) { startedAt -> stats?.changed(startedAt) }"))
+        assertTrue(graph.contains("WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, name = BOOK_PLAYS, log = log), log = log)) { startedAt -> stats?.booksChanged(startedAt) }"))
+        // Seen at once by the threads that write.
+        assertTrue(graph.contains("@Volatile\n    private var stats: PlayStats? = null"))
+    }
+
+    private companion object {
+        const val MINUTE: Long = 60_000
+        const val HOUR: Long = 3_600_000
+        const val DAY: Long = 86_400_000
+        const val PLAYS: Int = 100_000
+
+        /** Measured on the laptop (2026-11-22): see the report; with room for other lanes' builds running at once. */
+        const val COLD_MS: Long = 3_000
+        const val WARM_MS: Long = 400
+    }
+}

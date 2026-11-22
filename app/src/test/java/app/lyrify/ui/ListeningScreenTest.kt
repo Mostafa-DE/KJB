@@ -52,6 +52,23 @@ class ListeningScreenTest {
     // Insights (KJB 3.2)
 
     @Test
+    fun `Insights are worked out only while they show, the app on screen, and at most every few seconds as plays are written`() {
+        val listening = source("ListeningScreen.kt")
+        val reads = listening.substringAfter("private fun <T> rememberStats(").substringBefore("\n}\n")
+        listOf(
+            "val shown = LocalLayerHeaded.current",
+            "if (!shown) return@produceState",
+            "lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED)",
+            "StatsGraph.writes(context).conflate().collect",
+            "delay(REREAD_MS)",
+        ).forEach { assertTrue(it, reads.contains(it)) }
+        assertTrue(listening.contains("private const val REREAD_MS: Long = 3_000"))
+        // Never on the main thread: PlayStats reads on IO and works out on Default.
+        val stats = File("src/main/java/app/lyrify/stats/Listening.kt").readText()
+        assertTrue(stats.contains("withContext(compute) {\n            val all = insightsOf("))
+    }
+
+    @Test
     fun `against the period before is a whole percent of it, nothing without it`() {
         assertEquals(40, percentChange(140, 100))
         assertEquals(-25, percentChange(75, 100))
