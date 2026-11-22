@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Similar artists (similar/, KJB 3.2, lane lb1): the switch for the background lookups, in Settings > Library. -->
+<resources>
+    <string name="set_similar">Find similar artists online</string>
+    <string name="set_similar_detail">Asks MusicBrainz and ListenBrainz</string>
+</resources>

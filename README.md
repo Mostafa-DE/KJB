@@ -86,6 +86,9 @@ For lyrics and covers, only names and lengths leave your phone. Lyrics lookups s
 length to LRCLIB. Covers & tags sends album titles, artists, song titles, track counts and lengths to MusicBrainz, and
 gets covers from the Cover Art Archive and archive.org.
 
+- To find similar artists (Settings > Library > Find similar artists online, on by default), KJB sends the names of
+  artists you play to MusicBrainz and their MusicBrainz ids to ListenBrainz, slowly, in the background. The lists it gets
+  back stay on your phone; suggestions never wait for them.
 - While you use KJB, it asks github.com every hour if there is a new version. KJB updates and the add-ons download from
   KJB's release page on GitHub.
 - The AI add-on downloads its models once, from Qualcomm AI Hub, GitHub and Hugging Face. The AI itself runs offline.

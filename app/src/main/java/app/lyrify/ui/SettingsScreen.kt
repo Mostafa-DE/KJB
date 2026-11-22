@@ -185,6 +185,10 @@ fun SettingsScreen(
                 SwitchRow(R.drawable.ic_description, R.string.set_filenames, stringResource(R.string.set_filenames_detail), library.showFileNames) { on ->
                     onChange { it.copy(library = it.library.copy(showFileNames = on)) }
                 }
+                // Its background lookups follow the switch (similar/SimilarWork.kt).
+                SwitchRow(R.drawable.ic_travel_explore, R.string.set_similar, stringResource(R.string.set_similar_detail), library.findSimilarOnline) { on ->
+                    onChange { it.copy(library = it.library.copy(findSimilarOnline = on)) }
+                }
             }
             section(SettingsSection.DISPLAY, sections) {
                 val display = settings.display
