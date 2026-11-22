@@ -22,11 +22,13 @@ fun List<StoredPlay>.as310(): List<StoredPlay> = map { it.copy(play = it.play.as
  * written (a part the first write lacked filled in by a later one), how it ended as last written, and its import mark
  * once marked; with an [OpenState] it is kept as still going,
  * without one it is let go. A song's totals count its plays that counted, the last of those, and the time heard in all
- * its plays, the short ones ([LoggedPlay.isShort]) left out; its id hint is its latest play's of those. [failing]: every
- * write fails.
+ * its plays, the short ones ([LoggedPlay.isShort]) left out; its id hint is its latest play's of those. An interaction
+ * noted again (the same time and kind) replaces the one there, one restored leaves it as it is. [failing]: every write
+ * and every read of the interactions fails.
  */
-class FakePlayLog(plays: List<LoggedPlay> = emptyList()) : PlayLogStore {
+class FakePlayLog(plays: List<LoggedPlay> = emptyList(), interactions: List<Interaction> = emptyList()) : PlayLogStore {
     val plays: MutableList<LoggedPlay> = plays.toMutableList()
+    val interactions: MutableList<Interaction> = interactions.toMutableList()
     private val open = LinkedHashMap<Pair<String, Long>, OpenState>()
     var failing: Boolean = false
 
@@ -60,8 +62,32 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList()) : PlayLogStore {
 
     override suspend fun all(): List<LoggedPlay>? = if (failing) null else plays.sortedBy { it.startedAt }
 
-    /** Each as [put] writes it, or none when [failing]. */
-    override suspend fun putAll(plays: List<LoggedPlay>): Boolean = !failing && plays.all { put(it) }
+    /** Each as [put] writes it, and each interaction not there yet, or none when [failing]. */
+    override suspend fun putAll(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean {
+        if (failing) return false
+        plays.forEach { put(it) }
+        interactions.filter { new -> this.interactions.none { it.at == new.at && it.kind == new.kind } }.forEach { this.interactions += it }
+        return true
+    }
+
+    override suspend fun note(interaction: Interaction): Boolean {
+        if (failing) return false
+        interactions.removeAll { it.at == interaction.at && it.kind == interaction.kind }
+        interactions += interaction
+        return true
+    }
+
+    override suspend fun interactions(from: Long?, until: Long?): List<Interaction>? = if (failing) {
+        null
+    } else {
+        interactions.filter { (from == null || it.at >= from) && (until == null || it.at < until) }.sortedWith(compareBy({ it.at }, { codeOf(it.kind) }))
+    }
+
+    override suspend fun forget(times: List<Long>): Boolean {
+        if (failing) return false
+        interactions.replaceAll { if (it.kind == InteractionKind.SEARCH && it.at in times) it.copy(words = null) else it }
+        return true
+    }
 
     /** Each by its song and start, or none when [failing]. */
     override suspend fun removeAll(plays: List<LoggedPlay>): Boolean {
@@ -89,8 +115,8 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList()) : PlayLogStore {
 
 /**
  * `plays.db`'s own SQL ([PlaysSchema]) on the laptop's SQLite, in memory: what [SqlPlayLog] runs on the phone, the same
- * statements with the same values ([PlaysSchema.putArgs]) and rows read the same way ([loggedPlayOf], [songPlaysOf],
- * [storedPlayOf]). Made at [version] (3.1.0's file is version 2); [upgrade] runs the steps after it as PlaysDb does.
+ * statements with the same values ([PlaysSchema.putArgs], [PlaysSchema.noteArgs]) and rows read the same way
+ * ([loggedPlayOf], [songPlaysOf], [storedPlayOf], [interactionOf]). Made at [version] (3.1.0's file is version 2); [upgrade] runs the steps after it as PlaysDb does.
  */
 class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoCloseable {
     val connection: Connection = DriverManager.getConnection("jdbc:sqlite::memory:")
@@ -154,8 +180,27 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
         buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
     }
 
-    override suspend fun putAll(plays: List<LoggedPlay>): Boolean {
-        transaction { plays.forEach { update(PlaysSchema.PUT, *PlaysSchema.putArgs(it)) } }
+    override suspend fun putAll(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean {
+        transaction {
+            plays.forEach { update(PlaysSchema.PUT, *PlaysSchema.putArgs(it)) }
+            interactions.forEach { update(PlaysSchema.RESTORE_INTERACTION, *PlaysSchema.noteArgs(it)) }
+        }
+        return true
+    }
+
+    override suspend fun note(interaction: Interaction): Boolean {
+        update(PlaysSchema.NOTE, *PlaysSchema.noteArgs(interaction))
+        return true
+    }
+
+    override suspend fun interactions(from: Long?, until: Long?): List<Interaction> =
+        query(PlaysSchema.INTERACTIONS, (from ?: Long.MIN_VALUE).toString(), (until ?: Long.MAX_VALUE).toString()) { rows ->
+            val row = ResultRow(rows)
+            buildList { while (rows.next()) interactionOf(row)?.let(::add) }
+        }
+
+    override suspend fun forget(times: List<Long>): Boolean {
+        transaction { times.forEach { update(PlaysSchema.FORGET, it) } }
         return true
     }
 
