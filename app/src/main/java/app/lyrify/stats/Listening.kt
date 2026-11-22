@@ -192,7 +192,7 @@ class PlayStats(
     /** The months with a recap ([recapMonths]), the latest first. */
     suspend fun recaps(now: Long, zone: ZoneId): List<YearMonth> {
         val plays = store.listened()
-        return withContext(compute) { recapMonths(plays, now, zone) }
+        return withContext(compute) { recapMonths(plays, now, zone, library()) }
     }
 
     private suspend fun insights(bounds: Period?, previous: Period?, now: Long, zone: ZoneId): Insights {

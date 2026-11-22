@@ -140,11 +140,13 @@ fun recapMonthOf(now: Long, zone: ZoneId): YearMonth = YearMonth.from(dayOf(now,
 
 /**
  * The months with a recap, the latest first: those before [now]'s month with [RECAP_MIN_PLAYS] plays that counted, in
- * the phone's calendar ([zone]).
+ * the phone's calendar ([zone]), as a recap's own totals count them: never a play of a file that is a book in [library]
+ * now.
  */
-fun recapMonths(plays: List<LoggedPlay>, now: Long, zone: ZoneId): List<YearMonth> {
+fun recapMonths(plays: List<LoggedPlay>, now: Long, zone: ZoneId, library: Library?): List<YearMonth> {
     val current = YearMonth.from(dayOf(now, zone).date)
-    return plays.filter { it.counted }
+    val kinds = Kinds(library)
+    return plays.filter { it.counted && kinds.of(it) != Kind.BOOK }
         .groupingBy { YearMonth.from(Instant.ofEpochMilli(it.startedAt).atZone(zone)) }
         .eachCount()
         .filter { (month, count) -> month < current && count >= RECAP_MIN_PLAYS }
@@ -281,7 +283,8 @@ private fun streaksOf(heard: List<LoggedPlay>, all: List<LoggedPlay>, going: Boo
     val current = if (going) {
         val ever = days(all)
         val today = dayOf(now, zone).date
-        runFrom(if (today in ever) today else today.minusDays(1), ever, step = -1)
+        // From today or yesterday; or from tomorrow, a day a play heard in a time zone ahead of the phone's is on already.
+        listOf(today.plusDays(1), today, today.minusDays(1)).filter { it in ever }.maxOfOrNull { runFrom(it, ever, step = -1) } ?: 0
     } else {
         null
     }

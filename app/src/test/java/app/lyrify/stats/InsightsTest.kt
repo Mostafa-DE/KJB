@@ -309,6 +309,15 @@ class InsightsTest {
     }
 
     @Test
+    fun `the current run reaches a day heard in a time zone ahead of the phone's, today there already`() {
+        // 21:30 UTC on the 10th: in Amman (heard there) already the 11th; on the phone, back in Berlin, still the 10th.
+        val heard = listOf(play(alder, nov(9)), play(birch, nov(10)), play(cedar, Instant.parse("2026-11-10T21:30:00Z").toEpochMilli(), zone = 180))
+        val evening = nov(10, "23:00")
+
+        assertEquals(3, insights(heard, period = week, previous = null, now = evening).streaks?.current)
+    }
+
+    @Test
     fun `the longest run is the period's own, the current one runs back from today or yesterday`() {
         val heard = listOf(nov(2), nov(3), nov(4), nov(6), nov(8), nov(9), nov(10)).map { play(alder, it) }
 
@@ -435,7 +444,16 @@ class InsightsTest {
             List(5) { play(cedar, at("2026-09-03T12:00+02:00[Europe/Berlin]") + it, counted = false) } +
             plays(dune, 12, at("2026-08-02T12:00+02:00[Europe/Berlin]")) + plays(elm, 20, nov(2))
 
-        assertEquals(listOf(YearMonth.of(2026, 10), YearMonth.of(2026, 8)), recapMonths(heard, now, berlin))
+        assertEquals(listOf(YearMonth.of(2026, 10), YearMonth.of(2026, 8)), recapMonths(heard, now, berlin, library))
+    }
+
+    @Test
+    fun `a month's plays of a file that is a book now make no recap, as its totals leave them out`() {
+        // Logged before the file became a book (Grok a-data): ten plays that the recap's own totals would not count.
+        val heard = plays(tome, 10, oct(2)) + plays(alder, 9, oct(3))
+
+        assertEquals(emptyList<YearMonth>(), recapMonths(heard, now, berlin, library))
+        assertEquals(listOf(YearMonth.of(2026, 10)), recapMonths(heard + play(birch, oct(4)), now, berlin, library))
     }
 
     @Test
