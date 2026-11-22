@@ -91,6 +91,8 @@ gets covers from the Cover Art Archive and archive.org.
 - The AI add-on downloads its models once, from Qualcomm AI Hub, GitHub and Hugging Face. The AI itself runs offline.
 - The Downloads add-on goes online for the links you share: it gets each one from that link's own site. Its
   downloader, yt-dlp, gets its updates from yt-dlp's releases on GitHub.
+- Search YouTube in Downloads sends the words you search for to YouTube, through the Downloads add-on. KJB then gets
+  each result's picture from YouTube.
 - Crash reports stay on your phone: the last 10, without song names, paths or lyrics. Nothing is sent unless you share
   one.
 - No account, no ads, no analytics. ONNX Runtime's telemetry is switched off.

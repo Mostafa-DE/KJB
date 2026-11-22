@@ -11,6 +11,7 @@ import app.lyrify.dl.api.DlKind
 import app.lyrify.dl.api.DlMeta
 import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlRequest
+import app.lyrify.dl.api.DlSearch
 import app.lyrify.dl.api.DlStage
 import app.lyrify.dl.api.DlStatus
 import app.lyrify.dl.api.DlUpdate
@@ -83,6 +84,8 @@ class DownloadRunnerTest {
         override fun info(url: String, events: DlLookupEvents): Long = 1
 
         override fun cancelInfo(lookup: Long) = Unit
+
+        override fun search(search: DlSearch, events: DlSearchEvents): Long = error("not a search")
 
         override fun start(request: DlRequest, events: DlRunEvents): Long {
             calls += "start ${request.key}"

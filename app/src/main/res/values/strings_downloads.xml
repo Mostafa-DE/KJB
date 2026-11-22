@@ -118,6 +118,17 @@
     <string name="dl_audio_quality_sheet">How this download is saved. Settings keeps the one KJB uses by default.</string>
     <string name="dl_best_detail">%1$s, about %2$s</string>
 
+    <!-- YouTube search: the page's field, and the search sheet (also Huddle's Search on YouTube) -->
+    <string name="dl_search">Search YouTube</string>
+    <string name="dl_search_hint">Song, artist or video</string>
+    <string name="dl_search_go">Search</string>
+    <string name="dl_searching">Searching YouTube</string>
+    <string name="dl_search_none">Nothing found. Try other words.</string>
+    <string name="dl_search_update">Searching YouTube needs a newer Downloads add-on.</string>
+    <string name="dl_search_get_first">Searching YouTube needs the Downloads add-on. Get it on the Downloads page.</string>
+    <string name="dl_search_update_first">Searching YouTube needs a newer Downloads add-on. Update it on the Downloads page.</string>
+    <string name="dl_open_downloads">Open Downloads</string>
+
     <!-- Settings > Downloads -->
     <string name="settings_downloads">Downloads</string>
     <string name="set_dl_quality">Audio quality</string>

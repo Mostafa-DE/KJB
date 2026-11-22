@@ -72,6 +72,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -91,11 +92,15 @@ import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlInfo
 import app.lyrify.dl.api.DlKind
 import app.lyrify.dl.api.DlProgress
+import app.lyrify.dl.api.DlSearch
+import app.lyrify.dl.api.DlSearchResult
+import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.DlUpdate
 import app.lyrify.dl.api.VideoChoice
 import app.lyrify.downloads.DlAddon
 import app.lyrify.downloads.DlLookup
 import app.lyrify.downloads.DlLookupEvents
+import app.lyrify.downloads.DlSearchEvents
 import app.lyrify.downloads.DownloadFailure
 import app.lyrify.downloads.DownloadFolders
 import app.lyrify.downloads.DownloadItem
@@ -159,8 +164,9 @@ fun downloadsRow(): EntryRow? {
 
 /**
  * Tools > Downloads: the add-on to get (or update) until it is ready, then Run when locked offered once; then a link field
- * with Paste (a copied link is offered when Check clipboard is on), and the downloads: what downloads now with Cancel,
- * what did not save with Retry, and what was saved (VidGrab's Finished list), newest first. After a download stalled
+ * with Paste (a copied link is offered when Check clipboard is on), Search YouTube (its videos in the search sheet; an
+ * add-on too old for it offers its update instead), and the downloads: what downloads now with Cancel, what did not save
+ * with Retry, and what was saved (VidGrab's Finished list), newest first. After a download stalled
  * with the phone locked, one plain line says so. Without [onBack] it is the bar's Downloads (KJB 3.1): the bar's header,
  * no Back, and its icon tapped again goes to the top.
  */
@@ -171,11 +177,14 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
     val toasts = LocalToasts.current
     val scope = rememberCoroutineScope()
     val ui by Downloads.state.collectAsStateWithLifecycle()
-    val addon by remember(context) { DlAddon.states(context) }.collectAsStateWithLifecycle(initialValue = null)
+    val dl by remember(context) { DlAddon.states(context) }.collectAsStateWithLifecycle(initialValue = null)
+    val addon = dl?.state
     val installer = remember(context) { AddonInstalls.installer(context, KjbAddons.DOWNLOADS) }
     val install by installer.state.collectAsStateWithLifecycle()
     var link by rememberSaveable { mutableStateOf("") }
     var looking by rememberSaveable { mutableStateOf<String?>(null) }
+    var words by rememberSaveable { mutableStateOf("") }
+    var searching by rememberSaveable { mutableStateOf<String?>(null) }
     var opened by remember { mutableStateOf<DownloadItem?>(null) }
     var filesAccess by remember { mutableStateOf(true) }
     // The add-on left out of the phone's battery optimisation (AD9), and what the user answered about it.
@@ -260,6 +269,18 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
                     Box(rowMotion(reduced)) { LinkField(link, { link = it }, onPaste = { clipboardLink(context)?.let { link = it } }) { ShareLinks.parse(link).firstOrNull()?.let { looking = it } } }
                 }
             }
+            // YouTube search, or the newer add-on it needs (getting it shows on the add-on card above).
+            if (dl?.searches == true) {
+                item(key = "search", contentType = "search") {
+                    Box(rowMotion(reduced)) {
+                        SearchField(words, { words = it }, stringResource(R.string.dl_search), Modifier.padding(horizontal = ScreenPadding)) { searching = words }
+                    }
+                }
+            } else if (ready && install == InstallState.Idle) {
+                item(key = "search-update", contentType = "search-update") {
+                    Box(rowMotion(reduced)) { Banner(R.drawable.ic_system_update, stringResource(R.string.dl_search_update), stringResource(R.string.dl_addon_update), installer::start) }
+                }
+            }
             downloadsList(ui, onOpen = { opened = it }, onCancel = { Downloads.cancel(context, it.key) })
         }
     }
@@ -281,6 +302,12 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
     looking?.let { url ->
         SaveSheet(url, onDismiss = { looking = null }) {
             link = ""
+            scope.launch { toasts.say(resources, R.string.dl_started) }
+        }
+    }
+    searching?.let { query ->
+        YouTubeSearchSheet(query, onDismiss = { searching = null }) {
+            words = ""
             scope.launch { toasts.say(resources, R.string.dl_started) }
         }
     }
@@ -313,6 +340,28 @@ private fun LinkField(link: String, onLink: (String) -> Unit, onPaste: () -> Uni
             keyboardActions = KeyboardActions(onGo = { if (usable) onLookUp() }),
         )
         LyrifyButton(stringResource(R.string.dl_look_up), onClick = onLookUp, enabled = usable, icon = R.drawable.ic_download, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/**
+ * The YouTube search field with Search, for the page (which opens the search sheet) and the sheet (which searches again);
+ * [label] above it on the page. Words longer than a search takes are cut there.
+ */
+@Composable
+private fun SearchField(words: String, onWords: (String) -> Unit, label: String?, modifier: Modifier = Modifier, onSearch: () -> Unit) {
+    val usable = words.isNotBlank()
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = modifier) {
+        LyrifyField(
+            value = words,
+            onValueChange = { onWords(it.take(DlSearch.MAX_QUERY)) },
+            modifier = Modifier.fillMaxWidth(),
+            label = label,
+            placeholder = stringResource(R.string.dl_search_hint),
+            leading = { Icon(painterResource(R.drawable.ic_search), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp)) },
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { if (usable) onSearch() }),
+        )
+        LyrifyButton(stringResource(R.string.dl_search_go), onClick = onSearch, enabled = usable, icon = R.drawable.ic_search, modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -508,6 +557,17 @@ internal fun failureSentence(reason: DownloadFailure): Int = when (reason) {
     DownloadFailure.UNKNOWN -> R.string.dl_failed_unknown_detail
 }
 
+/**
+ * Why a search found nothing to show, in dl1's words where they are true of a search too: no connection, or a site that
+ * refused it. Anything else asks to try again or update the downloader, since a search makes no update of its own.
+ */
+@StringRes
+internal fun searchFailureText(failure: DlFailure): Int = when (failure) {
+    DlFailure.OFFLINE -> R.string.dl_failed_offline_detail
+    DlFailure.BLOCKED -> R.string.dl_failed_blocked_detail
+    else -> R.string.dl_failed_unknown_detail
+}
+
 /** A saved song plays in KJB's own player; a video opens in the phone's video app. */
 private fun openSaved(context: Context, item: DownloadItem, path: String) {
     if (item.kind == DlKind.AUDIO) {
@@ -576,7 +636,7 @@ private fun DownloadsSettings(scope: CoroutineScope, updating: Boolean, onUpdati
                 }
             }
         }
-        lockedRow(addon == AddonState.Ready, exempt)?.let { row ->
+        lockedRow(addon?.state == AddonState.Ready, exempt)?.let { row ->
             LockedPhoneRow(row, onAllow = requestExemption, onOpenAppInfo = { context.startFirst(listOf(AddonInstalls.addonInfo(KjbAddons.DOWNLOADS))) })
         }
     }
@@ -659,16 +719,31 @@ private fun QualitySheet(@StringRes title: Int, @StringRes sentence: Int, select
     }
 }
 
-/** One choice of a sheet: its label, its line, and a check when it is the one set. */
+/**
+ * One choice of a sheet: its label, its line, and a check when it is the one set, else its [icon] (what a tap does); a
+ * search's video has its thumbnail first ([leading]).
+ */
 @Composable
-private fun ChoiceLine(label: String, detail: String, selected: Boolean, onClick: () -> Unit) {
+private fun ChoiceLine(
+    label: String,
+    detail: String,
+    selected: Boolean,
+    @DrawableRes icon: Int? = null,
+    leading: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     LyrifyCard(Modifier.fillMaxWidth(), color = if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainerLow, onClick = onClick) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            leading?.invoke()
             Column(Modifier.weight(1f)) {
-                Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (selected) Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = LocalBrandColors.current.highlight, modifier = Modifier.size(20.dp))
+            if (selected) {
+                Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = LocalBrandColors.current.highlight, modifier = Modifier.size(20.dp))
+            } else if (icon != null) {
+                Icon(painterResource(icon), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            }
         }
     }
 }
@@ -742,10 +817,11 @@ private class LinkLookup(private val context: Context, private val scope: Corout
 }
 
 /**
- * The save sheet for [url] (the share target's "Save to KJB", or Look up on the page): what the link is (quick info at
- * once, the full info when it comes), then Audio at the set quality (Quality picks another) or Video at a height. A tap
- * starts at once, before the full info if need be (the add-on looks the link up itself). With full info, a song KJB's
- * Duplicates rules find on the phone asks first (Warn about copies). [onStarted] hears a download that started.
+ * The save sheet for [url] (the share target's "Save to KJB", Look up on the page, or a video the search sheet found):
+ * what the link is (quick info at once, the full info when it comes), then Audio at the set quality (Quality picks
+ * another) or Video at a height. A tap starts at once, before the full info if need be (the add-on looks the link up
+ * itself). With full info, a song KJB's Duplicates rules find on the phone asks first (Warn about copies). [onStarted]
+ * hears a download that started.
  */
 @Composable
 fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
@@ -808,8 +884,7 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
                 lookup.addon != null && lookup.addon != AddonState.Ready -> {
                     Text(stringResource(R.string.dl_get_first), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     LyrifyButton(stringResource(R.string.dl_open_kjb), onClick = {
-                        // SINGLE_TOP: with KJB open already, MainActivity gets the destination in onNewIntent.
-                        context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_DESTINATION, DESTINATION_DOWNLOADS))
+                        openDownloads(context)
                         onDismiss()
                     }, modifier = Modifier.fillMaxWidth())
                 }
@@ -861,19 +936,148 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
 
 private enum class SaveStep { MAIN, AUDIO, VIDEO }
 
+/** KJB's Downloads page, from the share target or from inside KJB. SINGLE_TOP: with KJB open, MainActivity gets it in onNewIntent. */
+private fun openDownloads(context: Context) {
+    context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_DESTINATION, DESTINATION_DOWNLOADS))
+}
+
+// The search sheet: the page's Search YouTube, and Huddle's Search on YouTube
+
+/**
+ * YouTube searches in the Downloads add-on for the search sheet ([DlLookup.search]), one at a time: a new one lets go of
+ * the one before, as [close] does, and only the newest is heard. What it found, or why it failed, or why the add-on
+ * can't search (Outdated: too old for it).
+ */
+@Stable
+private class YouTubeSearch(private val context: Context, private val scope: CoroutineScope) {
+    var results: List<DlSearchResult>? by mutableStateOf(null)
+        private set
+    var failed: DlFailure? by mutableStateOf(null)
+        private set
+
+    /** Null while it binds; then Ready, or why the add-on can't search. */
+    var addon: AddonState? by mutableStateOf(null)
+        private set
+
+    /** The newest search, until [close]. Read and set on the main thread. */
+    private var lookup: DlLookup? = null
+
+    /** Searches for [words], on one line and cut to what a search takes. */
+    fun search(words: String) {
+        lookup?.close()
+        val next = DlLookup { DlAddon.connect(context) }
+        lookup = next
+        results = null
+        failed = null
+        addon = null
+        val events = object : DlSearchEvents {
+            override fun onResults(results: DlSearchResults) {
+                scope.launch(Dispatchers.Main) { if (lookup === next) this@YouTubeSearch.results = results.results }
+            }
+
+            override fun onFailed(end: DlEnd.Failed) {
+                scope.launch(Dispatchers.Main) { if (lookup === next) failed = end.failure }
+            }
+        }
+        val search = DlSearch(words.replace(CONTROL, " ").trim().take(DlSearch.MAX_QUERY))
+        scope.launch(Dispatchers.IO) {
+            val state = next.search(search, events)
+            withContext(Dispatchers.Main) { if (lookup === next) addon = state }
+        }
+    }
+
+    /** Nothing found yet, nor any reason there will be none: the sheet says it searches. */
+    val waiting: Boolean get() = results == null && failed == null && (addon == null || addon == AddonState.Ready)
+
+    /** The sheet went: the add-on is let go of, with no call into it (one the phone froze could hold the call). */
+    fun close() {
+        lookup?.close()
+        lookup = null
+    }
+
+    private companion object {
+        val CONTROL = Regex("""\p{Cntrl}+""")
+    }
+}
+
+/**
+ * The search sheet: YouTube's videos for [query] ("<artist> <title>" from Huddle's Search on YouTube, or the page's
+ * words), searched at once, and the words to change and search again. A video's title, channel and length; a tap opens
+ * the save sheet for its link (the usual download, the copy warning too). Without the add-on, or with one too old to
+ * search, it says so and opens Downloads, where KJB gets or updates it. [onStarted] hears a download that started, after
+ * which the sheet goes ([onDismiss]).
+ */
+@Composable
+fun YouTubeSearchSheet(query: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val search = remember { YouTubeSearch(context.applicationContext, scope) }
+    var words by rememberSaveable { mutableStateOf(query) }
+    var picked by remember { mutableStateOf<DlSearchResult?>(null) }
+    DisposableEffect(search) {
+        search.search(words)
+        onDispose { search.close() }
+    }
+    val result = picked
+    if (result != null) {
+        SaveSheet(result.url, onDismiss = { picked = null }) {
+            onStarted()
+            onDismiss()
+        }
+        return
+    }
+    LyrifySheet(onDismiss = onDismiss, spacing = 8.dp) {
+        Text(stringResource(R.string.dl_search), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+        when (val addon = search.addon) {
+            null, AddonState.Ready -> {
+                SearchField(words, { words = it }, label = null, modifier = Modifier.padding(vertical = 8.dp)) { search.search(words) }
+                SearchFound(search) { picked = it }
+            }
+            AddonState.Unreachable -> {
+                Text(stringResource(R.string.dl_addon_unreachable), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LyrifyButton(stringResource(R.string.dl_try_again), onClick = { search.search(words) }, modifier = Modifier.fillMaxWidth())
+            }
+            AddonState.Missing, AddonState.Untrusted, is AddonState.Outdated -> {
+                val text = if (addon is AddonState.Outdated) R.string.dl_search_update_first else R.string.dl_search_get_first
+                Text(stringResource(text), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                LyrifyButton(stringResource(R.string.dl_open_downloads), onClick = {
+                    openDownloads(context)
+                    onDismiss()
+                }, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+/** What the search found, each video a choice to download; or that it searches, found nothing, or why it failed. */
+@Composable
+private fun SearchFound(search: YouTubeSearch, onPick: (DlSearchResult) -> Unit) {
+    val found = search.results
+    val failed = search.failed
+    val line = when {
+        search.waiting -> stringResource(R.string.dl_searching)
+        failed != null -> stringResource(searchFailureText(failed))
+        found.isNullOrEmpty() -> stringResource(R.string.dl_search_none)
+        else -> null
+    }
+    line?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    found.orEmpty().forEach { result ->
+        val length = result.durationSec.takeIf { it > 0 }?.let { DateUtils.formatElapsedTime(it.toLong()) }
+        ChoiceLine(
+            result.title,
+            listOfNotNull(result.channel.ifBlank { null }, length).joinToString(" · "),
+            selected = false,
+            icon = R.drawable.ic_download,
+            leading = { Thumbnail(result.thumbnail, 56.dp, R.drawable.ic_movie) },
+        ) { onPick(result) }
+    }
+}
+
 /** The link's cover, title, artist and length, as far as they are known yet. */
 @Composable
 private fun LinkHead(info: DlInfo?, url: String) {
-    val thumbnail by produceState<ImageBitmap?>(null, info?.thumbnail) { value = info?.thumbnail?.let { withContext(Dispatchers.IO) { thumbnail(it) } } }
     Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(72.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
-            val image = thumbnail
-            if (image != null) {
-                Image(image, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-            } else {
-                Icon(painterResource(R.drawable.ic_download), contentDescription = null, modifier = Modifier.size(28.dp))
-            }
-        }
+        Thumbnail(info?.thumbnail, 72.dp, R.drawable.ic_download)
         Column(Modifier.weight(1f)) {
             Text(info?.title?.ifBlank { null } ?: url, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
             info?.artist?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1) }
@@ -899,6 +1103,20 @@ private fun VideoSheet(choices: List<VideoChoice>, onDismiss: () -> Unit, onPick
                 else -> choice.label to size.orEmpty()
             }
             ChoiceLine(label, detail, selected = false) { onPick(choice) }
+        }
+    }
+}
+
+/** A link's cover in a rounded square of [size] ([thumbnail], off the main thread), [placeholder] until it comes or without one. */
+@Composable
+private fun Thumbnail(url: String?, size: Dp, @DrawableRes placeholder: Int) {
+    val image by produceState<ImageBitmap?>(null, url) { value = url?.let { withContext(Dispatchers.IO) { thumbnail(it) } } }
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(size).clip(RoundedCornerShape(size * 14 / 72)).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+        val shown = image
+        if (shown != null) {
+            Image(shown, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        } else {
+            Icon(painterResource(placeholder), contentDescription = null, modifier = Modifier.size(size * 28 / 72))
         }
     }
 }

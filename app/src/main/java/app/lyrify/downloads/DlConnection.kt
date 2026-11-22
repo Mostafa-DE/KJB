@@ -15,12 +15,15 @@ import app.lyrify.dl.api.DlFile
 import app.lyrify.dl.api.DlInfo
 import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlRequest
+import app.lyrify.dl.api.DlSearch
+import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.DlStatus
 import app.lyrify.dl.api.DlUpdate
 import app.lyrify.dl.api.DlWire
 import app.lyrify.dl.api.IDlAddon
 import app.lyrify.dl.api.IDlInfoCallback
 import app.lyrify.dl.api.IDlRunCallback
+import app.lyrify.dl.api.IDlSearchCallback
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.Flow
@@ -32,6 +35,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** The lowest Downloads add-on API (IDlAddon.VERSION) this KJB speaks; an add-on that answers less needs an update. */
 const val MIN_DL_API: Int = 1
+
+/** The add-on API with YouTube search (IDlAddon.search); an older add-on downloads links only, and is never asked to search. */
+const val DL_SEARCH_API: Int = 2
 
 /** One download run as the add-on tells it (IDlRunCallback, as Kotlin). Called on binder threads. */
 interface DlRunEvents {
@@ -52,6 +58,13 @@ interface DlLookupEvents {
     fun onFailed(end: DlEnd.Failed)
 }
 
+/** One search as the add-on answers it (IDlSearchCallback, as Kotlin): one call. Called on binder threads. */
+interface DlSearchEvents {
+    fun onResults(results: DlSearchResults)
+
+    fun onFailed(end: DlEnd.Failed)
+}
+
 /**
  * The Downloads add-on's calls (IDlAddon), as Kotlin: each throws [AddonDiedException] once its process is gone, and
  * SecurityException when it refuses KJB.
@@ -64,6 +77,9 @@ interface DlPort {
     fun info(url: String, events: DlLookupEvents): Long
 
     fun cancelInfo(lookup: Long)
+
+    /** Only of an add-on that speaks [DL_SEARCH_API]: an older one answers nothing. */
+    fun search(search: DlSearch, events: DlSearchEvents): Long
 
     fun start(request: DlRequest, events: DlRunEvents): Long
 
@@ -138,7 +154,8 @@ internal class DlHolds {
 
 /**
  * A bound Downloads add-on after the handshake, until [close] unbinds it; [death] completes when its process dies.
- * [holds]: KJB's sessions with the add-on, this one taken among them already ([DlAddon]'s, process-wide).
+ * [holds]: KJB's sessions with the add-on, this one taken among them already ([DlAddon]'s, process-wide). [api]: the
+ * add-on's API, as it answered the handshake.
  */
 class DlSession internal constructor(
     val port: DlPort,
@@ -147,6 +164,7 @@ class DlSession internal constructor(
     private val startForeground: () -> Boolean,
     private val stopService: () -> Unit,
     private val holds: DlHolds = DlHolds().also { it.take() },
+    val api: Int = MIN_DL_API,
 ) : AutoCloseable {
     private val gone = AtomicBoolean(false)
 
@@ -181,21 +199,38 @@ class DlSession internal constructor(
 }
 
 /**
- * One link looked up in the Downloads add-on for the save sheet: bound from [start] until [close]. The add-on looks it up
- * in its own foreground service, which KJB starts once it took the link. [close] asks nothing of the add-on: a call into
- * one the phone froze can wait for as long as it stays frozen, so KJB lets go of it and stops the service it started
- * ([DlSession.abandon]); the add-on, KJB gone, stops the lookup itself (its onUnbind). A lookup has no beat of its own:
- * the sheet shows what came, its buttons work without the full info, and its going lets the add-on go.
+ * One link looked up in the Downloads add-on for the save sheet, or one YouTube search for the search sheet: bound from
+ * [start] (or [search]) until [close]. The add-on looks it up in its own foreground service, which KJB starts once it
+ * took the link or the words. [close] asks nothing of the add-on: a call into one the phone froze can wait for as long as
+ * it stays frozen, so KJB lets go of it and stops the service it started ([DlSession.abandon]); the add-on, KJB gone,
+ * stops the lookup itself (its onUnbind). A lookup has no beat of its own: the sheet shows what came, its buttons work
+ * without the full info, and its going lets the add-on go.
  */
 class DlLookup(private val connect: suspend () -> DlConnection) {
     private var session: DlSession? = null
     private var closed = false
 
     /** Binds the add-on and asks it to look [url] up, heard by [events]: Ready, or why the add-on can't be used. */
-    suspend fun start(url: String, events: DlLookupEvents): AddonState {
+    suspend fun start(url: String, events: DlLookupEvents): AddonState =
+        ask(MIN_DL_API, { it.info(url, events) }) { events.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }
+
+    /**
+     * Binds the add-on and asks it to search YouTube for [search], heard by [events]: Ready, or why the add-on can't be
+     * used. One older than [DL_SEARCH_API] is Outdated and never asked: it would answer the unknown call with nothing.
+     */
+    suspend fun search(search: DlSearch, events: DlSearchEvents): AddonState =
+        ask(DL_SEARCH_API, { it.search(search, events) }) { events.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }
+
+    /** Binds the add-on and makes [call] when it speaks [api] or later; [died]: the add-on went as it was asked. */
+    private suspend fun ask(api: Int, call: (DlPort) -> Unit, died: () -> Unit): AddonState {
         val open = when (val connection = connect()) {
             is DlConnection.Closed -> return connection.state
             is DlConnection.Open -> connection.session
+        }
+        // It answered the handshake, so it is not frozen: a plain unbind.
+        if (open.api < api) {
+            open.close()
+            return AddonState.Outdated(open.api)
         }
         // Bound after the sheet went: let go of at once, never asked.
         val gone = synchronized(this) { closed.also { if (!it) session = open } }
@@ -204,10 +239,10 @@ class DlLookup(private val connect: suspend () -> DlConnection) {
             return AddonState.Ready
         }
         try {
-            open.port.info(url, events)
+            call(open.port)
             open.foreground()
         } catch (_: AddonDiedException) {
-            events.onFailed(DlEnd.Failed(DlFailure.ENGINE))
+            died()
         }
         return AddonState.Ready
     }
@@ -220,6 +255,12 @@ class DlLookup(private val connect: suspend () -> DlConnection) {
         }
         open?.abandon()
     }
+}
+
+/** The Downloads add-on for the Downloads page: Ready or why not ([state]), and the API it answered ([api], 0 when not Ready). */
+data class DlAddonState(val state: AddonState, val api: Int = 0) {
+    /** Ready, and new enough to search YouTube ([DL_SEARCH_API]). */
+    val searches: Boolean get() = state == AddonState.Ready && api >= DL_SEARCH_API
 }
 
 /** What [DlAddon.connect] got: a [session], or why there is none (the AI add-on's states, the same for both). */
@@ -276,7 +317,7 @@ object DlAddon {
         }
         // KJB's Downloads page as the tap on the add-on's notice, which also tells the add-on the start is KJB's.
         return DlConnection.Open(
-            DlSession(port, bound.death, bound::close, { android.startForeground { it.putExtra(AddonKeepAlive.EXTRA_TAP, DownloadNotices.page(context.applicationContext)) } }, android::stopService, holds),
+            DlSession(port, bound.death, bound::close, { android.startForeground { it.putExtra(AddonKeepAlive.EXTRA_TAP, DownloadNotices.page(context.applicationContext)) } }, android::stopService, holds, api),
         )
     }
 
@@ -292,15 +333,18 @@ object DlAddon {
         }
     }
 
-    /** The add-on's state for the Downloads page: now, and again each time its package is installed, updated or removed. */
-    fun states(context: Context): Flow<AddonState> = flow {
+    /**
+     * The add-on's state for the Downloads page, and whether it searches: now, and again each time its package is
+     * installed, updated or removed.
+     */
+    fun states(context: Context): Flow<DlAddonState> = flow {
         packageChanges(context.applicationContext, KjbAddons.DOWNLOADS.packageName).onStart { emit(Unit) }.collect { emit(state(context)) }
     }
 
-    /** Ready only once a bind and the handshake worked; the bind is let go at once. */
-    private suspend fun state(context: Context): AddonState = when (val connection = connect(context)) {
-        is DlConnection.Open -> AddonState.Ready.also { connection.session.close() }
-        is DlConnection.Closed -> connection.state
+    /** Ready only once a bind and the handshake worked, with the API it answered; the bind is let go at once. */
+    private suspend fun state(context: Context): DlAddonState = when (val connection = connect(context)) {
+        is DlConnection.Open -> DlAddonState(AddonState.Ready, connection.session.api).also { connection.session.close() }
+        is DlConnection.Closed -> DlAddonState(connection.state)
     }
 }
 
@@ -324,6 +368,20 @@ private class AidlDlPort(private val addon: IDlAddon) : DlPort {
     }
 
     override fun cancelInfo(lookup: Long) = call { addon.cancelInfo(lookup) }
+
+    override fun search(search: DlSearch, events: DlSearchEvents): Long {
+        val callback = object : IDlSearchCallback.Stub() {
+            override fun onResults(search: Long, results: String) {
+                // Results KJB cannot read are a failure: the page never waits for an answer that came.
+                DlWire.results(results)?.let(events::onResults) ?: events.onFailed(DlEnd.Failed(DlFailure.UNKNOWN))
+            }
+
+            override fun onFailed(search: Long, end: String) {
+                events.onFailed(DlWire.end(end) as? DlEnd.Failed ?: DlEnd.Failed(DlFailure.UNKNOWN))
+            }
+        }
+        return call { addon.search(DlWire.encode(search), callback) }
+    }
 
     override fun start(request: DlRequest, events: DlRunEvents): Long {
         val callback = object : IDlRunCallback.Stub() {

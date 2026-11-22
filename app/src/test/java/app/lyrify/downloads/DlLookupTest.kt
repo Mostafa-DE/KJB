@@ -6,6 +6,8 @@ import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlInfo
 import app.lyrify.dl.api.DlRequest
+import app.lyrify.dl.api.DlSearch
+import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.DlStatus
 import app.lyrify.dl.api.DlUpdate
 import kotlinx.coroutines.CompletableDeferred
@@ -15,6 +17,8 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
@@ -39,6 +43,13 @@ class DlLookupTest {
             calls += "cancelInfo $lookup"
         }
 
+        override fun search(search: DlSearch, events: DlSearchEvents): Long {
+            if (dead) throw AddonDiedException()
+            calls += "search ${search.query}"
+            events.onResults(DlSearchResults(emptyList()))
+            return 4
+        }
+
         override fun start(request: DlRequest, events: DlRunEvents): Long = error("not a run")
 
         override fun deliver(run: Long, media: File, cover: File?) = error("not a run")
@@ -50,12 +61,14 @@ class DlLookupTest {
         override fun update(): DlUpdate = error("not an update")
     }
 
-    private fun session(port: DlPort = FakePort()) = DlSession(
+    /** A session with an add-on that answered [api] in the handshake. */
+    private fun session(port: DlPort = FakePort(), api: Int = MIN_DL_API) = DlSession(
         port,
         CompletableDeferred(),
         unbind = { calls += "unbind" },
         startForeground = { true.also { calls += "foreground" } },
         stopService = { calls += "stopService" },
+        api = api,
     )
 
     private val failures = mutableListOf<DlFailure>()
@@ -188,6 +201,64 @@ class DlLookupTest {
         session.close()
 
         assertEquals(listOf("unbind"), calls)
+    }
+
+    // YouTube search: only of an add-on new enough to know it
+
+    private val found = mutableListOf<DlSearchResults>()
+
+    private val searchEvents = object : DlSearchEvents {
+        override fun onResults(results: DlSearchResults) {
+            found += results
+        }
+
+        override fun onFailed(end: DlEnd.Failed) {
+            failures += end.failure
+        }
+    }
+
+    @Test
+    fun `a search runs in the add-on's foreground, and the page going asks nothing of the add-on`() = runTest {
+        val lookup = DlLookup { DlConnection.Open(session(api = DL_SEARCH_API)) }
+
+        assertEquals(AddonState.Ready, lookup.search(DlSearch("paper lantern"), searchEvents))
+        lookup.close()
+
+        assertEquals(listOf("search paper lantern", "foreground", "unbind", "stopService"), calls)
+        assertEquals("the add-on's answer reaches the page", listOf(DlSearchResults(emptyList())), found)
+    }
+
+    @Test
+    fun `an add-on too old to search is never asked, says it needs an update, and is let go of`() = runTest {
+        val lookup = DlLookup { DlConnection.Open(session(api = 1)) }
+
+        assertEquals(AddonState.Outdated(1), lookup.search(DlSearch("paper lantern"), searchEvents))
+        // It would answer the unknown call with nothing, and the search would wait for good. It answered the handshake,
+        // so it is not frozen: a plain unbind, no stop.
+        assertEquals(listOf("unbind"), calls)
+        lookup.close()
+        assertEquals("let go of once", listOf("unbind"), calls)
+        assertEquals(emptyList<DlFailure>(), failures)
+    }
+
+    @Test
+    fun `an add-on gone as it is asked to search fails the search as the engine, and is let go of`() = runTest {
+        val lookup = DlLookup { DlConnection.Open(session(FakePort(dead = true), api = DL_SEARCH_API)) }
+
+        lookup.search(DlSearch("paper lantern"), searchEvents)
+        lookup.close()
+
+        assertEquals(listOf(DlFailure.ENGINE), failures)
+        assertEquals(listOf("unbind", "stopService"), calls)
+    }
+
+    @Test
+    fun `the Downloads page offers search only for a ready add-on new enough to search`() {
+        assertTrue(DlAddonState(AddonState.Ready, DL_SEARCH_API).searches)
+        assertTrue(DlAddonState(AddonState.Ready, DL_SEARCH_API + 1).searches)
+        assertFalse(DlAddonState(AddonState.Ready, MIN_DL_API).searches)
+        assertFalse(DlAddonState(AddonState.Missing).searches)
+        assertFalse(DlAddonState(AddonState.Unreachable, DL_SEARCH_API).searches)
     }
 
     @Test

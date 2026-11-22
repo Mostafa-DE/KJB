@@ -83,4 +83,14 @@ class DownloadsRowTest {
         assertEquals(R.string.dl_addon_not_published, addonFailedText(InstallFailure.NOT_PUBLISHED))
         InstallFailure.entries.filter { it != InstallFailure.NOT_PUBLISHED }.forEach { assertEquals(it.name, R.string.dl_addon_failed, addonFailedText(it)) }
     }
+
+    @Test
+    fun `a search that failed says why in dl1's words where they fit, else to try again or update the downloader`() {
+        assertEquals(R.string.dl_failed_offline_detail, searchFailureText(DlFailure.OFFLINE))
+        assertEquals(R.string.dl_failed_blocked_detail, searchFailureText(DlFailure.BLOCKED))
+        // A search makes no update of its own, so "KJB updated the downloader" or "already the newest" would not be true.
+        DlFailure.entries.filter { it != DlFailure.OFFLINE && it != DlFailure.BLOCKED }.forEach {
+            assertEquals(it.name, R.string.dl_failed_unknown_detail, searchFailureText(it))
+        }
+    }
 }
