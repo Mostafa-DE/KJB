@@ -483,6 +483,25 @@ class HuddleTest {
     }
 
     @Test
+    fun `an accept whose answer was lost, read by the inviter before it is sent again, still joins`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val invite = juniper.parse(link(wren))!!
+        server.lostAccepts = 1
+        assertEquals(Accepted.NoAnswer, juniper.accept(invite))
+        // Wren's KJB reads the accept and deletes the slot before Juniper tries again: the server no longer has it.
+        assertTrue(wren.sync())
+        assertTrue(server.invites.isEmpty())
+        val joined = juniper.accept(invite) as Accepted.Joined
+        assertEquals(wrenState.now.friends.single().outBox, joined.friend.inBox)
+        juniper.send(joined.friend.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        wren.sync()
+        assertEquals(listOf(song), wrenState.now.inbox.map { it.card })
+        assertTrue(juniperState.now.joins.isEmpty())
+    }
+
+    @Test
     fun `an accept the phone could not write is sent again as it was`() = runTest {
         val (wren, wrenState) = phone("Wren")
         val storage = MemoryHuddle(HuddleState(name = "Juniper"))

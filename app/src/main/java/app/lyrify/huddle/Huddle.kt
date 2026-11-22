@@ -161,7 +161,8 @@ class Huddle(
     /**
      * Joins [invite]: the inviter becomes your friend, and the song in it waits in your inbox. Needs the server's answer.
      * The join ([PendingJoin]) is kept before its accept goes, and sent again as it was when the answer was lost or the
-     * friend could not be written, so the server knows it and both phones keep the same keys.
+     * friend could not be written, so the server knows it and both phones keep the same keys. Sent again and gone from the
+     * server, it most likely reached the inviter, whose KJB deleted the slot once it read it: this phone joins too.
      */
     suspend fun accept(invite: Invite): Accepted {
         val state = now()
@@ -169,7 +170,8 @@ class Huddle(
         state.friends.firstOrNull { it.joinId == joinId }?.let { return Accepted.Already(it) }
         if (state.invites.any { it.token == HuddleCrypto.encode(invite.token) }) return Accepted.Own
         val name = state.name ?: return Accepted.NoName
-        val join = state.joins.firstOrNull { it.joinId == joinId } ?: run {
+        val earlier = state.joins.firstOrNull { it.joinId == joinId }
+        val join = earlier ?: run {
             // A parsed invite's key is a point of the curve (Invites.parse), so this joins; one that is not cannot be joined by anyone.
             val joining = Invites.join(invite, name, random) ?: return Accepted.Taken
             val keys = joining.keys
@@ -177,11 +179,15 @@ class Huddle(
             if (!storage.change { it.copy(joins = (it.joins + made).takeLast(JOINS_MAX)) }) return Accepted.NoAnswer
             made
         }
-        when (val answer = server.acceptInvite(joinId, join.data)) {
+        when (server.acceptInvite(joinId, join.data)) {
             JoinAnswer.NO_ANSWER -> return Accepted.NoAnswer
-            JoinAnswer.TAKEN, JoinAnswer.GONE -> {
+            JoinAnswer.TAKEN -> {
                 endJoin(joinId)
-                return if (answer == JoinAnswer.TAKEN) Accepted.Taken else Accepted.Expired
+                return Accepted.Taken
+            }
+            JoinAnswer.GONE -> if (earlier == null) {
+                endJoin(joinId)
+                return Accepted.Expired
             }
             JoinAnswer.JOINED -> Unit
         }
