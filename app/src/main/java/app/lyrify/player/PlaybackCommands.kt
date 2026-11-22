@@ -47,7 +47,7 @@ interface PlaybackCommands {
     /**
      * A tap on the song at [start] in [songs]: inside the current queue when that came from [source] and is not saved
      * (songs added with Play next stay), else in a new queue from [source], the old one kept in Recent (a saved one stays
-     * in Saved, at its place).
+     * in Saved, at its place). A book's file plays its book's own queue instead (books/BookPlayback.kt, asBook).
      */
     fun play(songs: List<SongRef>, start: Int, source: QueueSource)
 

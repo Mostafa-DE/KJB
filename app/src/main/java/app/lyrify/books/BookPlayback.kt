@@ -10,12 +10,14 @@ import app.lyrify.player.PlayerCore
 import app.lyrify.player.PlayerGraph
 import app.lyrify.player.PlayerPort
 import app.lyrify.player.Queue
+import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
 import app.lyrify.player.ServicePart
 import app.lyrify.player.SkipAmounts
 import app.lyrify.player.SleepTimer
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Speed
+import app.lyrify.player.Switched
 import app.lyrify.player.partScope
 import app.lyrify.player.skipAmounts
 import app.lyrify.settings.PlaybackSettings
@@ -50,6 +52,52 @@ fun skipsFor(queue: Queue?, playback: PlaybackSettings): SkipAmounts = if (inBoo
 
 /** The source of [book]'s own queue: its key is the book's id. */
 fun bookSource(book: Book): QueueSource = QueueSource(SourceKind.BOOK, book.id, book.title)
+
+// A book started from anywhere (BK1, decided 2026-11-22): a list's tap on a book's file (an opened file, Folders, search,
+// a playlist, a selection's Play), a queue's song, Resume or Play from start plays the book's own queue, as its card on
+// the Books tab does, so a book always plays as a book. A song reached by playing on in a queue of music stays as it is.
+
+/** Where a book started from one of its files plays from: [book] at [place]. */
+data class BookStart(val book: Book, val place: BookPlace)
+
+/**
+ * Where the book of the file at [path] starts: at its place in `books.json` ([state]) for a book of one file, or for the
+ * part that place is in; another part of a folder book from its start. Null for music, and for a file [library] does not
+ * know (a copy of an opened file, or the library not read yet).
+ */
+fun bookStart(path: String, library: Library?, state: BookState): BookStart? {
+    val book = library?.bookOf(path) ?: return null
+    val part = book.parts.indexOfFirst { it.path == path }
+    val kept = state.placeOf(book)
+    return BookStart(book, if (part == kept.partIndex) kept else BookPlace(part, 0))
+}
+
+/**
+ * [start]'s book plays: its own queue ([bookSource]) from [BookStart.place], the queue left kept in Recent. The book's
+ * queue playing already on that part plays on where it is; on another part it goes there.
+ */
+fun QueueBook.playBook(start: BookStart, now: Long): Switched {
+    val source = bookSource(start.book)
+    val path = start.book.parts[start.place.partIndex].path
+    val playing = current
+    if (playing != null && playing.from(source) && playing.current?.song?.path == path) return Switched(this, toRecent = false)
+    val played = play(start.book.parts.map { it.ref }, start.place.partIndex, source, now)
+    val index = played.book.current?.index ?: return played
+    return played.copy(book = played.book.place(index, start.place.positionMs))
+}
+
+/**
+ * [switched], what a list's tap or a queue's song, Resume or Play from start made of this book of queues; or, when the song
+ * it starts is a book's part ([bookStart], by [library] and [state]) in a queue that is not that book's, the book's own
+ * queue instead ([playBook]). A change that changed nothing starts nothing either.
+ */
+fun QueueBook.asBook(switched: Switched, library: Library?, state: BookState, now: Long): Switched {
+    if (switched.book === this) return switched
+    val queue = switched.book.current ?: return switched
+    val start = queue.current?.song?.path?.let { bookStart(it, library, state) } ?: return switched
+    if (playingBook(queue, library)?.book?.id == start.book.id) return switched
+    return playBook(start, now)
+}
 
 /** The book whose queue plays, and the part playing in it ([partIndex] in [Book.parts]). */
 data class PlayingBook(val book: Book, val partIndex: Int)

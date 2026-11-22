@@ -74,24 +74,27 @@ class BookPlaybackTest {
     }
 
     @Test
-    fun `an m4b another app opens plays as a plain file, never as its book, and nothing is kept for the book`() = runTest {
+    fun `an m4b another app opens plays as its book when it is the library's, a copy as a plain file that keeps nothing`() = runTest {
         val orchard = song("Audiobooks/Quiet Orchard.m4b", durationMs = 900_000)
         val withOrchard = Library.of(parts + music + orchard, Settings())
         // MediaStore's own address opens the library's file; any other (Files) a copy in KJB's cache (player/OpenedFiles.kt).
         val copy = SongRef("/data/user/0/app.lyrify/cache/opened/1800000000000/Quiet Orchard.m4b")
         val opened = QueueSource(SourceKind.OPENED, "opened", "")
         assertEquals(orchard.path, withOrchard.bookOf(orchard.path)?.id)
-        listOf(orchard.ref, copy).forEach { ref ->
-            val queue = QueueBook().play(listOf(ref), 0, opened, now = 1).book.current!!
-            assertFalse(inBook(queue))
-            assertNull(playingBook(queue, withOrchard))
-            assertFalse(playsAsBook(queue, null, queue.items[0].uid))
-            assertFalse(playsAsBook(queue, withOrchard, queue.items[0].uid))
-        }
+        // The library's file plays as its book (BK1, BookStartTest), as the Books tab plays it.
+        val own = QueueBook().let { it.asBook(it.play(listOf(orchard.ref), 0, opened, now = 1), withOrchard, BookState(), now = 1) }.book.current!!
+        assertTrue(inBook(own))
+        assertEquals(PlayingBook(withOrchard.bookOf(orchard.path)!!, 0), playingBook(own, withOrchard))
+        // A copy is in no library: a plain file.
+        val queue = QueueBook().let { it.asBook(it.play(listOf(copy), 0, opened, now = 1), withOrchard, BookState(), now = 1) }.book.current!!
+        assertFalse(inBook(queue))
+        assertNull(playingBook(queue, withOrchard))
+        assertFalse(playsAsBook(queue, null, queue.items[0].uid))
+        assertFalse(playsAsBook(queue, withOrchard, queue.items[0].uid))
         assertNull(withOrchard.bookOf(copy.path))
-        // Played, paused, stopped and played to its end: books.json gets nothing.
+        // The copy played, paused, stopped and played to its end: books.json gets nothing.
         val run = driving()
-        run.playing = playingBook(QueueBook().play(listOf(orchard.ref), 0, opened, now = 1).book.current, withOrchard)
+        run.playing = playingBook(queue, withOrchard)
         run.driver.songStarted(uid = 1, lap = false, natural = false)
         run.driver.playingChanged(true)
         run.port.positionMs = 40_000

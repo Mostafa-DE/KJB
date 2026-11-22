@@ -32,6 +32,8 @@ import androidx.media3.session.SessionError
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.books.BooksGraph
+import app.lyrify.books.asBook
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
@@ -107,6 +109,9 @@ class CarBrowse(
 
     /** The covers' uris. */
     private val covers = CarCovers.uris(context)
+
+    /** `books.json`: where a book's file picked in the car plays its book from. */
+    private val books = BooksGraph.store(context).state
 
     init {
         // Recent queues follows the queues: a car showing it hears when one comes or goes.
@@ -184,8 +189,9 @@ class CarBrowse(
             val found = words?.takeIf(String::isNotBlank)?.let { find(it, data.library) }
             val play = withContext(Dispatchers.Default) { if (words == null) LibraryTree.play(item.mediaId, data) else LibraryTree.voice(found, data) }
             when (play) {
-                is TreePlay.FromList -> core.switch { it.play(play.songs, play.start, play.source, core.now()) }
-                is TreePlay.InQueue -> core.switch { it.jump(play.queueId, play.index, core.now()) }
+                // A book's file plays its book, as in the app (books/BookPlayback.kt).
+                is TreePlay.FromList -> core.switch { it.asBook(it.play(play.songs, play.start, play.source, core.now()), data.library, books.value, core.now()) }
+                is TreePlay.InQueue -> core.switch { it.asBook(it.jump(play.queueId, play.index, core.now()), data.library, books.value, core.now()) }
                 is TreePlay.Shuffle -> core.switch { it.shuffle(play.songs, play.source, core.shuffleRandom(), core.now()) }
                 TreePlay.Resume -> Unit
                 null -> {

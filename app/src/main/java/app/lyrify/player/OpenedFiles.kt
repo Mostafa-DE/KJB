@@ -351,7 +351,8 @@ object OpenedFiles {
 
     /**
      * Plays [uris] (`content:` addresses) at once as one queue, "Opened file", in their order: each the library's song when
-     * it is MediaStore's address of one, else a copy. Returns how many play; 0 when none could be read. Main thread.
+     * it is MediaStore's address of one, else a copy. The first one a book's file of the library, its book plays instead
+     * (books/BookPlayback.kt, asBook). Returns how many play; 0 when none could be read. Main thread.
      */
     suspend fun play(context: Context, uris: List<String>): Int = one.withLock {
         val app = context.applicationContext

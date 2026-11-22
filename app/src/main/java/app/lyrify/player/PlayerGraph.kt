@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.dataStoreFile
 import app.lyrify.LOG_TAG
+import app.lyrify.books.BooksGraph
 import app.lyrify.data.writeWithRetries
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
@@ -296,7 +297,7 @@ object PlayerGraph {
     @Synchronized
     fun connection(context: Context): PlayerConnection = connection ?: run {
         val app = context.applicationContext
-        PlayerConnection(app, core(app), LibraryGraph.repository(app), scope)
+        PlayerConnection(app, core(app), LibraryGraph.repository(app), scope, BooksGraph.store(app).state)
     }.also { connection = it }
 
     /** Plays songs from any list. */
