@@ -359,3 +359,19 @@ fun nextChapter(now: BookNow): Int? = (now.chapter + 1).takeIf { now.chapters.is
 
 /** Previous goes to the chapter before only this close to the start of the one playing, as a player's Previous does. */
 const val CHAPTER_BACK_MS: Long = 3_000
+
+/** [now] at [positionMs] of the part playing: where it is at a tap, not when the chapter last changed. */
+fun bookNowAt(now: BookNow, positionMs: Long): BookNow {
+    val at = now.book.partStartMs(now.partIndex) + positionMs
+    return now.copy(bookMs = at, chapter = chapterAt(now.chapters, at))
+}
+
+/**
+ * The part the player's chapter Next ([forward]) or Previous goes to from [now] ([nextChapter], [previousChapter]): the
+ * part after or before in a folder book; null when it stays in the part playing (a single file's chapters, Previous
+ * starting the part over) or goes nowhere (Next on the last chapter).
+ */
+fun chapterStepPart(now: BookNow, forward: Boolean): Int? {
+    val target = (if (forward) nextChapter(now) else previousChapter(now)) ?: return null
+    return chapterPlace(now, target).partIndex.takeIf { it != now.partIndex }
+}

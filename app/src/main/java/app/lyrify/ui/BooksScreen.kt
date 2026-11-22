@@ -73,9 +73,9 @@ import app.lyrify.books.BookStatus
 import app.lyrify.books.BooksGraph
 import app.lyrify.books.Chapter
 import app.lyrify.books.bookNow
+import app.lyrify.books.bookNowAt
 import app.lyrify.books.bookSource
 import app.lyrify.books.bookStatus
-import app.lyrify.books.chapterAt
 import app.lyrify.books.booksInOrder
 import app.lyrify.books.chapterPlace
 import app.lyrify.books.chapterTicks
@@ -389,9 +389,7 @@ internal fun goToChapter(connection: PlayerConnection, ui: PlayerUi, now: BookNo
 
 /** The player's Previous and Next in a book: the chapter before (or this one's start) and the one after. */
 internal fun chapterStep(connection: PlayerConnection, ui: PlayerUi, now: BookNow, forward: Boolean) {
-    // Where it is at the tap, not when the chapter last changed.
-    val at = now.book.partStartMs(now.partIndex) + ui.positionAt(SystemClock.elapsedRealtime())
-    val fresh = now.copy(bookMs = at, chapter = chapterAt(now.chapters, at))
+    val fresh = bookNowAt(now, ui.positionAt(SystemClock.elapsedRealtime()))
     val target = if (forward) nextChapter(fresh) else previousChapter(fresh)
     if (target != null) goToChapter(connection, ui, fresh, target) else if (!forward) connection.seekTo(0)
 }
