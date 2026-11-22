@@ -125,15 +125,18 @@ class Suggestions(
     /** What the user held out of suggestions, as the settings have it now. */
     private suspend fun held(): SuggestionSettings = settings.settings.first().suggestions
 
-    /** The library and the taste now, the taste built again when it is due (see the class). */
-    private suspend fun current(): Pair<Library, Taste>? {
+    /**
+     * The library and the taste now, the taste built again when it is due (see the class), or whenever the plays changed
+     * when it must hold [exactly] the plays read (Suggestions health replays the plays against it).
+     */
+    private suspend fun current(exactly: Boolean = false): Pair<Library, Taste>? {
         val library = library() ?: return null
         val now = clock()
         if (!read(now)) return null
         val liked = favourites().mapNotNull { (ref, at) -> library.resolver.find(ref)?.let { it.path to at } }.toMap()
         val old = built
         val same = builtFrom?.let { it.first === library && it.second == liked } == true
-        if (old != null && same && now - old.now < STALE_MS && (!playsChanged || now - old.now < REBUILD_MS)) return library to old
+        if (old != null && same && now - old.now < STALE_MS && (!playsChanged || (!exactly && now - old.now < REBUILD_MS))) return library to old
         val taste = Taste.of(
             plays, library, liked, now, zone(),
             interactions = quietly { interactions.since(now - INTEREST_MS) }.orEmpty(),
@@ -255,11 +258,12 @@ class Suggestions(
 
     /**
      * What suggestions add to [queue] now: under Smart shuffle, suggestions among its songs to come; with Autoplay on
-     * ([autoplay]) and Repeat off, once its last song plays, Autoplay's songs after it. A book's queue gets none.
+     * ([autoplay]) and Repeat off, once its last song plays, Autoplay's songs after it. A book's queue gets none. Off the
+     * main thread, even for a queue of thousands of songs.
      */
-    suspend fun feed(queue: Queue, repeat: Repeat, autoplay: Boolean): List<Feed> {
-        if (queue.source.kind == SourceKind.BOOK || queue.items.isEmpty()) return emptyList()
-        val library = library() ?: return emptyList()
+    suspend fun feed(queue: Queue, repeat: Repeat, autoplay: Boolean): List<Feed> = withContext(compute) feed@{
+        if (queue.source.kind == SourceKind.BOOK || queue.items.isEmpty()) return@feed emptyList()
+        val library = library() ?: return@feed emptyList()
         val inQueue = queue.items.mapTo(HashSet()) { it.song.path }
         val out = ArrayList<Feed>()
         if (queue.shuffleStep == ShuffleStep.SMART) {
@@ -276,7 +280,7 @@ class Suggestions(
             val picks = autoplay(queue.items.mapNotNull { library.resolver.find(it.song) }, inQueue)
             if (picks.isNotEmpty()) out += Feed(queue.id, Suggested.AUTOPLAY, picks.map { last to it.song.ref })
         }
-        return out
+        out
     }
 
     private suspend fun smart(playing: Song?, upcoming: List<Upcoming>, inQueue: Set<String>, startedAlbum: String?): List<Insert> = withContext(compute) {
@@ -314,7 +318,7 @@ class Suggestions(
     suspend fun health(again: Boolean = false): HealthNow? = withContext(compute) {
         lock.withLock {
             checked?.takeUnless { again }?.let { return@withLock it }
-            val (library, taste) = current() ?: return@withLock null
+            val (library, taste) = current(exactly = true) ?: return@withLock null
             HealthNow(health(plays, taste, library), clock()).also { checked = it }
         }
     }

@@ -866,6 +866,18 @@ class QueuesTest {
     }
 
     @Test
+    fun `a suggestion is a song a suggestion put in, or a song of a suggested list, never one the user added to it`() {
+        val book = playing(0).suggest(playing(0).current!!.id, listOf(playing(0).current!!.items.last().uid to folder[0]), Suggested.AUTOPLAY)
+        val queue = book.current!!
+        assertEquals(listOf("Rips 1"), queue.items.filter(queue::suggests).map { it.song.path.substringAfterLast('/').removeSuffix(".mp3") })
+        val forYou = QueueBook().play(album.take(3), 0, QueueSource(SourceKind.SUGGESTIONS, "for-you", "For you"), now = 1).book
+        val withPlayNext = forYou.playNext(listOf(folder[1]), picked, now = 2)!!.book
+        val list = withPlayNext.current!!
+        assertEquals(3, list.items.count(list::suggests))
+        assertFalse(list.suggests(list.items.single { it.song == folder[1] }))
+    }
+
+    @Test
     fun `Smart shuffle's Undo goes back to plain Shuffle, its suggestions to come gone and the order kept`() {
         val book = playing(0).cycleShuffle(Random(2)).cycleShuffle(Random(2))
         val queue = book.current!!

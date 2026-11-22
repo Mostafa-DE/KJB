@@ -257,6 +257,49 @@ class PicksTest {
         played.indices.forEach { i -> assertTrue("artist again at $i", (maxOf(0, i - 3) until i).none { played[it].artist == played[i].artist } || inserts.none { it.pick.song == played[i] }) }
     }
 
+    /** [inserts] put among [upcoming] after [playing], in play order. */
+    private fun played(playing: Song, upcoming: List<Song>, inserts: List<Insert>): List<Song> = buildList {
+        add(playing)
+        upcoming.forEachIndexed { i, song ->
+            add(song)
+            inserts.filter { it.after == i }.forEach { add(it.pick.song) }
+        }
+    }
+
+    @Test
+    fun `Smart shuffle never makes a third song of one album in a row, counting the queue's songs after its place too`() {
+        val night = (0 until 6).map { n -> song("Music/Mix/Night $n.mp3", artist = "Guest $n", album = "Night Mix", albumArtist = "Various", id = 900L + n) }
+        val solo = (0 until 6).map { n -> song("Music/Solo $n/Song.mp3", artist = "Solo $n", album = "Solo $n", id = 950L + n) }
+        val small = Library.of(night + solo, Settings())
+        val fresh = Taste.of(emptyList(), small, emptyMap(), now, amman)
+        val upcoming = listOf(night[0], night[1]) + solo.drop(1)
+        // Only the album's other songs are left to suggest.
+        val avoid = (upcoming + solo[0]).mapTo(HashSet()) { it.path }
+        val inserts = smartInserts(fresh, small, startOf(Adventure.MIX), solo[0], upcoming.map { Upcoming(it, suggested = false) }, avoid, Random(1), amman)
+        assertTrue(inserts.isNotEmpty())
+        played(solo[0], upcoming, inserts).windowed(3).forEach { three -> assertFalse(three.map { it.path }.toString(), three.all { albumKey(it) == albumKey(night[0]) }) }
+    }
+
+    @Test
+    fun `Smart shuffle keeps an artist 3 songs apart by the names the library splits a credit into`() {
+        val kestrel = song("Music/Kestrel/Low Sun.mp3", artist = "Kestrel", album = "Low Sun", id = 800L)
+        val duets = (0 until 4).map { n -> song("Music/Duets/Duet $n.mp3", artist = "Kestrel, Mira Solen", album = "Duets $n", id = 810L + n) }
+        val solo = (0 until 6).map { n -> song("Music/Solo $n/Song.mp3", artist = "Solo $n", album = "Solo $n", id = 950L + n) }
+        val small = Library.of(listOf(kestrel) + duets + solo, Settings())
+        val fresh = Taste.of(emptyList(), small, emptyMap(), now, amman)
+        val upcoming = listOf(kestrel) + solo.drop(1)
+        val avoid = (upcoming + solo[0]).mapTo(HashSet()) { it.path }
+        val inserts = smartInserts(fresh, small, startOf(Adventure.MIX), solo[0], upcoming.map { Upcoming(it, suggested = false) }, avoid, Random(1), amman)
+        assertTrue(inserts.isNotEmpty())
+        val order = played(solo[0], upcoming, inserts)
+        val names = { s: Song -> small.artistsOf(s).map { it.name }.toSet() }
+        inserts.map { it.pick.song }.forEach { pick ->
+            val at = order.indexOf(pick)
+            val near = order.subList(maxOf(0, at - 3), at) + order.subList(at + 1, minOf(order.size, at + 4))
+            assertTrue(pick.title, near.none { (names(it) intersect names(pick)).isNotEmpty() })
+        }
+    }
+
     @Test
     fun `Smart shuffle counts the suggestions already waiting, and adds only what is missing`() {
         val own = (0 until 12).map { Upcoming(of(it % 4, 0, it / 4), suggested = false) }

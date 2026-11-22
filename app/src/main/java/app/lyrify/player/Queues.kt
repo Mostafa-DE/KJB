@@ -52,6 +52,9 @@ data class Queue(
 
     val current: QueueItem? get() = items.getOrNull(index)
 
+    /** Whether [item] is a suggestion (v4): one a suggestion put here, or a song of a list KJB suggested, not one added to it. */
+    fun suggests(item: QueueItem): Boolean = item.suggested != null || (source.kind == SourceKind.SUGGESTIONS && item.sourceIndex != null)
+
     /** Whether this queue came from the place [other] names: the same kind and key, whatever the name says now. */
     fun from(other: QueueSource): Boolean = source.kind == other.kind && source.key == other.key
 

@@ -167,6 +167,19 @@ class SuggestionsTest {
     }
 
     @Test
+    fun `Suggestions health works out over the plays its taste holds, also right after new plays`() = runBlocking {
+        val service = suggestions(file = null)
+        service.taste()
+        // New plays within the minute the taste is kept: one of a song the taste already has, then another song.
+        log.plays += play(3, now - 60_000)
+        log.plays += play(4, now - 30_000)
+        now += 10_000
+        val checked = service.health(again = true)!!
+        assertTrue(checked.health.steps > 0)
+        assertEquals(now, checked.at)
+    }
+
+    @Test
     fun `Autoplay and More like this never suggest a held song`() = runBlocking {
         settings.now.value = Settings(suggestions = SuggestionSettings().never(songs[13].ref, now).notNow(songs[25].ref, now))
         val service = suggestions(file = null)

@@ -78,6 +78,18 @@ class QueueStoreTest {
     }
 
     @Test
+    fun `a list of suggestions is stored as picked songs with a mark, so an older KJB keeps its songs`() {
+        val forYou = QueueBook().play(listOf(song("Glass Steps"), song("Copper Moon", 4)), 1, QueueSource(SourceKind.SUGGESTIONS, "for-you", "For you"), now = 5).book
+        val text = QueuesJson.encode(forYou)
+        assertEquals(forYou.copy(jumps = 0), QueuesJson.decode(text))
+        assertFalse("SUGGESTIONS" in text)
+        // An older KJB knows no mark: it reads the songs a picked list, never drops them.
+        val older = QueuesJson.decode(text.replace(Regex(""","?suggestions"?:true"""), ""))!!.current!!
+        assertEquals(SourceKind.PICKED, older.source.kind)
+        assertEquals(forYou.current!!.items, older.items)
+    }
+
+    @Test
     fun `a queue stored before start times were kept starts at its last play`() {
         val old = QueuesJson.encode(book()).replace(Regex(""","?startedAt"?:\d+"""), "")
         val read = QueuesJson.decode(old)!!

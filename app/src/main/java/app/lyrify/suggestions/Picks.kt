@@ -317,11 +317,15 @@ private const val ALBUM_RUN = 2
 /** Draws tried; the freshest kept. */
 private const val TRIES = 8
 
-/** Whether [song] may come right after [before] (the songs before it, the latest last): no artist within [ARTIST_GAP], no third of an album in a row. */
-private fun fits(song: Song, before: List<Song>, startedAlbum: String?): Boolean {
-    if (before.takeLast(ARTIST_GAP).any { sameArtist(it, song) }) return false
+/**
+ * Whether [song] may come between [before] (the songs before it, the latest last) and [after] (the songs after it, when it
+ * goes in among a queue's songs): no artist of it within [ARTIST_GAP] either side ([sameArtist]), and no more than
+ * [ALBUM_RUN] songs of its album in a row with it, unless the user started that album.
+ */
+private fun fits(song: Song, before: List<Song>, startedAlbum: String?, library: Library, after: List<Song> = emptyList()): Boolean {
+    if ((before.takeLast(ARTIST_GAP) + after.take(ARTIST_GAP)).any { sameArtist(it, song, library) }) return false
     val album = albumKey(song) ?: return true
-    return album == startedAlbum || before.size < ALBUM_RUN || before.takeLast(ALBUM_RUN).any { albumKey(it) != album }
+    return album == startedAlbum || before.takeLastWhile { albumKey(it) == album }.size + 1 + after.takeWhile { albumKey(it) == album }.size <= ALBUM_RUN
 }
 
 /** A weighted draw of up to [n] of [pool] without putting back (each kept with a key u^(1/w), the largest first). */
@@ -346,7 +350,8 @@ private fun shares(mix: Mix, count: Int): Map<Bucket, Int> {
  * Up to [count] songs from [drawn] (per bucket, in their drawn order), as many of each as [wanted] says, the buckets
  * interleaved by share, each song fitting the freshness rules after [before] and the songs placed so far.
  */
-private fun arrange(drawn: Map<Bucket, List<Scored>>, wanted: Map<Bucket, Int>, before: List<Song>, startedAlbum: String?, random: Random): List<Scored> {
+@Suppress("LongParameterList")
+private fun arrange(drawn: Map<Bucket, List<Scored>>, wanted: Map<Bucket, Int>, before: List<Song>, startedAlbum: String?, library: Library, random: Random): List<Scored> {
     val total = wanted.values.sum()
     val left = drawn.mapValues { it.value.toMutableList() }
     val taken = HashMap<Bucket, Int>()
@@ -357,7 +362,7 @@ private fun arrange(drawn: Map<Bucket, List<Scored>>, wanted: Map<Bucket, Int>, 
         val order = Bucket.entries.filter { (left[it]?.isNotEmpty() == true) }
             .sortedByDescending { (wanted[it] ?: 0).toDouble() * step / total - (taken[it] ?: 0) + random.nextDouble() * TIE }
             .sortedBy { (taken[it] ?: 0) >= (wanted[it] ?: 0) }
-        val next = order.firstNotNullOfOrNull { bucket -> left.getValue(bucket).firstOrNull { fits(it.song, songs, startedAlbum) } } ?: break
+        val next = order.firstNotNullOfOrNull { bucket -> left.getValue(bucket).firstOrNull { fits(it.song, songs, startedAlbum, library) } } ?: break
         left.getValue(next.bucket).remove(next)
         taken.merge(next.bucket, 1, Int::plus)
         placed += next
@@ -382,12 +387,12 @@ private const val SHORT = 100.0
 
 /** The freshest of [TRIES] arrangements of [count] songs drawn from [pools] by [wanted]. */
 @Suppress("LongParameterList")
-private fun freshest(pools: Pools, wanted: Map<Bucket, Int>, count: Int, before: List<Song>, startedAlbum: String?, taste: Taste, random: Random): List<Scored> {
+private fun freshest(pools: Pools, wanted: Map<Bucket, Int>, count: Int, before: List<Song>, startedAlbum: String?, taste: Taste, library: Library, random: Random): List<Scored> {
     var best: List<Scored> = emptyList()
     var bestScore = Double.MAX_VALUE
     repeat(TRIES) {
         val drawn = Bucket.entries.associateWith { bucket -> draw(pools.of(bucket), (wanted[bucket] ?: 0) * 2 + EXTRA, random) }
-        val arranged = arrange(drawn, wanted, before, startedAlbum, random)
+        val arranged = arrange(drawn, wanted, before, startedAlbum, library, random)
         val score = staleness(arranged.map { it.song }, taste, count)
         if (score < bestScore) {
             best = arranged
@@ -417,7 +422,7 @@ private fun filled(wanted: Map<Bucket, Int>, pools: Pools): Map<Bucket, Int> {
 @Suppress("LongParameterList")
 fun forYou(taste: Taste, library: Library, mix: Mix, avoid: Set<String>, random: Random, zone: ZoneId, count: Int = FOR_YOU_SONGS): List<Pick> {
     val pools = pools(taste, library, avoid)
-    val songs = freshest(pools, filled(shares(mix, count), pools), count, emptyList(), null, taste, random)
+    val songs = freshest(pools, filled(shares(mix, count), pools), count, emptyList(), null, taste, library, random)
     return songs.mapIndexed { i, it -> Pick(it.song, it.bucket, reasonFor(it.song, it.bucket, taste, library, zone, songs.getOrNull(i - 1)?.song)) }
 }
 
@@ -443,7 +448,7 @@ fun autoplay(taste: Taste, library: Library, mix: Mix, queue: List<Song>, avoid:
     val follow = last?.let { taste.follows[it.path] }.orEmpty()
         .firstOrNull { it.weight >= FOLLOW_MIN && it.path !in avoid }
         ?.let { library.song(it.path) }
-        ?.takeIf { music(library, it) && !skippedALot(taste.songs[it.path]) && fits(it, tail, null) }
+        ?.takeIf { music(library, it) && !skippedALot(taste.songs[it.path]) && fits(it, tail, null, library) }
     val base = pools(taste, library, avoid + listOfNotNull(follow?.path))
     val like = { scored: Scored ->
         val artist = if (library.artistsOf(scored.song).any { it.name in artists }) LIKE_ARTIST else 0.0
@@ -454,7 +459,7 @@ fun autoplay(taste: Taste, library: Library, mix: Mix, queue: List<Song>, avoid:
     val first = if (follow != null && last != null) Pick(follow, bucketOf(taste, follow.path), Reason.Follows(last)) else null
     val rest = count - (if (first != null) 1 else 0)
     val before = tail + listOfNotNull(first?.song)
-    val songs = freshest(pools, filled(shares(mix, rest), pools), rest, before, null, taste, random)
+    val songs = freshest(pools, filled(shares(mix, rest), pools), rest, before, null, taste, library, random)
     val picks = songs.mapIndexed { i, it ->
         val after = if (i == 0) first?.song ?: last else songs[i - 1].song
         Pick(it.song, it.bucket, reasonFor(it.song, it.bucket, taste, library, zone, after))
@@ -515,7 +520,7 @@ fun smartInserts(taste: Taste, library: Library, mix: Mix, playing: Song?, upcom
             }
         }
         val after = sequence.subList(slot + offset + 1, min(sequence.size, slot + offset + 1 + ARTIST_GAP))
-        val fitsHere = { song: Song -> song.path !in used && fits(song, before, startedAlbum) && after.none { sameArtist(it, song) } }
+        val fitsHere = { song: Song -> song.path !in used && fits(song, before, startedAlbum, library, after) }
         val follow = taste.follows[prev.path].orEmpty().firstOrNull { it.weight >= FOLLOW_MIN && it.path !in avoid }
             ?.let { library.song(it.path) }?.takeIf { music(library, it) && !skippedALot(taste.songs[it.path]) && fitsHere(it) }
         val pick = if (follow != null) {
@@ -533,7 +538,11 @@ fun smartInserts(taste: Taste, library: Library, mix: Mix, playing: Song?, upcom
     return out
 }
 
-private fun sameArtist(a: Song, b: Song): Boolean = a.artist?.trim()?.lowercase()?.let { it == b.artist?.trim()?.lowercase() } == true
+/** Whether [a] and [b] share an artist, by the names [library] reads their artist tags as: a split credit ("Kestrel, Mira Solen") names each. */
+private fun sameArtist(a: Song, b: Song, library: Library): Boolean {
+    val names = library.artistNames(a.artist).mapTo(HashSet()) { it.lowercase() }
+    return library.artistNames(b.artist).any { it.lowercase() in names }
+}
 
 private const val MIN_GAP = 2
 private const val MAX_GAP = 6

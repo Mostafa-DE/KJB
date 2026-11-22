@@ -46,7 +46,8 @@ private const val TOP = 10
 private const val FOLLOW_BONUS = 1.0
 
 /**
- * [Health] from [plays] (the play log, the oldest first) for [library]'s music as of [taste]'s now.
+ * [Health] from [plays] (the play log, the oldest first) for [library]'s music as of [taste]'s now; [taste] must be built
+ * from these very [plays], since the replay reads each song's values by its plays' places.
  *
  * The replay test walks the plays of the last [HEALTH_DAYS] days the user started (not a suggestion's, not an import,
  * not an early skip, not the same song again): at each, every guess ranks songs from what came before only, and scores
