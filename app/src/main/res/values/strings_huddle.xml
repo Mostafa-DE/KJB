@@ -86,6 +86,8 @@
     <!-- The start screen's row, and a card sent to you. -->
     <string name="huddle_from">From %1$s</string>
     <string name="huddle_dismiss">Dismiss</string>
+    <!-- TalkBack: a card not opened yet, the one shown in coral. -->
+    <string name="huddle_new">New</string>
     <string name="huddle_play">Play</string>
     <plurals name="huddle_play_found">
         <item quantity="one">Play the one you have</item>

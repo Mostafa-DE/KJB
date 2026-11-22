@@ -1,17 +1,22 @@
 package app.lyrify.huddle
 
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
  * Huddle's server in memory, as huddle-server/API.md has it: invite slots made by their owner, accepted once, read and
  * deleted by the owner; mailboxes of numbered messages, plays gone once read, cards until acknowledged; mailboxes
- * deleted on request. [online] false answers nothing; [requests] names each call. An accept sent again with the same data
+ * deleted on request. [online] false answers nothing, and the calls named in [silent] answer nothing (one route the server
+ * holds back); [requests] names each call. An accept sent again with the same data
  * answers as joined (huddle-server makes it safe to retry); [lostAccepts] accepts are stored but their answer is lost.
+ * The inbox answers after [slowMs], as a server KJB waits on until its timeout.
  */
 class FakeServer : HuddleServer {
     var online: Boolean = true
+    var silent: Set<String> = emptySet()
     var lostAccepts: Int = 0
+    var slowMs: Long = 0
     /** Invite id to its owner id and the accept's data, null while waiting. */
     val invites = HashMap<String, Pair<String, String?>>()
     val boxes = HashMap<String, MutableList<Posted>>()
@@ -44,7 +49,7 @@ class FakeServer : HuddleServer {
 
     override suspend fun inviteStatus(owner: String): InviteStatus? {
         requests += "inviteStatus"
-        if (!online) return null
+        if (!online || "inviteStatus" in silent) return null
         val accepted = invites.values.firstOrNull { it.first == owner } ?: return InviteStatus.Gone
         return accepted.second?.let { InviteStatus.Accepted(it) } ?: InviteStatus.Waiting
     }
@@ -57,7 +62,7 @@ class FakeServer : HuddleServer {
 
     override suspend fun send(box: String, kind: Kind, data: String): PostAnswer {
         requests += "send"
-        if (!online) return PostAnswer.NO_ANSWER
+        if (!online || "send" in silent) return PostAnswer.NO_ANSWER
         val next = ++seq
         boxes.getOrPut(box) { ArrayList() } += Posted(next, data)
         kinds[next] = kind
@@ -66,7 +71,8 @@ class FakeServer : HuddleServer {
 
     override suspend fun inbox(boxes: List<String>): Map<String, List<Posted>>? {
         requests += "inbox"
-        if (!online) return null
+        delay(slowMs)
+        if (!online || "inbox" in silent) return null
         val read = boxes.associateWith { this.boxes[it].orEmpty().toList() }.filterValues { it.isNotEmpty() }
         // Plays go as they are read.
         read.values.flatten().filter { kinds[it.seq] == Kind.PLAY }.forEach { play -> this.boxes.values.forEach { box -> box.removeAll { it.seq == play.seq } } }
@@ -75,8 +81,9 @@ class FakeServer : HuddleServer {
 
     override suspend fun ack(upTo: Map<String, Long>): Boolean {
         requests += "ack"
-        if (online) upTo.forEach { (box, last) -> boxes[box]?.removeAll { it.seq <= last } }
-        return online
+        if (!online || "ack" in silent) return false
+        upTo.forEach { (box, last) -> boxes[box]?.removeAll { it.seq <= last } }
+        return true
     }
 
     override suspend fun dropBoxes(boxes: List<String>): Boolean {

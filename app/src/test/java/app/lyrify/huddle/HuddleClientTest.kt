@@ -66,9 +66,12 @@ class HuddleClientTest {
     /** The wall clock the client reads. */
     private var now = 1_700_000_000_000L
 
+    /** What the client logged. */
+    private val logged = mutableListOf<String>()
+
     private fun TestScope.client(vararg answers: Answer): HuddleClient {
         val queue = answers.toMutableList()
-        return HuddleClient(host, "KJB/test", StandardTestDispatcher(testScheduler), clock = { now }) { uri -> FakeConnection(uri, queue.removeAt(0)).also { opened += it } }
+        return HuddleClient(host, "KJB/test", StandardTestDispatcher(testScheduler), log = { logged += it }, clock = { now }) { uri -> FakeConnection(uri, queue.removeAt(0)).also { opened += it } }
     }
 
     private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.content
@@ -145,23 +148,26 @@ class HuddleClientTest {
     }
 
     @Test
-    fun `after a 429 nothing is asked until its Retry-After is over, at most a day`() = runTest {
+    fun `after a 429 its own endpoint waits exactly its Retry-After, at most a day, and the others are asked as before`() = runTest {
         val huddle = client(
             Answer(429, """{"error":"rate_limited"}""", retryAfter = "120"),
+            Answer(200, """{"now":1,"mailboxes":[]}"""),
             Answer(201, """{"id":"1"}"""),
             Answer(429, """{"error":"rate_limited"}""", retryAfter = "9999999"),
             Answer(201, """{"id":"2"}"""),
         )
         assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.PLAY, "ZGF0YQ"))
-        assertNull("asked while it waits: no call at all", huddle.inbox(listOf(box)))
+        assertEquals("another endpoint is asked at once", emptyMap<String, List<Posted>>(), huddle.inbox(listOf(box)))
+        now += 119_000
         assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.CARD, "ZGF0YQ"))
-        assertEquals(1, opened.size)
-        now += 120_000
+        assertEquals("asked while it waits: no call at all", 2, opened.size)
+        assertTrue(logged.toString(), "huddle: messages/send not asked (retry_after, 1 s left)" in logged)
+        now += 1_000
         assertEquals(PostAnswer.POSTED, huddle.send(box, Kind.CARD, "ZGF0YQ"))
         assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.CARD, "ZGF0YQ"))
         now += 24 * 60 * 60_000L
         assertEquals("a wait longer than a day is a day", PostAnswer.POSTED, huddle.send(box, Kind.CARD, "ZGF0YQ"))
-        assertEquals(4, opened.size)
+        assertEquals(5, opened.size)
     }
 
     @Test
@@ -229,8 +235,9 @@ class HuddleClientTest {
     }
 
     @Test
-    fun `an answer longer than any the server gives is no answer`() = runTest {
+    fun `an answer longer than any the server gives is no answer, and says so in the log`() = runTest {
         val huge = """{"now":1,"mailboxes":[{"mailbox":"$box","messages":[{"id":"1","kind":"card","data":"${"A".repeat(3 * 1024 * 1024)}","sentAt":1}],"more":false}]}"""
         assertNull(client(Answer(200, huge)).inbox(listOf(box)))
+        assertEquals(listOf("huddle: messages/inbox answer too long"), logged)
     }
 }

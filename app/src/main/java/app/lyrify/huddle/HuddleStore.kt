@@ -51,6 +51,11 @@ data class Friend(
     val lastSentAt: Long? = null,
     /** The ids of their latest messages: a copy the server sends again is dropped. */
     val seen: List<String> = emptyList(),
+    /**
+     * Reads of their mailbox in a row that found a message that does not open: it waits on the server, unacknowledged, for
+     * [Huddle.NOT_OPENED_RETRIES] more reads, then goes and this is 0 again, as it is after a read that found none.
+     */
+    val notOpenedReads: Int = 0,
 ) {
     val shownName: String get() = rename ?: name
 }
@@ -79,9 +84,12 @@ data class PendingJoin(
     val card: Card? = null,
 )
 
-/** A card [friend] (their id) sent, [at] when, under its message [id]; [opened] once you played it, looked at it or put it away. */
+/**
+ * A card [friend] (their id) sent, [at] when, under its message [id]; [opened] once you played it, looked at it or put it
+ * away, [dismissed] once you put it away from the start screen.
+ */
 @Serializable
-data class Received(val id: String, val friend: String, val at: Long, val card: Card, val opened: Boolean = false)
+data class Received(val id: String, val friend: String, val at: Long, val card: Card, val opened: Boolean = false, val dismissed: Boolean = false)
 
 /** A play [friend] (their id) shared, started [at]; [favourite] when the song was one of theirs. */
 @Serializable
