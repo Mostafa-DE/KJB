@@ -23,6 +23,7 @@ import app.lyrify.player.partScope
 import app.lyrify.settings.HeldSong
 import app.lyrify.settings.SettingsStore
 import app.lyrify.settings.SuggestionSettings
+import app.lyrify.similar.SimilarGraph
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.PlayLogStore
 import app.lyrify.stats.StatsGraph
@@ -364,6 +365,7 @@ object SuggestionsGraph {
             settings = Lyrify.settings(app),
             forYouFile = File(app.filesDir, "for-you.json"),
             interactions = StatsGraph.interactions(app),
+            similar = SimilarGraph.cache(app),
             warn = { Log.w(LOG_TAG, it) },
         )
     }.also { suggestions = it }

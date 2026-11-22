@@ -1,5 +1,7 @@
 package app.lyrify.similar
 
+import app.lyrify.suggestions.SimilarArtist
+import app.lyrify.suggestions.SimilarArtistSource
 import app.lyrify.tags.HistoryEntry
 import app.lyrify.tags.SongEdit
 import app.lyrify.tags.lookup.Body
@@ -69,9 +71,6 @@ data class SimilarMemory(
     val gone: Int = 0,
     val stoppedIn: Int? = null,
 )
-
-/** An artist like another as suggestions read it: its [name], and how close, 0 to 1 (1 the closest). */
-data class Similar(val name: String, val score: Float)
 
 /** The MusicBrainz ids KJB wrote into a song (Covers & tags): its release, and its recording when written. */
 data class WrittenIds(val release: String, val recording: String?)
@@ -167,13 +166,13 @@ object SimilarRules {
      * against the closest; one with no neighbours is left out. A neighbour that is an artist of the library (one looked
      * up to the same id) carries the library's name.
      */
-    fun similar(memory: SimilarMemory, artists: Collection<String>): Map<String, List<Similar>> {
+    fun similar(memory: SimilarMemory, artists: Collection<String>): Map<String, List<SimilarArtist>> {
         val libraryNames = memory.artists.values.mapNotNull { entry -> entry.mbid?.takeIf { entry.match == Match.FOUND }?.let { it to entry.name } }.toMap()
         return artists.mapNotNull { artist ->
             val entry = memory.artists[Names.key(artist)] ?: return@mapNotNull null
             val others = entry.neighbours.filter { it.mbid != entry.mbid }.sortedByDescending { it.score }
             val closest = others.firstOrNull()?.score?.takeIf { it > 0 } ?: return@mapNotNull null
-            artist to others.map { Similar(libraryNames[it.mbid] ?: it.name, it.score.toFloat() / closest) }
+            artist to others.map { SimilarArtist(libraryNames[it.mbid] ?: it.name, it.score.toFloat() / closest) }
         }.toMap()
     }
 
@@ -291,7 +290,7 @@ class SimilarStore(private val file: File, private val log: (String) -> Unit = {
  * The cache as the lookups write it and suggestions read it: [store] read once, on [io], then kept in memory; each
  * change saved, in order. Once read, a read never waits, not even for a save. Never the network.
  */
-class SimilarCache(private val store: SimilarStore, private val io: CoroutineDispatcher = Dispatchers.IO) {
+class SimilarCache(private val store: SimilarStore, private val io: CoroutineDispatcher = Dispatchers.IO) : SimilarArtistSource {
     private val lock = Mutex()
 
     /** The memory once read; written holding [lock], read without it. */
@@ -299,7 +298,7 @@ class SimilarCache(private val store: SimilarStore, private val io: CoroutineDis
     private var kept: SimilarMemory? = null
 
     /** For each of [artists] (names as the library shows them), its similar artists ([SimilarRules.similar]). */
-    suspend fun similar(artists: Collection<String>): Map<String, List<Similar>> = SimilarRules.similar(memory(), artists)
+    override suspend fun similar(artists: Collection<String>): Map<String, List<SimilarArtist>> = SimilarRules.similar(memory(), artists)
 
     suspend fun memory(): SimilarMemory = kept ?: lock.withLock { loaded() }
 

@@ -1,5 +1,6 @@
 package app.lyrify.similar
 
+import app.lyrify.suggestions.SimilarArtist
 import app.lyrify.tags.AudioFormat
 import app.lyrify.tags.EditKind
 import app.lyrify.tags.FieldChange
@@ -106,7 +107,7 @@ class SimilarArtistsTest {
             web.requests.map { it.uri },
         )
         assertTrue(web.requests.all { it.userAgent == TEST_AGENT })
-        val expected = mapOf("Mira Solen" to listOf(Similar("Glass Harbour", 1f), Similar("Kit Calloway", 0.5f)))
+        val expected = mapOf("Mira Solen" to listOf(SimilarArtist("Glass Harbour", 1f), SimilarArtist("Kit Calloway", 0.5f)))
         assertEquals(expected, cache.similar(listOf("Mira Solen")))
         // Kept on the phone: read again after KJB closes.
         assertEquals(expected, cache().similar(listOf("Mira Solen")))
@@ -197,7 +198,7 @@ class SimilarArtistsTest {
 
         assertEquals(3, web.count(similar))
         assertEquals(0, cache.memory().failures)
-        assertEquals(listOf(Similar("Glass Harbour", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
+        assertEquals(listOf(SimilarArtist("Glass Harbour", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
     }
 
     @Test
@@ -219,7 +220,7 @@ class SimilarArtistsTest {
         lookups(web, cache).run(played("Mira Solen", "Glass Harbour"))
 
         assertEquals(1, cache.memory().failures)
-        assertEquals(mapOf("Mira Solen" to listOf(Similar("Glass Harbour", 1f))), cache.similar(listOf("Mira Solen", "Glass Harbour")))
+        assertEquals(mapOf("Mira Solen" to listOf(SimilarArtist("Glass Harbour", 1f))), cache.similar(listOf("Mira Solen", "Glass Harbour")))
     }
 
     // The kill flag
@@ -246,7 +247,7 @@ class SimilarArtistsTest {
         later += day(30)
         lookups(web, cache).run(played("Tamsin Reed"))
         assertEquals(asked, web.requests.size)
-        assertEquals(mapOf("Rowan Vale" to listOf(Similar("Glass Harbour", 1f))), cache.similar(listOf("Rowan Vale", "Tamsin Reed")))
+        assertEquals(mapOf("Rowan Vale" to listOf(SimilarArtist("Glass Harbour", 1f))), cache.similar(listOf("Rowan Vale", "Tamsin Reed")))
         // The next version tries again.
         lookups(web, cache, version = VERSION + 1).run(played("Tamsin Reed"))
         assertEquals(asked + 2, web.requests.size)
@@ -296,7 +297,7 @@ class SimilarArtistsTest {
         val kept = (0..2).map { memory.artists[Names.key("Made-up Artist $it")] }
         assertEquals(listOf(MIRA, GLASS, KIT), kept.map { it?.mbid })
         assertTrue(kept.all { it != null && it.match == Match.FOUND && it.neighbours.isEmpty() && !SimilarRules.due(it, now()) })
-        assertEquals(emptyMap<String, List<Similar>>(), cache.similar(listOf("Made-up Artist 0", "Made-up Artist 1", "Made-up Artist 2")))
+        assertEquals(emptyMap<String, List<SimilarArtist>>(), cache.similar(listOf("Made-up Artist 0", "Made-up Artist 1", "Made-up Artist 2")))
     }
 
     @Test
@@ -315,7 +316,7 @@ class SimilarArtistsTest {
         assertEquals(0, memory.gone)
         assertEquals(0, memory.failures)
         assertEquals(1, memory.artists[Names.key("Mira Solen")]?.failures)
-        assertEquals(listOf(Similar("Glass Harbour", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
+        assertEquals(listOf(SimilarArtist("Glass Harbour", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
     }
 
     // An artist that keeps failing
@@ -342,7 +343,7 @@ class SimilarArtistsTest {
         assertEquals(0, memory.failures)
         assertEquals(0L, memory.pausedUntil)
         assertEquals(0, memory.gone)
-        val rowan = listOf(Similar("Rowan Vale", 1f))
+        val rowan = listOf(SimilarArtist("Rowan Vale", 1f))
         assertEquals(mapOf("Kit Calloway" to rowan, "Glass Harbour" to rowan), cache.similar(everyone.map { it.name }))
         val asked = web.requests.size
         later += day(1)
@@ -452,7 +453,7 @@ class SimilarArtistsTest {
         lookups.run(played("Mira Solen"))
 
         assertEquals(listOf(MusicBrainzUrls.artistSearch("Mira Solen"), similar, similar).map { it.toString() }, web.requests.map { it.uri })
-        assertEquals(listOf(Similar("Kit Calloway", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
+        assertEquals(listOf(SimilarArtist("Kit Calloway", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
     }
 
     @Test
@@ -517,7 +518,7 @@ class SimilarArtistsTest {
 
         assertEquals(1, web.count(ListenBrainzUrls.similarArtists(CREDITED)))
         assertEquals(CREDITED, cache.memory().artists.values.singleOrNull()?.mbid)
-        assertEquals(listOf(Similar("Kit Calloway", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
+        assertEquals(listOf(SimilarArtist("Kit Calloway", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
     }
 
     @Test
@@ -581,7 +582,7 @@ class SimilarArtistsTest {
 
         val similar = SimilarRules.similar(memory, listOf("Mira Solen", "Glass Harbour", "Rowan Vale", "Tamsin Reed"))
 
-        assertEquals(mapOf("Mira Solen" to listOf(Similar("Glass Harbour", 1f), Similar("Kit Calloway", 0.25f))), similar)
+        assertEquals(mapOf("Mira Solen" to listOf(SimilarArtist("Glass Harbour", 1f), SimilarArtist("Kit Calloway", 0.25f))), similar)
     }
 
     @Test
@@ -589,7 +590,7 @@ class SimilarArtistsTest {
         file.writeText("{not json")
         val cache = cache()
 
-        assertEquals(emptyMap<String, List<Similar>>(), cache.similar(listOf("Mira Solen")))
+        assertEquals(emptyMap<String, List<SimilarArtist>>(), cache.similar(listOf("Mira Solen")))
         cache.update { it.copy(failures = 1) }
         assertEquals(1, cache().memory().failures)
     }
@@ -604,7 +605,7 @@ class SimilarArtistsTest {
         runCurrent()
         disk()
         runCurrent()
-        assertEquals(emptyMap<String, List<Similar>>(), first.await())
+        assertEquals(emptyMap<String, List<SimilarArtist>>(), first.await())
         val listed = ArtistSimilar("Mira Solen", Match.FOUND, MIRA, listOf(Neighbour(GLASS, "Glass Harbour", 10)), at = BASE)
 
         val saving = async { cache.update { it.copy(artists = mapOf("mira solen" to listed)) } }
@@ -619,7 +620,7 @@ class SimilarArtistsTest {
 
         assertTrue(readWhileSaving)
         assertEquals(false, savedThen)
-        assertEquals(mapOf("Mira Solen" to listOf(Similar("Glass Harbour", 1f))), read.await())
+        assertEquals(mapOf("Mira Solen" to listOf(SimilarArtist("Glass Harbour", 1f))), read.await())
         assertTrue(saving.isCompleted)
         assertEquals(read.await(), cache().similar(listOf("Mira Solen")))
     }
