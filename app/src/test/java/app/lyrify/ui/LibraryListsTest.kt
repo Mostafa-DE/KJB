@@ -301,7 +301,8 @@ class LibraryListsTest {
     }
 
     @Test
-    fun `a list with chips shows, counts, totals and shuffles the songs its chip and its search leave, and keeps the chip`() {
+    fun `a list with chips hands the songs its search leaves to its hero line, header and frame, and stores the chip picked (the page's wiring, read from its source)`() {
+        // No Compose renderer on the JVM: the period lists are ListeningTest's and PlaylistsTest's, the search findInList's above.
         val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText().substringAfter("private fun BuiltInPage(").substringBefore("\n}\n")
         // The songs shown are those the search leaves of the chip's list.
         assertTrue(page.contains("findInList("))

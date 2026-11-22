@@ -332,7 +332,10 @@ private fun rememberSearchResults(query: String, lyricPages: LazyListState? = nu
     val index by produceState<Pair<Library, SearchIndex>?>(null, library, shown.showFileNames) {
         value = library?.let { withContext(Dispatchers.Default) { it to SearchGraph.names(it, shown) } }
     }
-    val lists by produceState(emptyList<ListRow>(), library, playlists, names, shown) {
+    // The built-in lists' counts follow each play logged and the day turning, as Library's do.
+    val written by remember(context) { StatsGraph.counter(context).written }.collectAsStateWithLifecycle()
+    val today = rememberToday()
+    val lists by produceState(emptyList<ListRow>(), library, playlists, names, shown, written, today) {
         value = library?.let { listRows(it, playlists ?: PlaylistsState(), names, Lyrify.plays(context), shown) }.orEmpty()
     }
     val results by produceState<SearchResults?>(null, query, index, lists, version) {

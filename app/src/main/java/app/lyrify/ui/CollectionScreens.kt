@@ -675,7 +675,8 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
         value = when (list) {
             BuiltInList.MOST_PLAYED -> found(plays.mostPlayed(PLAYED_LIST_SIZE, since))
             BuiltInList.RECENTLY_PLAYED -> found(plays.recentlyPlayed(RECENTLY_PLAYED_SIZE, since))
-            else -> recentlyAdded(library, since).map { it to null }
+            // Off the main thread: over all time it is the whole library.
+            else -> withContext(Dispatchers.Default) { recentlyAdded(library, since).map { it to null } }
         }
     }
     val rowPlays = remember(rows, list) { if (list == BuiltInList.RECENTLY_ADDED) null else rows.orEmpty().mapNotNull { (song, p) -> p?.let { song.path to it } }.toMap() }
