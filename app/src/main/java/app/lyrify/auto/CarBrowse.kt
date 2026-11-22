@@ -243,17 +243,17 @@ class CarBrowse(
         ) { queueNames[it.id] ?: queueLabel(context, book, it) }
     }
 
-    /** Each list that shows a cover of [paths] told it changed, once, with how many children it has now. */
-    private suspend fun coversChanged(paths: Set<String>) {
-        try {
-            val data = data(null, plays = true)
-            val lists = withContext(Dispatchers.Default) { LibraryTree.showing(paths, data) }
-            lists.forEach { (id, size) -> session.notifyChildrenChanged(id, size, null) }
-            Log.d(LOG_TAG, "car: ${lists.size} lists told of ${paths.size} new covers")
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Log.w(LOG_TAG, "car lists not told of new covers: ${e.javaClass.simpleName}")
-        }
+    /** Each list that shows a cover of [paths] told it changed, once, with how many children it has now; false when it could not be. */
+    private suspend fun coversChanged(paths: Set<String>): Boolean = try {
+        val data = data(null, plays = true)
+        val lists = withContext(Dispatchers.Default) { LibraryTree.showing(paths, data) }
+        lists.forEach { (id, size) -> session.notifyChildrenChanged(id, size, null) }
+        Log.d(LOG_TAG, "car: ${lists.size} lists told of ${paths.size} new covers")
+        true
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        Log.w(LOG_TAG, "car lists not told of new covers: ${e.javaClass.simpleName}")
+        false
     }
 
     private suspend fun find(query: String, library: Library): Found =
@@ -455,17 +455,19 @@ fun coverUri(covers: CoverUris, song: Song): Uri = covers.of(coverPath(song), Co
 /**
  * Follows the covers' [versions] ([CoverVersions]) a burst at a time: from the first change, [settleMs] for more to come
  * (Covers & tags applies album after album, an Undo puts several back), then [changed] hears every song whose version
- * moved since it was last told, once. A change while [changed] runs is the next burst's. Never returns.
+ * moved since it was last told, once. A change while [changed] runs is the next burst's; songs it could not tell of
+ * (false) go with the next burst, never tried again before it. Never returns.
  */
-suspend fun coverBursts(versions: StateFlow<Map<String, Int>>, settleMs: Long, changed: suspend (Set<String>) -> Unit): Nothing {
+suspend fun coverBursts(versions: StateFlow<Map<String, Int>>, settleMs: Long, changed: suspend (Set<String>) -> Boolean): Nothing {
     var told = versions.value
+    var owed = emptySet<String>()
     while (true) {
         versions.first { it != told }
         delay(settleMs)
         val now = versions.value
-        val paths = (now.keys + told.keys).filterTo(HashSet()) { now[it] != told[it] }
+        val paths = owed + (now.keys + told.keys).filter { now[it] != told[it] }
         told = now
-        if (paths.isNotEmpty()) changed(paths)
+        owed = if (paths.isEmpty() || changed(paths)) emptySet() else paths
     }
 }
 

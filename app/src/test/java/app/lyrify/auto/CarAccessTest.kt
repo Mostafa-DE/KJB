@@ -527,7 +527,7 @@ class CarAccessTest {
         val (quiet, ember, paper) = listOf("/made/up/Quiet Ember.mp3", "/made/up/Ember Road.mp3", "/made/up/Paper Harbour.mp3")
         val versions = MutableStateFlow(mapOf(quiet to 1, paper to 4))
         val told = mutableListOf<Set<String>>()
-        backgroundScope.launch { coverBursts(versions, settleMs = 2_000) { told += it } }
+        backgroundScope.launch { coverBursts(versions, settleMs = 2_000) { told += it; true } }
         runCurrent()
         // The versions there already are not changes.
         advanceTimeBy(5_000)
@@ -563,6 +563,7 @@ class CarAccessTest {
                 told += paths
                 // Building the lists takes a while.
                 delay(3_000)
+                true
             }
         }
         runCurrent()
@@ -571,6 +572,29 @@ class CarAccessTest {
         versions.value += "/made/up/Ember Road.mp3" to 1
         advanceTimeBy(5_000)
         assertEquals(listOf(setOf("/made/up/Quiet Ember.mp3"), setOf("/made/up/Ember Road.mp3")), told)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `covers the car could not be told of go with the next burst, not again and again`() = runTest {
+        val (quiet, ember) = listOf("/made/up/Quiet Ember.mp3", "/made/up/Ember Road.mp3")
+        val versions = MutableStateFlow(emptyMap<String, Int>())
+        val told = mutableListOf<Set<String>>()
+        var fails = 1
+        backgroundScope.launch { coverBursts(versions, settleMs = 1_000) { paths -> told += paths; fails-- <= 0 } }
+        runCurrent()
+        versions.value += quiet to 1
+        advanceTimeBy(1_100)
+        // The library could not be read: nothing is tried again until another cover changes.
+        advanceTimeBy(30_000)
+        assertEquals(listOf(setOf(quiet)), told)
+
+        versions.value += ember to 1
+        advanceTimeBy(1_100)
+        assertEquals(listOf(setOf(quiet), setOf(quiet, ember)), told)
+        versions.value += ember to 2
+        advanceTimeBy(1_100)
+        assertEquals(setOf(ember), told.last())
     }
 
     // The car's searches
