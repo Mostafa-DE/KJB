@@ -5,11 +5,16 @@ import app.lyrify.backup.BackupFixtures.bell
 import app.lyrify.backup.BackupFixtures.contents
 import app.lyrify.backup.BackupFixtures.entries
 import app.lyrify.backup.BackupFixtures.lantern
+import app.lyrify.backup.BackupFixtures.newLibrary
+import app.lyrify.backup.BackupFixtures.newWater
+import app.lyrify.backup.BackupFixtures.newLantern
 import app.lyrify.backup.BackupFixtures.water
 import app.lyrify.backup.BackupFixtures.zip
 import app.lyrify.backup.SectionJson.flag
 import app.lyrify.backup.SectionJson.long
 import app.lyrify.backup.SectionJson.text
+import app.lyrify.library.PlaylistsJson
+import app.lyrify.library.PlaylistsState
 import app.lyrify.library.SongRef
 import app.lyrify.player.SourceKind
 import app.lyrify.stats.LoggedPlay
@@ -27,12 +32,13 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The better listening log in backups, both ways (LG1): a new backup carries what each play keeps and the skips in the
- * section 3.1.0 already reads, at the same version, so 3.1.0 restores it as before; and a backup 3.1.0 made restores
- * here. Made-up names only.
+ * The better listening log in backups, both ways (LG1): a new backup carries what each play keeps, the skips and when
+ * each favourite became one in the sections 3.1.0 already reads, at the same versions, so 3.1.0 restores it as before;
+ * and a backup 3.1.0 made restores here. Made-up names only.
  */
 class ListeningLogBackupTest {
     private val picked = PlayStart(StartedBy.PICKED, SourceKind.ALBUM, shuffled = false, songKey = "paper lantern|kit calloway|harbour glass|100")
@@ -50,7 +56,9 @@ class ListeningLogBackupTest {
         LoggedPlay(bell.ref, T0 + 900_000, 0, counted = false, end = PlayEnded(PlayEnd.JUMP, 0)),
     )
 
-    private fun backup(): ByteArray = zip(BackupFixtures.snapshot.copy(plays = plays + skips))
+    private val dates = mapOf(water.path to T0 - 5_000, lantern.path to T0 - 1_000)
+
+    private fun backup(): ByteArray = zip(BackupFixtures.snapshot.copy(plays = plays + skips, playlists = BackupFixtures.playlists.copy(favouriteAdded = dates)))
 
     private fun section(bytes: ByteArray, section: Section): String = entries(bytes).first { it.first == section.file }.second
 
@@ -61,6 +69,11 @@ class ListeningLogBackupTest {
     @Test
     fun `every play comes back with all it keeps, and the skips too`() {
         assertEquals((plays + skips).map(::noId), contents(backup()).plays)
+    }
+
+    @Test
+    fun `each favourite comes back with when it became one`() {
+        assertEquals(dates, contents(backup()).playlists?.favouriteAdded)
     }
 
     @Test
@@ -81,6 +94,11 @@ class ListeningLogBackupTest {
         assertEquals(plays.map { LoggedPlay(SongRef(it.song.path), it.startedAt, it.heardMs, it.counted) }, read)
     }
 
+    @Test
+    fun `3_1_0 reads a new backup's favourites as it always did`() {
+        assertEquals(BackupFixtures.playlists.favouriteSongs.map { SongRef(it.path) }, favourites310(section(backup(), Section.PLAYLISTS)))
+    }
+
     // A 3.1.0 backup here
 
     @Test
@@ -98,6 +116,12 @@ class ListeningLogBackupTest {
             ),
             SectionJson.plays(old),
         )
+    }
+
+    @Test
+    fun `a 3_1_0 backup's favourites come back without dates`() {
+        val old = """{"schemaVersion":1,"playlists":[],"favourites":{"songs":[{"path":"${water.path}"}],"collections":[]}}"""
+        assertEquals(PlaylistsState(favouriteSongs = listOf(SongRef(water.path))), PlaylistsJson.decode(old))
     }
 
     @Test
@@ -131,6 +155,15 @@ class ListeningLogBackupTest {
         assertEquals((plays + skips).map(::noId).toSet(), stores.log.plays.map(::noId).toSet())
     }
 
+    @Test
+    fun `on a new phone the dates follow their songs, and a song a favourite on both keeps the earlier date`() {
+        val phone = MemoryStores(playlists = PlaylistsState(favouriteSongs = listOf(newLantern.ref), favouriteAdded = mapOf(newLantern.path to T0 + 9_000)))
+        runBlocking { RestorePlan(contents(backup()), newLibrary).apply(setOf(Section.PLAYLISTS), phone, newId = { "new" }) }
+
+        assertEquals(mapOf(newWater.path to T0 - 5_000, newLantern.path to T0 - 1_000), phone.playlists.favouriteAdded)
+        assertTrue(phone.playlists.favouriteAdded.keys.all { path -> phone.playlists.favouriteSongs.any { it.path == path } })
+    }
+
     private companion object {
         /** 3.1.0's reading of the plays section (backup/BackupSections.kt), word for word. */
         fun plays310(text: String): List<LoggedPlay>? = (SectionJson.jsonObject(text)?.get("plays") as? JsonArray)?.mapNotNull { element ->
@@ -141,6 +174,21 @@ class ListeningLogBackupTest {
                 heardMs = play.long("heardMs")?.coerceAtLeast(0) ?: 0,
                 counted = play.flag("counted") ?: false,
             )
+        }
+
+        private val json310 = Json { ignoreUnknownKeys = true }
+
+        /** 3.1.0's reading of the favourite songs in `playlists.json` (library/Playlists.kt), word for word. */
+        fun favourites310(text: String): List<SongRef> {
+            val root = json310.parseToJsonElement(text) as JsonObject
+            val stored = ((root["favourites"] as? JsonObject)?.get("songs") as? JsonArray).orEmpty()
+            return stored.mapNotNull { element ->
+                try {
+                    json310.decodeFromJsonElement(SongRef.serializer(), element).takeIf { it.path.isNotBlank() }
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
+            }
         }
     }
 }

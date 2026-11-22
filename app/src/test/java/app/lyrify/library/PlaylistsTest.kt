@@ -128,6 +128,26 @@ class PlaylistsTest {
     }
 
     @Test
+    fun `a song made a favourite keeps the date it became one, until it is no favourite`() {
+        val state = PlaylistsState()
+            .favourite(listOf(lantern), favourite = true, at = NOW)
+            .favourite(listOf(bell, water), favourite = true, at = NOW + 1_000)
+            // A favourite already: it keeps its first date.
+            .favourite(listOf(lantern.copy(mediaStoreId = 99)), favourite = true, at = NOW + 2_000)
+        assertEquals(mapOf(lantern.path to NOW, bell.path to NOW + 1_000, water.path to NOW + 1_000), state.favouriteAdded)
+
+        // Removed, its date goes; made a favourite again, it has the new one.
+        val removed = state.favourite(listOf(bell), favourite = false)
+        assertEquals(mapOf(lantern.path to NOW, water.path to NOW + 1_000), removed.favouriteAdded)
+        assertEquals(NOW + 5_000, removed.favourite(listOf(bell), favourite = true, at = NOW + 5_000).favouriteAdded[bell.path])
+        // Without a date (an import's): none.
+        assertEquals(null, removed.favourite(listOf(bell), favourite = true).favouriteAdded[bell.path])
+        // A trashed song's date goes with it; a custom order keeps every date.
+        assertEquals(mapOf(water.path to NOW + 1_000), state.forget(setOf(lantern.path, bell.path)).favouriteAdded)
+        assertEquals(state.favouriteAdded, state.arrangeFavourites(listOf(water, lantern, bell)).favouriteAdded)
+    }
+
+    @Test
     fun `favourite albums, artists, folders and playlists are each there once, the latest first`() {
         val state = PlaylistsState().favourite(album, true).favourite(artist, true).favourite(album, true)
 
@@ -157,6 +177,28 @@ class PlaylistsTest {
 
         assertEquals(everything, PlaylistsJson.decode(text))
         assertEquals(PlaylistsJson.SCHEMA_VERSION, Json.parseToJsonElement(text).jsonObject["schemaVersion"].toString().toInt())
+    }
+
+    @Test
+    fun `the dates are kept beside the favourite songs, which stay as 3_1_0 wrote and reads them`() {
+        val dated = everything.copy(favouriteAdded = mapOf(water.path to NOW, lantern.path to NOW + 1))
+        val text = PlaylistsJson.encode(dated)
+
+        assertEquals(dated, PlaylistsJson.decode(text))
+        val favourites = Json.parseToJsonElement(text).jsonObject["favourites"]!!.jsonObject
+        val before = Json.parseToJsonElement(PlaylistsJson.encode(everything)).jsonObject["favourites"]!!.jsonObject
+        assertEquals(before["songs"], favourites["songs"])
+        assertEquals(setOf("songs", "collections", "added"), favourites.keys)
+        // A file without dates (3.1.0's) reads with none.
+        assertEquals(everything, PlaylistsJson.decode(PlaylistsJson.encode(everything)))
+    }
+
+    @Test
+    fun `a damaged date is dropped, and so is the date of a song no favourite`() {
+        val text = """{"schemaVersion":1,"favourites":{"songs":[{"path":"${water.path}"},{"path":"${lantern.path}"},{"path":"${bell.path}"}],""" +
+            """"added":{"${water.path}":"soon","${lantern.path}":$NOW,"${bell.path}":-5,"/storage/emulated/0/Music/Gone.mp3":$NOW}}}"""
+
+        assertEquals(mapOf(lantern.path to NOW), PlaylistsJson.decode(text)?.favouriteAdded)
     }
 
     @Test
@@ -235,6 +277,18 @@ class PlaylistsTest {
         assertEquals(listOf(album), stored.favouriteCollections)
         assertEquals(listOf(water), store.songs.first())
         assertEquals(listOf(album), store.collections.first())
+    }
+
+    @Test
+    fun `every way to make a song a favourite stores when it became one, and taking it out of Favourites its date too`() = runBlocking {
+        // The heart, the double tap, the song sheet, the widget and the notification all go through setSongs.
+        val file = File(folder.root, "playlists.json")
+        val store = repository(file)
+
+        assertTrue(store.setSongs(listOf(water, bell), favourite = true))
+        assertEquals(mapOf(water.path to NOW, bell.path to NOW), PlaylistsJson.decode(file.readText())?.favouriteAdded)
+        assertTrue(store.setSongs(listOf(water), favourite = false))
+        assertEquals(mapOf(bell.path to NOW), PlaylistsJson.decode(file.readText())?.favouriteAdded)
     }
 
     @Test
