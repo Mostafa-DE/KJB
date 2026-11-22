@@ -172,9 +172,10 @@ class DlSession internal constructor(
      * Has the add-on work in its own foreground service, which a phone's app freezer leaves alone (a service KJB binds
      * counts for nothing there), from the link it took to the file it hands back: KJB starts it right after a lookup or a
      * run started, and KJB's own foreground (its screen, or its downloads service) is what lets it. False when the phone
-     * refuses; the add-on then works without it.
+     * refuses; the add-on then works without it. Never once KJB let go of the add-on (a sheet that went while its call was
+     * under way): the start would bring the service back with nothing of KJB's holding it.
      */
-    fun foreground(): Boolean = startForeground()
+    fun foreground(): Boolean = !gone.get() && startForeground()
 
     /**
      * Lets go of an add-on the phone froze: unbinds it and stops the service KJB started for its work ([foreground]), so
@@ -212,17 +213,34 @@ class DlLookup(private val connect: suspend () -> DlConnection) {
 
     /** Binds the add-on and asks it to look [url] up, heard by [events]: Ready, or why the add-on can't be used. */
     suspend fun start(url: String, events: DlLookupEvents): AddonState =
-        ask(MIN_DL_API, { it.info(url, events) }) { events.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }
+        ask(MIN_DL_API, { it.port.info(url, events) }) { events.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }
 
     /**
-     * Binds the add-on and asks it to search YouTube for [search], heard by [events]: Ready, or why the add-on can't be
-     * used. One older than [DL_SEARCH_API] is Outdated and never asked: it would answer the unknown call with nothing.
+     * Binds the add-on and asks it to search YouTube for [search], heard by [events] once: Ready, or why the add-on can't
+     * be used. One older than [DL_SEARCH_API] is Outdated and never asked: it would answer the unknown call with nothing.
+     * An add-on that dies before it answers fails the search as the engine: its answer would have come through a
+     * callback that died with it, and the sheet would say it searches for good.
      */
-    suspend fun search(search: DlSearch, events: DlSearchEvents): AddonState =
-        ask(DL_SEARCH_API, { it.search(search, events) }) { events.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }
+    suspend fun search(search: DlSearch, events: DlSearchEvents): AddonState {
+        val answered = AtomicBoolean(false)
+        val once = object : DlSearchEvents {
+            override fun onResults(results: DlSearchResults) {
+                if (answered.compareAndSet(false, true)) events.onResults(results)
+            }
+
+            override fun onFailed(end: DlEnd.Failed) {
+                if (answered.compareAndSet(false, true)) events.onFailed(end)
+            }
+        }
+        val died = { once.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }
+        return ask(DL_SEARCH_API, { session ->
+            session.port.search(search, once)
+            session.death.invokeOnCompletion { died() }
+        }, died)
+    }
 
     /** Binds the add-on and makes [call] when it speaks [api] or later; [died]: the add-on went as it was asked. */
-    private suspend fun ask(api: Int, call: (DlPort) -> Unit, died: () -> Unit): AddonState {
+    private suspend fun ask(api: Int, call: (DlSession) -> Unit, died: () -> Unit): AddonState {
         val open = when (val connection = connect()) {
             is DlConnection.Closed -> return connection.state
             is DlConnection.Open -> connection.session
@@ -239,7 +257,7 @@ class DlLookup(private val connect: suspend () -> DlConnection) {
             return AddonState.Ready
         }
         try {
-            call(open.port)
+            call(open)
             open.foreground()
         } catch (_: AddonDiedException) {
             died()

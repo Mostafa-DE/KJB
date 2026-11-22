@@ -28,7 +28,11 @@ class DlLookupTest {
     /** What KJB did, in order: calls into the add-on, and what it asked of Android (the foreground start, the unbind, the stop). */
     private val calls = mutableListOf<String>()
 
-    private inner class FakePort(private val dead: Boolean = false) : DlPort {
+    /**
+     * The add-on as KJB calls it: [dead] when its process went before the call; a search it takes is answered at once
+     * unless not [answers]; [asked] runs while KJB's call is under way (the main thread acting meanwhile).
+     */
+    private inner class FakePort(private val dead: Boolean = false, private val answers: Boolean = true, private val asked: () -> Unit = {}) : DlPort {
         override fun apiVersion(): Int = 1
 
         override fun status(): DlStatus = DlStatus()
@@ -46,7 +50,8 @@ class DlLookupTest {
         override fun search(search: DlSearch, events: DlSearchEvents): Long {
             if (dead) throw AddonDiedException()
             calls += "search ${search.query}"
-            events.onResults(DlSearchResults(emptyList()))
+            asked()
+            if (answers) events.onResults(DlSearchResults(emptyList()))
             return 4
         }
 
@@ -61,10 +66,10 @@ class DlLookupTest {
         override fun update(): DlUpdate = error("not an update")
     }
 
-    /** A session with an add-on that answered [api] in the handshake. */
-    private fun session(port: DlPort = FakePort(), api: Int = MIN_DL_API) = DlSession(
+    /** A session with an add-on that answered [api] in the handshake; [death] completes when its process dies. */
+    private fun session(port: DlPort = FakePort(), api: Int = MIN_DL_API, death: CompletableDeferred<Unit> = CompletableDeferred()) = DlSession(
         port,
-        CompletableDeferred(),
+        death,
         unbind = { calls += "unbind" },
         startForeground = { true.also { calls += "foreground" } },
         stopService = { calls += "stopService" },
@@ -250,6 +255,38 @@ class DlLookupTest {
 
         assertEquals(listOf(DlFailure.ENGINE), failures)
         assertEquals(listOf("unbind", "stopService"), calls)
+    }
+
+    @Test
+    fun `an add-on that dies after it took a search fails it as the engine, and one that answered first is not failed after`() = runTest {
+        val death = CompletableDeferred<Unit>()
+        val lookup = DlLookup { DlConnection.Open(session(FakePort(answers = false), api = DL_SEARCH_API, death = death)) }
+
+        assertEquals(AddonState.Ready, lookup.search(DlSearch("paper lantern"), searchEvents))
+        assertEquals(emptyList<DlFailure>(), failures)
+        // Its answer would have come through a callback that died with it: the sheet would say it searches for good.
+        death.complete(Unit)
+        assertEquals(listOf(DlFailure.ENGINE), failures)
+
+        val answeredDeath = CompletableDeferred<Unit>()
+        val answered = DlLookup { DlConnection.Open(session(FakePort(), api = DL_SEARCH_API, death = answeredDeath)) }
+        answered.search(DlSearch("paper lantern"), searchEvents)
+        answeredDeath.complete(Unit)
+
+        assertEquals(listOf(DlSearchResults(emptyList())), found)
+        assertEquals("one answer to a search", listOf(DlFailure.ENGINE), failures)
+    }
+
+    @Test
+    fun `a search let go of while the add-on takes it never starts the add-on's service after`() = runTest {
+        lateinit var lookup: DlLookup
+        // A new search, or the sheet going, on the main thread while the call is under way: KJB lets go of the add-on and
+        // stops its service, so a start now would bring the service back with nothing of KJB's holding it.
+        lookup = DlLookup { DlConnection.Open(session(FakePort(asked = { lookup.close() }), api = DL_SEARCH_API)) }
+
+        lookup.search(DlSearch("paper lantern"), searchEvents)
+
+        assertEquals(listOf("search paper lantern", "unbind", "stopService"), calls)
     }
 
     @Test
