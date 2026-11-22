@@ -108,6 +108,21 @@ describe("POST /api/v1/invites/accept", () => {
     expect(status.body.data).toBe(first)
   })
 
+  it("answers the same accept again with the first acceptedAt, so a lost answer is safe to retry", async () => {
+    const ids = await createdInvite()
+    const hello = sealed(300)
+    const first = await call(handleAcceptInvite, { invite: ids.invite, data: hello })
+
+    advanceClock(60 * 1000)
+    const again = await call(handleAcceptInvite, { invite: ids.invite, data: hello })
+    const other = await call(handleAcceptInvite, { invite: ids.invite, data: sealed(300) })
+    const status = await call(handleInviteStatus, { owner: ids.owner })
+
+    expect(again).toMatchObject({ status: 200, body: { acceptedAt: first.body.acceptedAt } })
+    expect(other).toMatchObject({ status: 409, body: { error: "already_accepted" } })
+    expect(status.body).toMatchObject({ data: hello, acceptedAt: first.body.acceptedAt })
+  })
+
   it("lets only one of two friends accepting at once win", async () => {
     const ids = await createdInvite()
 

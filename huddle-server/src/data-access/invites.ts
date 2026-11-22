@@ -19,7 +19,10 @@ export async function createInvite(invite: string, owner: string) {
   return created ?? null
 }
 
-/** Stores the friend's answer on a live invite, once; the invite then lives 7 more days for its owner. */
+/**
+ * Stores the friend's answer on a live invite, once; the invite then lives 7 more days for its owner. The same answer
+ * again is a retry whose reply was lost, and gets the first accept's time.
+ */
 export async function acceptInvite(invite: string, data: string) {
   const now = new Date()
   const inviteHash = storageKey(invite)
@@ -31,8 +34,13 @@ export async function acceptInvite(invite: string, data: string) {
     .returning({ acceptedAt: invites.acceptedAt })
   if (accepted) return { outcome: "accepted", acceptedAt: now } as const
 
-  const [taken] = await db.select({ inviteHash: invites.inviteHash }).from(invites).where(live)
-  return taken ? ({ outcome: "already_accepted" } as const) : ({ outcome: "not_found" } as const)
+  const [taken] = await db.select({ data: invites.data, acceptedAt: invites.acceptedAt }).from(invites).where(live)
+  if (!taken) return { outcome: "not_found" } as const
+  // Compared as hashes, so the time the comparison takes tells nothing about the stored answer.
+  if (taken.acceptedAt && taken.data !== null && storageKey(taken.data) === storageKey(data)) {
+    return { outcome: "accepted", acceptedAt: taken.acceptedAt } as const
+  }
+  return { outcome: "already_accepted" } as const
 }
 
 /** The live invite this owner id created, or undefined. */

@@ -68,7 +68,7 @@ Every error is `{"error": "<code>"}`. `bad_request` also names the first bad fie
 | 404 | `not_found` | Invite unknown or expired, or an unknown `/api` path. (Never used for mailboxes: an unknown mailbox is just empty.) |
 | 405 | `method_not_allowed` | Anything but `POST` on an `/api` path. The `Allow` header says `POST`. |
 | 409 | `invite_exists` | `invites/create` with an invite or owner id already in use. |
-| 409 | `already_accepted` | `invites/accept` on an invite someone already accepted. |
+| 409 | `already_accepted` | `invites/accept` on an invite someone already accepted with other data. |
 | 409 | `mailbox_full` | The friend's mailbox already holds 200 cards and profiles or 4 MiB of them. |
 | 413 | `too_large` | Body over 98,304 bytes, or `data` over the limit for its kind. |
 | 415 | `unsupported_media_type` | `Content-Type` is not `application/json`. |
@@ -109,9 +109,11 @@ The friend's phone, after opening the link.
 ```
 
 `data` is whatever KJB needs to hand the inviter, for example the friend's public key and a sealed hello with the
-display name. `200 {"acceptedAt": 1763820000000}`. Only the first accept wins. An accepted invite is kept for 7 more
-days from the accept, until the owner deletes it. Errors: `400`, `404 not_found` (unknown or expired), `409
-already_accepted`, `413 too_large`, `429` (30 per hour per IP), `503 storage_full`.
+display name. `200 {"acceptedAt": 1763820000000}`. Only the first accept wins. The same `data` again answers `200`
+with the first `acceptedAt`, so an accept whose answer was lost is safe to retry with the same body (until the owner
+deletes the invite: then `404`). An accepted invite is kept for 7 more days from the accept, until the owner deletes
+it. Errors: `400`, `404 not_found` (unknown or expired), `409 already_accepted` (accepted with other data), `413
+too_large`, `429` (30 per hour per IP), `503 storage_full`.
 
 ### `POST /api/v1/invites/status`
 
