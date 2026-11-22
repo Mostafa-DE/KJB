@@ -28,6 +28,7 @@ import app.lyrify.similar.SimilarGraph
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.PlayLogStore
 import app.lyrify.stats.StatsGraph
+import app.lyrify.stats.dayOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -50,8 +51,6 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-import java.time.Instant
-import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.random.Random
 
@@ -191,7 +190,7 @@ class Suggestions(
             val now = clock()
             val settings = held()
             val held = settings.heldPaths(now, library)
-            val day = LocalDate.ofInstant(Instant.ofEpochMilli(now), zone).toString()
+            val day = dayOf(now, zone).date.toString()
             val mix = today?.takeIf { it.day == day } ?: loadMix()?.takeIf { it.day == day } ?: run {
                 val picks = forYou(taste, library, mixOf(settings.adventure, taste.outcomes), taste.recentPaths + held, random, zone)
                 TodayMix(day, picks.map { StoredPick(it.song.ref.path, it.song.ref.mediaStoreId, it.bucket) }).also(::saveMix)
