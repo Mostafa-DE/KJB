@@ -70,6 +70,9 @@ import app.lyrify.player.QueueTarget
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Undo
 import app.lyrify.player.pickedSource
+import app.lyrify.stats.StatsGraph
+import app.lyrify.stats.Target
+import app.lyrify.stats.TargetKind
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -698,14 +701,20 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                         SheetRow.PLAY_NEXT -> done(actions.playNext(listOf(song.ref)))
                         SheetRow.ADD_TO -> sheets.show(OpenSheet.AddTo(listOf(song.ref), null, ui.title(song)))
                         SheetRow.FAVOURITE -> scope.launch { toasts.say(resources, actions.favourite(listOf(song.ref), ui.playlists.favouriteSongs)) }
-                        SheetRow.LYRICS -> sheets.show(OpenSheet.Lyrics(song.ref))
+                        SheetRow.LYRICS -> {
+                            StatsGraph.interactions(context).lyrics(song.path)
+                            sheets.show(OpenSheet.Lyrics(song.ref))
+                        }
                         SheetRow.MAKE_TONE -> sheets.show(OpenSheet.MakeTone(song.ref))
                         SheetRow.CUT -> sheets.show(OpenSheet.Cut(song.ref))
                         SheetRow.SHARE -> {
                             sheets.close()
                             scope.launch { toasts.say(resources, shareSongs(context, listOf(song), ui::title)) }
                         }
-                        SheetRow.SONG_INFO -> sheets.show(OpenSheet.Info(song.ref))
+                        SheetRow.SONG_INFO -> {
+                            StatsGraph.interactions(context).opened(Target(TargetKind.SONG, song.path))
+                            sheets.show(OpenSheet.Info(song.ref))
+                        }
                         SheetRow.EDIT_TAGS -> {
                             sheets.close()
                             nav.show(FullScreen.EditTags(listOf(song.ref)))
@@ -750,7 +759,12 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                 val songs = step.songs.mapNotNull(::songOf)
                 SelectionMoreSheet(
                     count = songs.size,
-                    onInfo = songs.singleOrNull()?.let { song -> { sheets.show(OpenSheet.Info(song.ref)) } },
+                    onInfo = songs.singleOrNull()?.let { song ->
+                        {
+                            StatsGraph.interactions(context).opened(Target(TargetKind.SONG, song.path))
+                            sheets.show(OpenSheet.Info(song.ref))
+                        }
+                    },
                     onEditTags = {
                         sheets.close()
                         onActed()

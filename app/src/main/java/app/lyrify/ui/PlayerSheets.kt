@@ -98,6 +98,9 @@ import app.lyrify.player.sleepLeftMs
 import app.lyrify.player.pickedSource
 import app.lyrify.player.toSpot
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.stats.StatsGraph
+import app.lyrify.stats.Target
+import app.lyrify.stats.TargetKind
 import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlin.math.roundToInt
@@ -178,7 +181,10 @@ class PlayerExtrasUi internal constructor(
         val song = ui.song?.ref ?: ui.item.song
         when (route) {
             PlayerRoute.ADD_TO -> songSheets.show(OpenSheet.AddTo(listOf(song), null, ui.song?.let { displayTitle(it, names) } ?: song.path.substringAfterLast('/')))
-            PlayerRoute.SONG_INFO -> songSheets.show(OpenSheet.Info(song))
+            PlayerRoute.SONG_INFO -> {
+                StatsGraph.interactions(context).opened(Target(TargetKind.SONG, song.path))
+                songSheets.show(OpenSheet.Info(song))
+            }
             PlayerRoute.MAKE_TONE -> songSheets.show(OpenSheet.MakeTone(song))
             PlayerRoute.CUT -> songSheets.show(OpenSheet.Cut(song))
             PlayerRoute.SHARE -> scope.launch { toasts.say(resources, shareSongs(context, listOfNotNull(ui.song)) { displayTitle(it, names) }) }
