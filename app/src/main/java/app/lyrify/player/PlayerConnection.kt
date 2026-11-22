@@ -251,7 +251,7 @@ class PlayerConnection(
     }
 
     override fun shuffle(songs: List<SongRef>, source: QueueSource) {
-        core.switch { it.shuffle(songs, source, core.shuffleRandom(), core.now()) }
+        core.switch(Move.START) { it.shuffle(songs, source, core.shuffleRandom(), core.now()) }
         send { it.play() }
     }
 
@@ -298,12 +298,12 @@ class PlayerConnection(
     }
 
     fun resume(queueId: String) {
-        core.switch { it.resume(queueId, core.now()) }
+        core.switch(Move.START) { it.resume(queueId, core.now()) }
         send { it.play() }
     }
 
     fun playFromStart(queueId: String) {
-        core.switch { it.playFromStart(queueId, core.now()) }
+        core.switch(Move.START) { it.playFromStart(queueId, core.now()) }
         send { it.play() }
     }
 

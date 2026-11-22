@@ -6,7 +6,10 @@ import app.lyrify.library.song
 import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.PlayCounter
+import app.lyrify.stats.PlayEnd
 import app.lyrify.stats.PlayEvent
+import app.lyrify.stats.PlayStart
+import app.lyrify.stats.StartedBy
 import app.lyrify.stats.as310
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -615,11 +618,11 @@ class QueueBridgeTest {
         tracker.position(170_000, playing = true)
         wall += 10_000
         // The next song started by itself: the one before ended at its length.
-        tracker.start(refs[1], 180_002, positionMs = 0, playing = true, naturalEnd = true)
+        tracker.start(refs[1], 180_002, positionMs = 0, playing = true, ended = PlayEnd.FINISHED)
         tracker.position(12_000, playing = true)
         // Next was pressed: it ended where it was.
         tracker.start(refs[2], 180_003, positionMs = 0, playing = true)
-        tracker.end(naturalEnd = true)
+        tracker.end(PlayEnd.FINISHED)
         tracker.end()
         tracker.position(1_000, playing = true)
         val ended = events.filterIsInstance<PlayEvent.Ended>()
@@ -630,6 +633,45 @@ class QueueBridgeTest {
         assertEquals(3, ids.size)
         // Nothing after the end: no play to report on.
         assertTrue(events.last() is PlayEvent.Ended)
+    }
+
+    @Test
+    fun `each play's start and how the play before it ended reach the counter`() {
+        val picked = PlayStart(StartedBy.PICKED, SourceKind.ALBUM, shuffled = false, songKey = "low water 1|kit calloway|night ferry|90")
+        val next = PlayStart(StartedBy.NEXT, SourceKind.ALBUM, shuffled = false, songKey = null)
+        val auto = PlayStart(StartedBy.AUTO, SourceKind.ALBUM, shuffled = false, songKey = null)
+        tracker.start(refs[0], 180_001, positionMs = 0, playing = true, start = picked)
+        tracker.position(12_000, playing = true)
+        tracker.start(refs[1], 180_002, positionMs = 0, playing = true, ended = PlayEnd.NEXT, start = next)
+        tracker.position(170_000, playing = true)
+        // Crossfade: the song going out counts as heard to its end, and is left where its fade began.
+        tracker.start(refs[2], 180_003, positionMs = 0, playing = true, ended = PlayEnd.FINISHED, leftAtMs = 174_000, start = auto)
+        tracker.position(3_000, playing = true)
+        tracker.end(PlayEnd.STOPPED)
+
+        assertEquals(listOf(picked, next, auto), events.filterIsInstance<PlayEvent.Started>().map { it.start })
+        assertEquals(
+            listOf(Triple(PlayEnd.NEXT, 12_000L, 12_000L), Triple(PlayEnd.FINISHED, 180_002L, 174_000L), Triple(PlayEnd.STOPPED, 3_000L, 3_000L)),
+            events.filterIsInstance<PlayEvent.Ended>().map { Triple(it.how, it.positionMs, it.leftAtMs) },
+        )
+    }
+
+    @Test
+    fun `how a play ended and the next began come from the engine's word and the user's move to the song`() {
+        // By itself: the song played to its end, and the next came on its own; one that waited from Play next was picked.
+        assertEquals(PlayEnd.FINISHED to StartedBy.AUTO, playTurn(natural = true, move = null, playNext = false))
+        assertEquals(PlayEnd.FINISHED to StartedBy.PICKED, playTurn(natural = true, move = null, playNext = true))
+        // A move noted for the song that then came on by itself (Next as the song ended): the engine's word wins.
+        assertEquals(PlayEnd.FINISHED to StartedBy.AUTO, playTurn(natural = true, move = Move.NEXT, playNext = false))
+        assertEquals(PlayEnd.NEXT to StartedBy.NEXT, playTurn(natural = false, move = Move.NEXT, playNext = false))
+        assertEquals(PlayEnd.NEXT to StartedBy.PICKED, playTurn(natural = false, move = Move.NEXT, playNext = true))
+        assertEquals(PlayEnd.BACK to StartedBy.BACK, playTurn(natural = false, move = Move.BACK, playNext = false))
+        assertEquals(PlayEnd.JUMP to StartedBy.PICKED, playTurn(natural = false, move = Move.PICK, playNext = false))
+        // Shuffle, Resume, Play from start: the user picked the list, not its song.
+        assertEquals(PlayEnd.JUMP to StartedBy.UNKNOWN, playTurn(natural = false, move = Move.START, playNext = false))
+        // No move known: a song that could not be played, the song playing taken out of the queue, KJB starting.
+        assertEquals(PlayEnd.UNKNOWN to StartedBy.UNKNOWN, playTurn(natural = false, move = null, playNext = false))
+        assertEquals(PlayEnd.UNKNOWN to StartedBy.PICKED, playTurn(natural = false, move = null, playNext = true))
     }
 
     /**
@@ -663,7 +705,7 @@ class QueueBridgeTest {
         }
         wall += 5_000
         // On to the next song, which the app stops before it is played: no play of it.
-        after.start(refs[1], 180_000, positionMs = 0, playing = false, naturalEnd = true)
+        after.start(refs[1], 180_000, positionMs = 0, playing = false, ended = PlayEnd.FINISHED)
         after.end()
         runCurrent()
 

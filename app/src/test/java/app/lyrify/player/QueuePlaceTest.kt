@@ -212,6 +212,35 @@ class QueuePlaceTest {
     }
 
     @Test
+    fun `a tap, Shuffle or Resume notes the user's move to the song it plays, taken once as that song starts`() = runTest {
+        val core = PlayerCore(Files(), backgroundScope, wall = { currentTime })
+        runCurrent()
+        fun playing(): Long = core.book.value.current!!.current!!.uid
+
+        core.switch { it.play(songs, 3, album, currentTime) }
+        val tapped = playing()
+        assertEquals(Move.PICK, core.takeMove(tapped))
+        // Taken once: the same song starting again later (a lap of Repeat one) is no move.
+        assertEquals(null, core.takeMove(tapped))
+
+        core.switch(Move.START) { it.shuffle(songs, songsTab, Random(7), currentTime) }
+        val first = playing()
+        // Another song starting first: the move is let go, never taken for a later start of its song.
+        assertEquals(null, core.takeMove(first + 1_000))
+        assertEquals(null, core.takeMove(first))
+
+        core.switch(Move.START) { it.resume(it.recent.first(), currentTime) }
+        assertEquals(Move.START, core.takeMove(playing()))
+
+        // The last move noted is the one that counts.
+        core.moved(41, Move.NEXT)
+        core.moved(42, Move.BACK)
+        assertEquals(null, core.takeMove(41))
+        core.moved(42, Move.BACK)
+        assertEquals(Move.BACK, core.takeMove(42))
+    }
+
+    @Test
     fun `a saved queue left for a song tapped in any list keeps its song and position to the millisecond, and Resume goes on from there`() = runTest {
         val kjb = Kjb(this, Files())
         val trip = kjb.newQueue("Road trip", listOf(songs[1], songs[4], songs[6], songs[9]))

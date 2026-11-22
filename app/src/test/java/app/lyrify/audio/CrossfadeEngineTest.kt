@@ -30,6 +30,7 @@ import app.lyrify.player.sleepFadeVolume
 import app.lyrify.settings.RememberPlace
 import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.PlayCounter
+import app.lyrify.stats.PlayEnd
 import app.lyrify.stats.PlayEvents
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -393,7 +394,10 @@ class CrossfadeEngineTest {
         val sounding = MutableStateFlow(false)
         rig.engine.addListener(object : EngineListener {
             override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) =
-                tracker.start(rig.songOf(uid).ref, rig.songOf(uid).durationMs, rig.engine.positionMs, rig.engine.isPlaying, naturalEnd = natural)
+                tracker.start(
+                    rig.songOf(uid).ref, rig.songOf(uid).durationMs, rig.engine.positionMs, rig.engine.isPlaying,
+                    ended = if (natural) PlayEnd.FINISHED else PlayEnd.UNKNOWN, leftAtMs = rig.engine.fadeFromMs,
+                )
 
             override fun onPlayingChanged(playing: Boolean) {
                 tracker.position(rig.engine.positionMs, playing)
@@ -402,7 +406,7 @@ class CrossfadeEngineTest {
 
             override fun onSeeked(fromMs: Long, toMs: Long) = tracker.seeked(fromMs, toMs)
 
-            override fun onEnded() = tracker.end(naturalEnd = true)
+            override fun onEnded() = tracker.end(PlayEnd.FINISHED)
         })
         backgroundScope.launch { repeatWhilePlaying(sounding, POSITION_EVERY_MS) { tracker.position(rig.engine.positionMs, playing = true) } }
         return tracker
@@ -424,6 +428,43 @@ class CrossfadeEngineTest {
         runCurrent()
         // One row per song: counted, counted, skipped part way, counted.
         assertEquals(listOf(listOf(true), listOf(true), listOf(false), listOf(true)), rig.songs.map { s -> log.plays.filter { it.song.path == s.path }.map { it.counted } })
+    }
+
+    @Test
+    fun `a natural fade tells where the song going out was as it began, only while the song coming in is heard of`() = runTest {
+        val seen = mutableListOf<Pair<Boolean, Long?>>()
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(3, lengthMs = 40_000)) { rig ->
+            rig.engine.addListener(object : EngineListener {
+                override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+                    seen += natural to rig.engine.fadeFromMs
+                }
+            })
+        }
+        rig.run(41_000)
+        // The second song comes in over the first's last 6 s.
+        val (natural, from) = seen.last()
+        assertTrue(natural)
+        assertTrue("$from", from != null && from in 33_000L..34_500L)
+        assertNull(rig.engine.fadeFromMs)
+
+        // A change by hand fades too, but is no song that played to its end.
+        rig.engine.seek(2, 0)
+        assertEquals(false to null, seen.last())
+    }
+
+    @Test
+    fun `a song crossfaded out ends as finished where its fade began, and counts`() = runTest {
+        val share = MutableStateFlow<Int?>(100)
+        val log = FakePlayLog()
+        val counter = PlayCounter(log, share, backgroundScope)
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(2, lengthMs = 40_000)) { follow(it, counter) }
+        rig.run(41_000)
+        runCurrent()
+
+        val first = log.plays.single { it.song.path == rig.songs[0].path }
+        assertTrue(first.counted)
+        assertEquals(PlayEnd.FINISHED, first.end?.how)
+        assertTrue("${first.end}", first.end!!.atMs in 33_000L..34_500L)
     }
 
     // Albums, the sleep timer, A-B

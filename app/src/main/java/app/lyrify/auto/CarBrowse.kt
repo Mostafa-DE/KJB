@@ -40,6 +40,7 @@ import app.lyrify.library.mostPlayed
 import app.lyrify.library.recentlyPlayed
 import app.lyrify.player.Found
 import app.lyrify.player.LibraryTree
+import app.lyrify.player.Move
 import app.lyrify.player.NameSearch
 import app.lyrify.player.OpenedFiles
 import app.lyrify.player.PlayerCore
@@ -186,7 +187,7 @@ class CarBrowse(
             when (play) {
                 is TreePlay.FromList -> core.switch { it.play(play.songs, play.start, play.source, core.now()) }
                 is TreePlay.InQueue -> core.switch { it.jump(play.queueId, play.index, core.now()) }
-                is TreePlay.Shuffle -> core.switch { it.shuffle(play.songs, play.source, core.shuffleRandom(), core.now()) }
+                is TreePlay.Shuffle -> core.switch(Move.START) { it.shuffle(play.songs, play.source, core.shuffleRandom(), core.now()) }
                 TreePlay.Resume -> Unit
                 null -> {
                     if (words != null) session.sendError(controller, SessionError(SessionError.ERROR_BAD_VALUE, context.getString(R.string.auto_nothing_found)))
