@@ -217,6 +217,12 @@ data class DlSearch(val query: String, val limit: Int = DEFAULT_LIMIT) {
         const val DEFAULT_LIMIT: Int = 8
         const val MAX_LIMIT: Int = 20
         const val MAX_QUERY: Int = 200
+
+        /**
+         * A search for [words] as typed or pasted, one the add-on takes ([valid]) when they are not blank: each control
+         * character (a line break, a tab, one of U+0080 to U+009F) becomes a space, and they are cut to [MAX_QUERY].
+         */
+        fun of(words: String): DlSearch = DlSearch(words.map { if (it.isISOControl()) ' ' else it }.joinToString("").trim().take(MAX_QUERY))
     }
 }
 

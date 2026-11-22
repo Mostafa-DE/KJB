@@ -273,7 +273,7 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
             if (dl?.searches == true) {
                 item(key = "search", contentType = "search") {
                     Box(rowMotion(reduced)) {
-                        SearchField(words, { words = it }, stringResource(R.string.dl_search), Modifier.padding(horizontal = ScreenPadding)) { searching = words }
+                        SearchField(words, { words = it }, stringResource(R.string.dl_search), stringResource(R.string.dl_search_hint), Modifier.padding(horizontal = ScreenPadding)) { searching = words }
                     }
                 }
             } else if (ready && install == InstallState.Idle) {
@@ -344,11 +344,12 @@ private fun LinkField(link: String, onLink: (String) -> Unit, onPaste: () -> Uni
 }
 
 /**
- * The YouTube search field with Search, for the page (which opens the search sheet) and the sheet (which searches again);
- * [label] above it on the page. Words longer than a search takes are cut there.
+ * The YouTube search field with Search, for the page (which opens the search sheet) and the sheet (which searches again):
+ * [label] above it, also what TalkBack names it by once words fill it, and [placeholder] in it while it is empty. Words
+ * longer than a search takes are cut there.
  */
 @Composable
-private fun SearchField(words: String, onWords: (String) -> Unit, label: String?, modifier: Modifier = Modifier, onSearch: () -> Unit) {
+private fun SearchField(words: String, onWords: (String) -> Unit, label: String, placeholder: String?, modifier: Modifier = Modifier, onSearch: () -> Unit) {
     val usable = words.isNotBlank()
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = modifier) {
         LyrifyField(
@@ -356,7 +357,7 @@ private fun SearchField(words: String, onWords: (String) -> Unit, label: String?
             onValueChange = { onWords(it.take(DlSearch.MAX_QUERY)) },
             modifier = Modifier.fillMaxWidth(),
             label = label,
-            placeholder = stringResource(R.string.dl_search_hint),
+            placeholder = placeholder,
             leading = { Icon(painterResource(R.drawable.ic_search), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp)) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { if (usable) onSearch() }),
@@ -979,7 +980,7 @@ private class YouTubeSearch(private val context: Context, private val scope: Cor
                 scope.launch(Dispatchers.Main) { if (lookup === next) failed = end.failure }
             }
         }
-        val search = DlSearch(words.replace(CONTROL, " ").trim().take(DlSearch.MAX_QUERY))
+        val search = DlSearch.of(words)
         scope.launch(Dispatchers.IO) {
             val state = next.search(search, events)
             withContext(Dispatchers.Main) { if (lookup === next) addon = state }
@@ -993,10 +994,6 @@ private class YouTubeSearch(private val context: Context, private val scope: Cor
     fun close() {
         lookup?.close()
         lookup = null
-    }
-
-    private companion object {
-        val CONTROL = Regex("""\p{Cntrl}+""")
     }
 }
 
@@ -1030,7 +1027,7 @@ fun YouTubeSearchSheet(query: String, onDismiss: () -> Unit, onStarted: () -> Un
         Text(stringResource(R.string.dl_search), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         when (val addon = search.addon) {
             null, AddonState.Ready -> {
-                SearchField(words, { words = it }, label = null, modifier = Modifier.padding(vertical = 8.dp)) { search.search(words) }
+                SearchField(words, { words = it }, stringResource(R.string.dl_search_hint), placeholder = null, modifier = Modifier.padding(vertical = 8.dp)) { search.search(words) }
                 SearchFound(search) { picked = it }
             }
             AddonState.Unreachable -> {

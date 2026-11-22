@@ -192,6 +192,19 @@ class DlWireTest {
     }
 
     @Test
+    fun `words as typed or pasted make a search the add-on takes`() {
+        // Every character the add-on refuses as a control character, U+0080 to U+009F too, becomes a space.
+        val controls = ((0x00..0x1F) + (0x7F..0x9F)).map { it.toChar() }.joinToString("")
+        val search = DlSearch.of(" paper${controls}lantern\r\n")
+        assertEquals("paper" + " ".repeat(controls.length) + "lantern", search.query)
+        assertTrue(search.valid)
+        assertEquals(DlSearch.DEFAULT_LIMIT, search.limit)
+        assertEquals(DlSearch.MAX_QUERY, DlSearch.of("x".repeat(DlSearch.MAX_QUERY + 50)).query.length)
+        assertTrue(DlSearch.of("x".repeat(DlSearch.MAX_QUERY + 50)).valid)
+        assertEquals("Mira Solen – Paper Harbour", DlSearch.of("Mira Solen – Paper Harbour").query)
+    }
+
+    @Test
     fun `search results a later add-on adds fields to still read, and ones that cannot be read are no answer`() {
         assertEquals(
             DlSearchResults(listOf(DlSearchResult("https://www.youtube.com/watch?v=abc123", "Paper Lantern", "The Quiet Hours", 214))),

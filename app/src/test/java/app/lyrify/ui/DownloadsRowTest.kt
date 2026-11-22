@@ -17,6 +17,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * Downloads' row on Tools: Get Downloads until the add-on is there, then what downloads now (the badge), failed or was
@@ -92,5 +93,13 @@ class DownloadsRowTest {
         DlFailure.entries.filter { it != DlFailure.OFFLINE && it != DlFailure.BLOCKED }.forEach {
             assertEquals(it.name, R.string.dl_failed_unknown_detail, searchFailureText(it))
         }
+    }
+
+    @Test
+    fun `the search field always has a name TalkBack reads, also once its words fill it`() {
+        // No Compose renderer in these tests (ThemeTokensTest), so it is read from the source. The placeholder shows only
+        // while the field is empty, and the search sheet opens with the words in it: the label is what names it.
+        val screen = File("src/main/java/app/lyrify/ui/DownloadsScreen.kt").readText()
+        assertTrue(Regex("""private fun SearchField\([^\n]*label: String,""").containsMatchIn(screen))
     }
 }
