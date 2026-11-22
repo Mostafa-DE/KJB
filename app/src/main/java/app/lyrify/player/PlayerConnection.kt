@@ -16,7 +16,9 @@ import androidx.media3.session.SessionToken
 import app.lyrify.LOG_TAG
 import app.lyrify.R
 import app.lyrify.books.BookState
+import app.lyrify.books.BookStore
 import app.lyrify.books.asBook
+import app.lyrify.books.keptFor
 import app.lyrify.books.resumeAsBook
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
@@ -160,8 +162,10 @@ class PlayerConnection(
     private val core: PlayerCore,
     private val repository: LibraryRepository,
     private val scope: CoroutineScope,
-    private val books: StateFlow<BookState>,
+    /** `books.json`: where a book started from a list or a queue plays from, and an Opened file queue's place kept. */
+    private val bookStore: BookStore,
 ) : PlaybackCommands {
+    private val books: StateFlow<BookState> get() = bookStore.state
     private val transport = MutableStateFlow(Transport())
     private var controller: MediaController? = null
     private var connecting: ListenableFuture<MediaController>? = null
@@ -309,7 +313,10 @@ class PlayerConnection(
             val item = core.book.value.queue(queueId)?.takeIf { it.source.kind == SourceKind.OPENED }?.current?.song
             // A cache copy is the library's book by its name and size, read off the main thread; nothing to read for any other.
             val copy = if (known != null && item != null) OpenedFiles.libraryCopyOf(context, item.path, known.all) else null
+            val opened = item != null
             core.switch { it.resumeAsBook(queueId, known, books.value, { ref -> copy?.takeIf { ref == item } }, core.now()) }
+            // The place it goes on at is the book's own now (nothing for music).
+            if (opened) bookStore.change { it.keptFor(core.book.value, known, core.now()) }
             send { it.play() }
         }
     }

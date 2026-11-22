@@ -476,7 +476,7 @@ class PlaybackService : MediaLibraryService() {
                 // The service's own view of the library is what playing() reads: wait for it too, not only the read.
                 val read = songs.first { it !is LibraryState.Loading } is LibraryState.Ready && library.first { it != null } != null
                 library.value?.let { known ->
-                    core.openedIntoBook(known, books.state::value, { path -> OpenedFiles.libraryCopyOf(this@PlaybackService, path, known.all) }) { !engine.playWhenReady }
+                    core.openedIntoBook(known, books, { path -> OpenedFiles.libraryCopyOf(this@PlaybackService, path, known.all) }) { !engine.playWhenReady }
                 }
                 read
             }) { playing() }

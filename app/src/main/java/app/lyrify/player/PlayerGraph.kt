@@ -297,7 +297,7 @@ object PlayerGraph {
     @Synchronized
     fun connection(context: Context): PlayerConnection = connection ?: run {
         val app = context.applicationContext
-        PlayerConnection(app, core(app), LibraryGraph.repository(app), scope, BooksGraph.store(app).state)
+        PlayerConnection(app, core(app), LibraryGraph.repository(app), scope, BooksGraph.store(app))
     }.also { connection = it }
 
     /** Plays songs from any list. */

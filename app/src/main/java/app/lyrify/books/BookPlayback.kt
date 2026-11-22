@@ -136,15 +136,28 @@ fun QueueBook.resumeAsBook(queueId: String, library: Library?, state: BookState,
 
 /**
  * The "Opened file" queue playing, when it is left on a book's file, made that book's queue ([openedAsBook]) while the
- * player is [paused] (not asked to play): a cache copy is looked up by [copyOf] first (by its name and size, off the main
- * thread), the library's own file needs no lookup. Main thread.
+ * player is [paused] (not asked to play), and its place kept in `books.json` ([books], [keptFor]): a cache copy is looked
+ * up by [copyOf] first (by its name and size, off the main thread), the library's own file needs no lookup. Main thread.
  */
-suspend fun PlayerCore.openedIntoBook(library: Library, books: () -> BookState, copyOf: suspend (String) -> Song?, paused: () -> Boolean) {
+/**
+ * `books.json` with the place of the book [queues] play now kept as its own, at [now]: what an "Opened file" queue that
+ * became the book ([openedAsBook]) brings, so the Books tab's Continue and the next start go on from there. Unchanged
+ * for music, or before the library is read.
+ */
+fun BookState.keptFor(queues: QueueBook, library: Library?, now: Long): BookState {
+    val queue = queues.current ?: return this
+    val playing = playingBook(queue, library) ?: return this
+    return withPlace(playing.book, BookPlace(playing.partIndex, queue.positionMs), now)
+}
+
+suspend fun PlayerCore.openedIntoBook(library: Library, books: BookStore, copyOf: suspend (String) -> Song?, paused: () -> Boolean) {
     val item = book.value.current?.takeIf { it.source.kind == SourceKind.OPENED }?.current?.song ?: return
     val copy = if (library.bookOf(item.path) == null) copyOf(item.path) else null
     // Play pressed meanwhile: it goes on as it is, and becomes the book at its next pause.
     if (!paused()) return
-    switch { it.openedAsBook(library, books(), { ref -> copy?.takeIf { ref == item } }, now()) }
+    val was = book.value.currentId
+    switch { it.openedAsBook(library, books.state.value, { ref -> copy?.takeIf { ref == item } }, now()) }
+    if (book.value.currentId != was) books.change { it.keptFor(book.value, library, now()) }
 }
 
 /** The book whose queue plays, and the part playing in it ([partIndex] in [Book.parts]). */
@@ -359,7 +372,7 @@ class BookPart : ServicePart {
             combine(core.book, library, paused) { queues, state, still -> Triple(queues, state, still) }.collect { (queues, state, still) ->
                 val known = (state as? LibraryState.Ready)?.library ?: return@collect
                 if (!still || queues.current?.source?.kind != SourceKind.OPENED) return@collect
-                core.openedIntoBook(known, store.state::value, { path -> OpenedFiles.libraryCopyOf(service, path, known.all) }) { !engine.playWhenReady }
+                core.openedIntoBook(known, store, { path -> OpenedFiles.libraryCopyOf(service, path, known.all) }) { !engine.playWhenReady }
             }
         }
         // The chapters of a single file playing, read once for the player and the sleep timer.
