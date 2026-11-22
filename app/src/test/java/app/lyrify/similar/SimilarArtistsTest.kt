@@ -24,8 +24,11 @@ import app.lyrify.tags.lookup.ok
 import app.lyrify.tags.lookup.releaseJson
 import app.lyrify.tags.lookup.status
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -35,6 +38,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.net.UnknownHostException
+import java.util.concurrent.Executor
 
 /**
  * Similar artists: the lookups' pacing, backoff, exact-match rule, ageing, kill flag and offline behaviour, through the
@@ -512,6 +516,36 @@ class SimilarArtistsTest {
         assertEquals(emptyMap<String, List<Similar>>(), cache.similar(listOf("Mira Solen")))
         cache.update { it.copy(failures = 1) }
         assertEquals(1, cache().memory().failures)
+    }
+
+    @Test
+    fun `suggestions read the lists at once, even while a change is still being saved`() = runTest {
+        // A disk that does its work only when told.
+        val held = mutableListOf<Runnable>()
+        fun disk() = generateSequence { held.removeFirstOrNull() }.forEach { it.run() }
+        val cache = SimilarCache(SimilarStore(file) { logs += it }, io = Executor { held += it }.asCoroutineDispatcher())
+        val first = async { cache.similar(listOf("Mira Solen")) }
+        runCurrent()
+        disk()
+        runCurrent()
+        assertEquals(emptyMap<String, List<Similar>>(), first.await())
+        val listed = ArtistSimilar("Mira Solen", Match.FOUND, MIRA, listOf(Neighbour(GLASS, "Glass Harbour", 10)), at = BASE)
+
+        val saving = async { cache.update { it.copy(artists = mapOf("mira solen" to listed)) } }
+        runCurrent()
+        val read = async { cache.similar(listOf("Mira Solen")) }
+        runCurrent()
+        val readWhileSaving = read.isCompleted
+        val savedThen = saving.isCompleted
+        // The disk finishes before any assertion, so a failing one never leaves the save waiting.
+        disk()
+        runCurrent()
+
+        assertTrue(readWhileSaving)
+        assertEquals(false, savedThen)
+        assertEquals(mapOf("Mira Solen" to listOf(Similar("Glass Harbour", 1f))), read.await())
+        assertTrue(saving.isCompleted)
+        assertEquals(read.await(), cache().similar(listOf("Mira Solen")))
     }
 
     // Privacy

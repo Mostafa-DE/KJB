@@ -256,18 +256,19 @@ class SimilarStore(private val file: File, private val log: (String) -> Unit = {
 
 /**
  * The cache as the lookups write it and suggestions read it: [store] read once, on [io], then kept in memory; each
- * change saved. Never the network.
+ * change saved, in order. Once read, a read never waits, not even for a save. Never the network.
  */
 class SimilarCache(private val store: SimilarStore, private val io: CoroutineDispatcher = Dispatchers.IO) {
     private val lock = Mutex()
 
-    /** The memory once read; only read and written holding [lock]. */
+    /** The memory once read; written holding [lock], read without it. */
+    @Volatile
     private var kept: SimilarMemory? = null
 
     /** For each of [artists] (names as the library shows them), its similar artists ([SimilarRules.similar]). */
     suspend fun similar(artists: Collection<String>): Map<String, List<Similar>> = SimilarRules.similar(memory(), artists)
 
-    suspend fun memory(): SimilarMemory = lock.withLock { loaded() }
+    suspend fun memory(): SimilarMemory = kept ?: lock.withLock { loaded() }
 
     /** Applies [change] and saves the result, which it returns; it holds in memory even when the file could not be written. */
     suspend fun update(change: (SimilarMemory) -> SimilarMemory): SimilarMemory = lock.withLock {
