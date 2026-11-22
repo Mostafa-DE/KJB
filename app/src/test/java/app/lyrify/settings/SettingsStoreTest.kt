@@ -73,6 +73,7 @@ class SettingsStoreTest {
                 SongList.MOST_PLAYED to ListSort(SortSongs.TITLE),
                 SongList.FAVOURITES to ListSort.OWN,
             ),
+            listPeriods = mapOf(SongList.RECENTLY_ADDED to ListPeriod.ALL_TIME, SongList.RECENTLY_PLAYED to ListPeriod.DAYS_365, SongList.MOST_PLAYED to ListPeriod.DAYS_60),
             hiddenSongs = listOf(SongRef("/storage/emulated/0/Music/Odds/Glass Steps.mp3", 13), SongRef("/storage/emulated/0/Music/Singles/Copper Moon.mp3")),
             artistSplit = ArtistSplit(enabled = false, separators = listOf(";", "&", "with"), exceptions = listOf("Rowan & Fennick")),
             opensOn = LibraryTab.ALBUMS,
@@ -236,7 +237,8 @@ class SettingsStoreTest {
         val text = """{"library":{"showFileNames":true},"playback":5,"audio":[1],"lyrics":"big"}"""
         val s = SettingsJson.decode(text)
 
-        assertEquals(Settings(library = LibrarySettings(showFileNames = true)), s)
+        // Changed on purpose (RP1): a library section from before the period chips opens Recently played on all time.
+        assertEquals(Settings(library = LibrarySettings(showFileNames = true, listPeriods = mapOf(SongList.RECENTLY_PLAYED to ListPeriod.ALL_TIME))), s)
     }
 
     @Test
@@ -450,7 +452,54 @@ class SettingsStoreTest {
     fun `a sort stored before the new keys still reads, Recently added among them`() {
         val library = SettingsJson.decode("""{"version":4,"library":{"songSort":"RECENTLY_ADDED","albumSort":"YEAR","artistSort":"MOST_SONGS"}}""")!!.library
 
-        assertEquals(LibrarySettings(songSort = SortSongs.RECENTLY_ADDED, albumSort = SortAlbums.YEAR, artistSort = SortArtists.MOST_SONGS), library)
+        // Changed on purpose (RP1): a file from before the period chips opens Recently played on all time, as it was.
+        val before = mapOf(SongList.RECENTLY_PLAYED to ListPeriod.ALL_TIME)
+        assertEquals(LibrarySettings(songSort = SortSongs.RECENTLY_ADDED, albumSort = SortAlbums.YEAR, artistSort = SortArtists.MOST_SONGS, listPeriods = before), library)
+    }
+
+    // The period chips of Recently added, Recently played and Most played (RP1)
+
+    @Test
+    fun `Recently added starts on the past 30 days, Recently played on the past 15 and Most played on all time`() {
+        val library = Settings().library
+        assertEquals(ListPeriod.DAYS_30, library.periodOf(SongList.RECENTLY_ADDED))
+        assertEquals(ListPeriod.DAYS_15, library.periodOf(SongList.RECENTLY_PLAYED))
+        assertEquals(ListPeriod.ALL_TIME, library.periodOf(SongList.MOST_PLAYED))
+        // The pages without chips show all of their songs.
+        assertEquals(ListPeriod.ALL_TIME, library.periodOf(SongList.ALBUM))
+        assertEquals(ListPeriod.ALL_TIME, library.periodOf(SongList.FAVOURITES))
+    }
+
+    @Test
+    fun `each list keeps the chip it was left on, the others their first`() {
+        val picked = Settings(library = LibrarySettings(listPeriods = mapOf(SongList.RECENTLY_ADDED to ListPeriod.ALL_TIME, SongList.MOST_PLAYED to ListPeriod.DAYS_60)))
+        val read = SettingsJson.decode(SettingsJson.encode(picked))!!.library
+
+        assertEquals(ListPeriod.ALL_TIME, read.periodOf(SongList.RECENTLY_ADDED))
+        assertEquals(ListPeriod.DAYS_15, read.periodOf(SongList.RECENTLY_PLAYED))
+        assertEquals(ListPeriod.DAYS_60, read.periodOf(SongList.MOST_PLAYED))
+    }
+
+    @Test
+    fun `a settings file from before the chips opens each list as it was, Recently played on all time, and a new phone's on the past 15 days`() {
+        val upgraded = SettingsJson.decode("""{"version":4,"library":{"showFileNames":true}}""")!!.library
+        assertEquals(ListPeriod.DAYS_30, upgraded.periodOf(SongList.RECENTLY_ADDED))
+        assertEquals(ListPeriod.ALL_TIME, upgraded.periodOf(SongList.RECENTLY_PLAYED))
+        assertEquals(ListPeriod.ALL_TIME, upgraded.periodOf(SongList.MOST_PLAYED))
+        // Once a chip is picked there, it is kept like any other.
+        val moved = SettingsJson.decode(SettingsJson.encode(Settings(library = upgraded.copy(listPeriods = upgraded.listPeriods + (SongList.RECENTLY_PLAYED to ListPeriod.DAYS_30)))))!!
+        assertEquals(ListPeriod.DAYS_30, moved.library.periodOf(SongList.RECENTLY_PLAYED))
+        // A new phone's file is written with the chips, none picked yet.
+        assertEquals(ListPeriod.DAYS_15, SettingsJson.decode(SettingsJson.encode(Settings()))!!.library.periodOf(SongList.RECENTLY_PLAYED))
+        // A backup from before the chips keeps a chip the phone was left on.
+        val phone = Settings(library = LibrarySettings(listPeriods = mapOf(SongList.RECENTLY_PLAYED to ListPeriod.DAYS_60)))
+        assertEquals(ListPeriod.DAYS_60, SettingsJson.decode("""{"version":4,"library":{"showFileNames":true}}""", phone)!!.library.periodOf(SongList.RECENTLY_PLAYED))
+    }
+
+    @Test
+    fun `a chip stored for a page without chips, or one this version does not know, is left out`() {
+        val text = """{"library":{"listPeriods":{"ALBUM":"DAYS_15","RECENTLY_ADDED":"DAYS_7","MOST_PLAYED":60,"RADIO":"ALL_TIME","RECENTLY_PLAYED":"DAYS_365"}}}"""
+        assertEquals(mapOf(SongList.RECENTLY_PLAYED to ListPeriod.DAYS_365), SettingsJson.decode(text)!!.library.listPeriods)
     }
 
     @Test

@@ -110,6 +110,11 @@ data class LibrarySettings(
     /** Each song page's order, remembered per kind of page; a page not here has its [SongList.default]. */
     val listSorts: Map<SongList, ListSort> = emptyMap(),
     /**
+     * The period chip Recently added, Recently played and Most played were each left on (v4); a list not here starts on
+     * its [SongList.period].
+     */
+    val listPeriods: Map<SongList, ListPeriod> = emptyMap(),
+    /**
      * "Hidden songs": the paths of songs that leave every list, search, shuffle and stats view; their files stay on the
      * phone and their plays stay counted. In the order hidden, each once.
      */
@@ -129,6 +134,9 @@ data class LibrarySettings(
 ) {
     /** [list]'s order: as the user left it, else its default. */
     fun sortOf(list: SongList): ListSort = listSorts[list] ?: list.default
+
+    /** [list]'s period: the chip the user left it on, else its first one; all time for a list without chips. */
+    fun periodOf(list: SongList): ListPeriod = listPeriods[list] ?: list.period ?: ListPeriod.ALL_TIME
 
     companion object {
         /** Songs, Playlists, Albums, Artists, Folders and Books shown; Genres hidden. */
@@ -185,10 +193,17 @@ data class ListSort(val key: SortSongs? = null, val reversed: Boolean = false) {
 }
 
 /**
- * The song pages that remember their order, each kind once (every album shares one): those with an own order ([own])
- * open in it; the others by their [default] key. Every page offers every [SortSongs] key.
+ * How far back Recently added, Recently played and Most played reach, by the chips on each (v4): the past 15, 30, 60 or
+ * 365 [days], today one of them, or all time.
  */
-enum class SongList(val own: Boolean, val default: ListSort) {
+enum class ListPeriod(val days: Int?) { DAYS_15(15), DAYS_30(30), DAYS_60(60), DAYS_365(365), ALL_TIME(null) }
+
+/**
+ * The song pages that remember their order, each kind once (every album shares one): those with an own order ([own])
+ * open in it; the others by their [default] key. Every page offers every [SortSongs] key. The lists with period chips
+ * start on their [period]: Most played on all time, as it always showed.
+ */
+enum class SongList(val own: Boolean, val default: ListSort, val period: ListPeriod? = null) {
     ALBUM(true, ListSort.OWN),
     /** Its own order: the newest album first, each in track order, songs without an album last. */
     ARTIST(true, ListSort.OWN),
@@ -197,9 +212,9 @@ enum class SongList(val own: Boolean, val default: ListSort) {
     UNKNOWN_ALBUM(false, ListSort(SortSongs.TITLE)),
     PLAYLIST(true, ListSort.OWN),
     FAVOURITES(true, ListSort.OWN),
-    MOST_PLAYED(false, ListSort(SortSongs.PLAY_COUNT)),
-    RECENTLY_PLAYED(false, ListSort(SortSongs.LAST_PLAYED)),
-    RECENTLY_ADDED(false, ListSort(SortSongs.RECENTLY_ADDED)),
+    MOST_PLAYED(false, ListSort(SortSongs.PLAY_COUNT), ListPeriod.ALL_TIME),
+    RECENTLY_PLAYED(false, ListSort(SortSongs.LAST_PLAYED), ListPeriod.DAYS_15),
+    RECENTLY_ADDED(false, ListSort(SortSongs.RECENTLY_ADDED), ListPeriod.DAYS_30),
 }
 
 /** Settings > Lyrics, and the "Aa" choices of full lyrics. */
@@ -384,7 +399,9 @@ enum class Adventure { FAMILIAR, MIX, DISCOVER }
  * The bottom bar, its style, Hide while scrolling and the tab Library opens on came in 3.1 as new keys too: a file
  * without them reads today's bar, Standard, never hiding, and Library on the first tab in its order. So did Settings'
  * open and closed sections, after 3.1.0: a file without them reads each section as at first. So did "Find similar
- * artists online" (3.2): a file without it reads it on.
+ * artists online" (3.2): a file without it reads it on. So did the period chips of Recently added, Recently played and
+ * Most played (v4): a file without them opens each list as it was, Recently played on all time (a backup's on the
+ * phone's chip, where it has one).
  */
 object SettingsJson {
     const val VERSION: Int = 4
@@ -422,6 +439,7 @@ object SettingsJson {
                             "listSorts" to JsonObject(
                                 it.listSorts.entries.associate { (list, sort) -> list.name to obj("key" to (sort.key?.name ?: OWN_ORDER), "reversed" to sort.reversed) },
                             ),
+                            "listPeriods" to JsonObject(it.listPeriods.entries.associate { (list, period) -> list.name to JsonPrimitive(period.name) }),
                             "hiddenSongs" to JsonArray(it.hiddenSongs.map { song -> obj("path" to song.path, "id" to song.mediaStoreId?.let(::JsonPrimitive)).withoutNulls() }),
                             "artistSplit" to it.artistSplit.let { split ->
                                 obj("enabled" to split.enabled, "separators" to JsonArray(split.separators.map(::JsonPrimitive)), "exceptions" to JsonArray(split.exceptions.map(::JsonPrimitive)))
@@ -532,6 +550,8 @@ object SettingsJson {
                     artistSort = it.choice("artistSort", d.library.artistSort),
                     artistReversed = it.flag("artistReversed", d.library.artistReversed),
                     listSorts = (it["listSorts"] as? JsonObject)?.let(::listSorts) ?: d.library.listSorts,
+                    // Before the chips Recently played showed all time: so it opens there, unless the phone has a chip.
+                    listPeriods = (it["listPeriods"] as? JsonObject)?.let(::listPeriods) ?: (mapOf(SongList.RECENTLY_PLAYED to ListPeriod.ALL_TIME) + d.library.listPeriods),
                     hiddenSongs = (it["hiddenSongs"] as? JsonArray)?.let(::hiddenSongs) ?: d.library.hiddenSongs,
                     artistSplit = (it["artistSplit"] as? JsonObject)?.let { split -> artistSplit(split, d.library.artistSplit) } ?: d.library.artistSplit,
                     opensOn = if ("opensOn" in it) it.choiceOrNull<LibraryTab>("opensOn") else d.library.opensOn,
@@ -613,6 +633,12 @@ object SettingsJson {
             OWN_ORDER -> ListSort.OWN.takeIf { list.own } ?: return@mapNotNull null
             else -> ListSort(SortSongs.entries.firstOrNull { it.name == key } ?: return@mapNotNull null, sort.flag("reversed", false))
         }
+    }.toMap()
+
+    /** The period chips as left, each list once: a list this version does not know or that has no chips, or a period it does not know, is left out. */
+    private fun listPeriods(stored: JsonObject): Map<SongList, ListPeriod> = stored.entries.mapNotNull { (name, value) ->
+        val list = SongList.entries.firstOrNull { it.name == name && it.period != null } ?: return@mapNotNull null
+        list to (ListPeriod.entries.firstOrNull { it.name == value.text() } ?: return@mapNotNull null)
     }.toMap()
 
     /** Settings' sections as the user left them: a section this version does not know, or a choice not true or false, is left out. */
