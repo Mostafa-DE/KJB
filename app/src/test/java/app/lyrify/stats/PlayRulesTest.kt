@@ -199,13 +199,53 @@ class PlayRulesTest {
         heard.position(150_000, playing = true, at = T0 + 10_000)
         assertEquals(10_000, heard.heardMs)
 
-        // At double speed, 20 s of the song in 10 s is plain playing.
+        // At double speed, 20 s of the song in 10 s is plain playing: 10 s heard (Insights count real minutes), all 20 s covered.
         heard.position(170_000, playing = true, at = T0 + 20_000)
-        assertEquals(30_000, heard.heardMs)
+        assertEquals(20_000, heard.heardMs)
+        assertEquals(30_000, heard.coveredMs)
 
         // Going back without a seek is not heard either.
         heard.position(10_000, playing = true, at = T0 + 25_000)
-        assertEquals(30_000, heard.heardMs)
+        assertEquals(20_000, heard.heardMs)
+    }
+
+    @Test
+    fun `time heard is the clock's time while the song plays, at any speed, so 2x counts real minutes`() {
+        // Twice as fast: the whole song in half its length.
+        val fast = HeardTime(SONG_MS)
+        fast.position(0, playing = true, at = T0)
+        (1..20).forEach { fast.position(it * 10_000L, playing = true, at = T0 + it * 5_000L) }
+        assertEquals(100_000, fast.heardMs)
+        assertEquals(SONG_MS, fast.coveredMs)
+
+        // Half as fast: half the song in its whole length.
+        val slow = HeardTime(SONG_MS)
+        slow.position(0, playing = true, at = T0)
+        (1..40).forEach { slow.position(it * 2_500L, playing = true, at = T0 + it * 5_000L) }
+        assertEquals(SONG_MS, slow.heardMs)
+        assertEquals(100_000, slow.coveredMs)
+
+        // The player said it played but the song barely moved (it waited on the file): only what the song moved, at the slowest speed, is heard.
+        val stuck = HeardTime(SONG_MS)
+        stuck.position(0, playing = true, at = T0)
+        stuck.position(5_000, playing = true, at = T0 + 60_000)
+        assertEquals(10_000, stuck.heardMs)
+    }
+
+    @Test
+    fun `a song played at double speed counts by the share of it heard, and its play keeps the real time`() = runTest {
+        val counter = counter()
+        val id = 1L
+        counter.onEvent(PlayEvent.Started(id, lantern, clock.now, SONG_MS))
+        counter.onEvent(PlayEvent.Position(id, lantern, clock.now, 0, playing = true))
+        (1..20).forEach {
+            clock.now += 5_000
+            counter.onEvent(PlayEvent.Position(id, lantern, clock.now, it * 10_000L, playing = true))
+        }
+        counter.onEvent(PlayEvent.Ended(id, lantern, clock.now, SONG_MS, PlayEnd.FINISHED))
+        runCurrent()
+
+        assertEquals(listOf(LoggedPlay(lantern, T0, 100_000, counted = true)), store.plays.as310())
     }
 
     @Test
@@ -365,7 +405,9 @@ class PlayRulesTest {
         next.end()
         runCurrent()
 
-        assertEquals(listOf(LoggedPlay(lantern, T0, 35_000, counted = false), LoggedPlay(kettle, T0 + 30_000, 10_000, counted = false)), store.plays.sortedBy { it.startedAt }.as310())
+        // The laps take turns on one clock, so each one's last 5 s of song took 10 s of it, which is heard (time heard is
+        // the clock's, up to twice the song's at the slowest speed).
+        assertEquals(listOf(LoggedPlay(lantern, T0, 40_000, counted = false), LoggedPlay(kettle, T0 + 30_000, 15_000, counted = false)), store.plays.sortedBy { it.startedAt }.as310())
     }
 
     @Test
@@ -544,7 +586,7 @@ class PlayRulesTest {
     }
 
     @Test
-    fun `a song crossfaded out is left where its fade began, and counts as heard to its end`() = runTest {
+    fun `a song crossfaded out is left where its fade began, and counts as covered to its end`() = runTest {
         val counter = counter()
         Lap(counter, id = 1).apply {
             play(185_000)
@@ -554,7 +596,8 @@ class PlayRulesTest {
         }
         runCurrent()
 
-        assertEquals(listOf(LoggedPlay(lantern, T0, SONG_MS, counted = true, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 190_000))), store.plays)
+        // Covered to its end, so it counts; heard for the 190 s of clock time it played alone (its fade is the next song's time).
+        assertEquals(listOf(LoggedPlay(lantern, T0, 190_000, counted = true, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 190_000))), store.plays)
     }
 
     @Test

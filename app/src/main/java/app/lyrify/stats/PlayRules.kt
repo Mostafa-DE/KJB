@@ -38,10 +38,11 @@ data class HeardSpan(val startMs: Long, val endMs: Long)
 
 /**
  * One play's time heard, worked out from the player's raw events ([PlayEvent]): the position moving on while playing is
- * heard; paused time and a seek's jump are not. [heardMs] is all the time played (listening time), [coveredMs] the part
- * of the song heard at least once (what "Count a play after" measures), so hearing a part again after seeking back adds
- * listening time but no share. A jump the player did not report (the position moving faster than [MAX_SPEED] times
- * the clock) counts only the time it took. A play the app kept before it stopped goes on from its [heardMs] and [spans].
+ * heard; paused time and a seek's jump are not. [heardMs] is the clock's time while the song played (listening time, in
+ * real minutes at any speed: 2x counts half the song's length), [coveredMs] the part of the song heard at least once
+ * (what "Count a play after" measures), so hearing a part again after seeking back adds listening time but no share. A
+ * jump the player did not report (the position moving faster than [MAX_SPEED] times the clock) counts only the time it
+ * took. A play the app kept before it stopped goes on from its [heardMs] and [spans].
  */
 class HeardTime(val durationMs: Long, heardMs: Long = 0, spans: List<HeardSpan> = emptyList()) {
     var heardMs: Long = heardMs
@@ -90,7 +91,9 @@ class HeardTime(val durationMs: Long, heardMs: Long = 0, spans: List<HeardSpan> 
             val moved = positionMs - from
             val took = (now - at).coerceAtLeast(0)
             val heard = if (moved <= took * MAX_SPEED + SLACK_MS) moved else minOf(moved, took)
-            heardMs += heard
+            // The clock's time, never more than the part moved takes at the slowest speed: a player that says it plays
+            // while the song waits on its file is not heard meanwhile.
+            heardMs += minOf(took, moved * SLOWEST_STRETCH)
             cover(from, from + heard)
         }
         this.positionMs = positionMs
@@ -114,6 +117,9 @@ class HeardTime(val durationMs: Long, heardMs: Long = 0, spans: List<HeardSpan> 
     private companion object {
         /** Faster than the speed sheet goes (2x), so playing is never taken for a jump. */
         const val MAX_SPEED: Long = 4
+
+        /** The clock's millis per millisecond of song at the speed sheet's slowest (0.5x). */
+        const val SLOWEST_STRETCH: Long = 2
 
         /** Room for the player's position and the clock being read a moment apart. */
         const val SLACK_MS: Long = 2_000
