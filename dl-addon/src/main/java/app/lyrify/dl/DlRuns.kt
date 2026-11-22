@@ -509,11 +509,17 @@ class DlRuns(
     private suspend fun find(id: Long, search: DlSearch?, events: SearchEvents) {
         if (search == null) return events.onFailed(DlEnd.Failed(DlFailure.REFUSED))
         if (!ytdlp.ready()) return events.onFailed(DlEnd.Failed(DlFailure.ENGINE))
-        val exit = answer(id, DlArgs::search, "ytsearch${search.limit}:${search.query.trim()}")
+        val words = search.query.trim()
+        val exit = answer(id, DlArgs::search, "ytsearch${search.limit}:$words")
         val results = (exit as? YtdlpExit.Done)?.let { Info.results(it.out) }
         when {
             results != null -> events.onResults(results)
-            exit is YtdlpExit.Failed -> events.onFailed(DlEnd.Failed(failure("lookup $id", exit)))
+            // yt-dlp names the search by its words in an ERROR line, before the reason ('[youtube:search] query "<words>"
+            // page 1: <why>'): taken out first, so words like "timed out" never decide why it failed.
+            exit is YtdlpExit.Failed -> {
+                val reasons = exit.err.lines().joinToString("\n") { it.replaceFirst(words, "") }
+                events.onFailed(DlEnd.Failed(failure("lookup $id", exit.copy(err = reasons))))
+            }
             else -> events.onFailed(DlEnd.Failed(DlFailure.UNKNOWN))
         }
     }

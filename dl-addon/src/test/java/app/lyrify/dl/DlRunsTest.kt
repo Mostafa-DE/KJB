@@ -907,6 +907,24 @@ class DlRunsTest {
     }
 
     @Test
+    fun `a search's own words never decide why it failed, though yt-dlp names the search by them`() = runTest {
+        // yt-dlp 2026.10.26 names a search 'query "<words>"' in its ERROR lines (YoutubeTabBaseInfoExtractor._search_results).
+        ytdlp.scripts += Script.Fail("ERROR: [youtube:search] query \"timed out signature\" page 1: Unable to download API JSON: HTTP Error 429: Too Many Requests")
+        ytdlp.scripts += Script.Fail("ERROR: [youtube:search] query \"timed out\": Unable to download webpage: <urlopen error timed out> (caused by TimeoutError('timed out'))")
+        val runs = runs()
+        val blocked = Found()
+        val offline = Found()
+
+        runs.search(DlSearch("timed out signature"), blocked)
+        runCurrent()
+        runs.search(DlSearch("timed out"), offline)
+        runCurrent()
+
+        assertEquals("the reason, not the words", DlEnd.Failed(DlFailure.BLOCKED), blocked.failed)
+        assertEquals("the same words in the reason still count", DlEnd.Failed(DlFailure.OFFLINE), offline.failed)
+    }
+
+    @Test
     fun `a search keeps the add-on busy until its answer, and cancelInfo kills its yt-dlp and ends its busy time`() = runTest {
         ytdlp.scripts += Script.Hang()
         ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(searchAnswer))
