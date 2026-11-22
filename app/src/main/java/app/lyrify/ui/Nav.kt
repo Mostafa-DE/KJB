@@ -59,6 +59,13 @@ sealed interface Page {
     @Serializable @SerialName("hiddenSongs")
     data object HiddenSongs : Page
 
+    /** Settings > Suggestions > Songs you said never to suggest, and Suggestions health (SuggestionScreens.kt, SG1). */
+    @Serializable @SerialName("neverSuggest")
+    data object NeverSuggest : Page
+
+    @Serializable @SerialName("suggestionsHealth")
+    data object SuggestionsHealth : Page
+
     /** Settings > Split artists: the separators and the names never split (ArtistNames.kt, TA1). */
     @Serializable @SerialName("splitArtists")
     data object SplitArtists : Page
@@ -109,6 +116,17 @@ sealed interface Page {
     /** "View all" of a top list. */
     @Serializable @SerialName("topList")
     data class TopList(val kind: TopKind) : ListeningPages
+
+    /** Suggestions' lists (SuggestionScreens.kt, SG1). */
+    sealed interface SuggestionPages : Page
+
+    /** Today's For you. */
+    @Serializable @SerialName("forYou")
+    data object ForYou : SuggestionPages
+
+    /** More like this, from a song (its path), an album (its key) or an artist (their name). */
+    @Serializable @SerialName("moreLike")
+    data class MoreLike(val seed: SeedKind, val key: String) : SuggestionPages
 
     /** "View all" of one group of results for [query] (SearchScreen.kt, L2). */
     @Serializable @SerialName("searchAll")
@@ -483,11 +501,11 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean, docked: List<DockTab> =
     val home = when (page) {
         is Page.Playlist, is Page.BuiltIn, is Page.QueuePages, is Page.ListeningPages ->
             own ?: here?.takeIf { it == DockTab.LIBRARY || it == DockTab.PLAYLISTS } ?: DockTab.PLAYLISTS
-        is Page.CollectionPages -> own ?: here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
+        is Page.CollectionPages, is Page.SuggestionPages -> own ?: here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY
         is Page.Check, Page.Duplicates, Page.Trash, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, is Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists,
-        Page.Licences, is Page.Licence, Page.BottomBar -> DockTab.TOOLS
+        Page.Licences, is Page.Licence, Page.BottomBar, Page.NeverSuggest, Page.SuggestionsHealth -> DockTab.TOOLS
     }
     return if (home == DockTab.PLAYLISTS && DockTab.PLAYLISTS !in docked) here?.takeUnless { it == DockTab.TOOLS } ?: DockTab.LIBRARY else home
 }

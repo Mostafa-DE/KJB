@@ -446,6 +446,8 @@ class SharedWritesTest {
             "player/SongStateStore.kt",
             "settings/SettingsStore.kt",
             "stats/PlayLog.kt",
+            // Today's For you, in the app's files, written aside and moved over.
+            "suggestions/Suggestions.kt",
             "tags/CoversTagsStore.kt",
             "tags/TagEdits.kt",
             "tags/UndoStore.kt",

@@ -375,6 +375,12 @@ data class QueueBook(
         return if (queue.shuffleStep == ShuffleStep.SHUFFLE) edit(queue.id) { it.copy(smart = true) } else toggleShuffle(random)
     }
 
+    /** Smart shuffle back to plain Shuffle on the queue playing (its Undo): its suggestions still to come leave, the order stays. */
+    fun plainShuffle(): QueueBook {
+        val queue = current?.takeIf { it.shuffleStep == ShuffleStep.SMART } ?: return this
+        return unsuggest(queue.id, Suggested.SMART_SHUFFLE).edit(queue.id) { it.copy(smart = false) }
+    }
+
     /**
      * Suggestions into queue [queueId], marked [by]: each song of [songs] right after the item with the uid it names (a
      * song after the same item in their order), none the queue holds already, none after an item that is gone.

@@ -204,10 +204,21 @@ fun HiddenSongsPage() {
     }
 }
 
-/** A hidden song: its cover, title and artist, and Unhide, which TalkBack hears with the song's title. */
+/**
+ * A hidden song: its cover, title and [line] (its artist), and Unhide, which TalkBack hears with the song's title. Songs
+ * held out of suggestions show the same way, with their own [action] (Allow again) and its [words].
+ */
 @Composable
-private fun HiddenRow(song: Song, title: String, modifier: Modifier, onUnhide: () -> Unit) {
-    val unhide = stringResource(R.string.lib_unhide_song, title)
+internal fun HiddenRow(
+    song: Song,
+    title: String,
+    modifier: Modifier,
+    line: String? = song.artist,
+    action: String = stringResource(R.string.lib_unhide),
+    words: String = stringResource(R.string.lib_unhide_song, title),
+    onUnhide: () -> Unit,
+) {
+    val unhide = words
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -216,10 +227,10 @@ private fun HiddenRow(song: Song, title: String, modifier: Modifier, onUnhide: (
         SongCover(SongArt(song.path, song.ref.mediaStoreId))
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            song.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            line?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         }
         Box(Modifier.semantics { contentDescription = unhide }) {
-            LyrifyButton(stringResource(R.string.lib_unhide), onClick = onUnhide, kind = ButtonKind.GHOST, compact = true, modifier = Modifier.clearAndSetSemantics { })
+            LyrifyButton(action, onClick = onUnhide, kind = ButtonKind.GHOST, compact = true, modifier = Modifier.clearAndSetSemantics { })
         }
     }
 }

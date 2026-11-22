@@ -193,6 +193,9 @@ data class Mix(val explore: Double, val discover: Double) {
     val familiarShare: Double get() = 1 - explore
     val rediscoverShare: Double get() = explore * (1 - discover)
     val discoverShare: Double get() = explore * discover
+
+    /** Smart shuffle puts in about 1 suggestion in this many songs ("about 1 song in 3"). */
+    val oneIn: Int get() = (1 / explore.coerceAtLeast(MIN_EXPLORE)).roundToInt().coerceIn(MIN_GAP, MAX_GAP)
 }
 
 /** Where the mix starts for [adventure]: about 1 suggestion in 3 a rediscovery or a new song for Mix (user, 2026-11-22). */
@@ -476,7 +479,7 @@ data class Insert(val after: Int, val pick: Pick)
  */
 @Suppress("LongParameterList", "CyclomaticComplexMethod")
 fun smartInserts(taste: Taste, library: Library, mix: Mix, playing: Song?, upcoming: List<Upcoming>, avoid: Set<String>, random: Random, zone: ZoneId, startedAlbum: String? = null): List<Insert> {
-    val gap = (1 / mix.explore.coerceAtLeast(MIN_EXPLORE)).roundToInt().coerceIn(MIN_GAP, MAX_GAP) - 1
+    val gap = mix.oneIn - 1
     val window = upcoming.take(SMART_WINDOW)
     val slots = ArrayList<Int>()
     var run = if (playing != null) 1 else 0

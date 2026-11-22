@@ -2,4 +2,155 @@
 <resources>
     <!-- Suggestions (v4): Autoplay, Smart shuffle, For you, More like this, Why this?, Settings and Suggestions health. -->
     <string name="settings_suggestions">Suggestions</string>
+
+    <!-- The mark on a suggested song, and its reason in grey under it (suggestions/Picks.kt's Reason). -->
+    <string name="suggest_mark">Suggested</string>
+    <string name="suggest_by_autoplay">Suggested by Autoplay</string>
+    <string name="suggest_by_smart">Suggested by Smart shuffle</string>
+    <string name="suggest_pill">%1$s · Why this?</string>
+    <plurals name="suggest_reason_picked">
+        <item quantity="one">You picked this once in %2$s</item>
+        <item quantity="other">You picked this %1$d times in %2$s</item>
+    </plurals>
+    <plurals name="suggest_reason_played">
+        <item quantity="one">You played this once in %2$s</item>
+        <item quantity="other">You played this %1$d times in %2$s</item>
+    </plurals>
+    <string name="suggest_reason_not_since">Not played since %1$s</string>
+    <string name="suggest_reason_follows">Often follows %1$s</string>
+    <string name="suggest_reason_together">You often play the two together</string>
+    <string name="suggest_reason_new_from">New from %1$s, who you play a lot</string>
+    <string name="suggest_reason_like_artist">Like %1$s, who you play a lot</string>
+    <plurals name="suggest_reason_friends">
+        <item quantity="one">A friend loves this</item>
+        <item quantity="other">%d friends love this</item>
+    </plurals>
+    <string name="suggest_reason_friends_week">Popular with your friends this week</string>
+    <string name="suggest_reason_heard_to_end">You hear it to the end every time</string>
+    <string name="suggest_reason_favourite">One of your favourites</string>
+    <string name="suggest_reason_added_new">Added in %1$s, not played yet</string>
+    <plurals name="suggest_reason_added">
+        <item quantity="one">Added in %2$s, played once</item>
+        <item quantity="other">Added in %2$s, played %1$d times</item>
+    </plurals>
+    <string name="suggest_reason_not_played">Not played yet</string>
+    <plurals name="suggest_reason_played_times">
+        <item quantity="one">Played once</item>
+        <item quantity="other">Played %d times</item>
+    </plurals>
+    <string name="suggest_reason_same_artist">Same artist</string>
+    <string name="suggest_reason_same_album">Same artist, same album</string>
+    <string name="suggest_reason_genre_years">%1$s, from the same years</string>
+    <string name="suggest_reason_same_years">From the same years</string>
+    <plurals name="suggest_reason_skipped">
+        <item quantity="one">You skipped it once, on %2$s</item>
+        <item quantity="other">You skipped it %1$d times, last on %2$s</item>
+    </plurals>
+
+    <!-- The player and Up next. -->
+    <string name="suggest_autoplay">Autoplay</string>
+    <string name="suggest_from_autoplay">Autoplay · after %1$s</string>
+    <string name="suggest_autoplay_took_over">%1$s has ended. Autoplay keeps going with songs like it.</string>
+    <string name="suggest_turn_off">Turn off</string>
+    <string name="suggest_ends_here">%1$s ends here</string>
+    <string name="suggest_autoplay_card">Then songs like %1$s, picked from your listening</string>
+    <string name="suggest_autoplay_card_off">The music stops after %1$s</string>
+    <string name="player_shuffle_smart">Smart shuffle, on</string>
+    <string name="suggest_smart_on">Smart shuffle: about 1 song in %1$d is a suggestion.</string>
+    <string name="suggest_smart_card">Smart shuffle is on</string>
+    <string name="suggest_smart_card_line">About 1 song in %1$d is a suggestion. None comes back within 50 songs or a day.</string>
+
+    <!-- On every suggestion. -->
+    <string name="suggest_not_now">Not now</string>
+    <string name="suggest_not_now_line">Not suggested again for 30 days</string>
+    <string name="suggest_never">Never suggest this</string>
+    <string name="suggest_never_line">It still plays when you pick it yourself</string>
+    <string name="suggest_more_like">More like this</string>
+    <string name="suggest_more_like_line">Songs that go with this one</string>
+    <string name="suggest_why">Why this?</string>
+    <string name="suggest_why_line">The reasons, and your mix right now</string>
+    <string name="suggest_snoozed">Not suggested until %1$s</string>
+    <string name="suggest_nevered">Never suggested again</string>
+    <string name="suggest_not_saved">That could not be saved. Try again.</string>
+
+    <!-- Why this? -->
+    <string name="suggest_why_from">%1$s, from %2$s</string>
+    <string name="suggest_why_counted">What counted</string>
+    <string name="suggest_why_nothing">Nothing to say about this song yet.</string>
+    <string name="suggest_mix_now">Your mix right now</string>
+    <string name="suggest_mix_familiar">Mostly songs you love, a few rediscoveries, rarely a new one.</string>
+    <string name="suggest_mix_mix">Mostly songs you love, some rediscoveries, a few new ones.</string>
+    <string name="suggest_mix_discover">Songs you love, with more rediscoveries and more new ones.</string>
+    <string name="suggest_mix_share">About 1 suggestion in %1$d songs right now. It moves a little with your skips and full plays.</string>
+    <string name="suggest_why_fresh">Not suggested again for 50 songs or a day.</string>
+    <string name="adventure_familiar">Familiar</string>
+    <string name="adventure_mix">Mix</string>
+    <string name="adventure_discover">Discover</string>
+
+    <!-- For you. -->
+    <string name="suggest_for_you">For you</string>
+    <string name="suggest_for_you_card">%1$s and %2$d more. New every morning.</string>
+    <string name="suggest_for_you_new_today">New today</string>
+    <string name="suggest_hide">Hide</string>
+    <string name="suggest_hidden_till_tomorrow">Hidden until tomorrow\'s mix</string>
+    <string name="suggest_for_you_more">More for For you</string>
+    <string name="suggest_card_hide">Hide the For you card</string>
+    <string name="suggest_card_show">Show the For you card</string>
+    <string name="suggest_for_you_empty">Play some songs and KJB will have a mix for you.</string>
+
+    <!-- More like this. -->
+    <string name="suggest_like_title">Like %1$s</string>
+    <string name="suggest_based_on">Based on</string>
+    <string name="suggest_basis_together">Songs you play with it</string>
+    <string name="suggest_basis_artist">Same artist</string>
+    <string name="suggest_basis_like_artist">Artists like them</string>
+    <string name="suggest_basis_genre">Same genre</string>
+    <string name="suggest_basis_years">Same years</string>
+    <string name="suggest_more_like_empty">Nothing goes with this yet. As you play more, KJB learns what goes together.</string>
+
+    <!-- Settings > Suggestions, Never suggest and Suggestions health. -->
+    <string name="set_autoplay_detail">When your queue ends</string>
+    <string name="set_smart_shuffle">Smart shuffle</string>
+    <string name="set_smart_shuffle_detail">Tap Shuffle twice in the player</string>
+    <string name="set_adventure">How adventurous</string>
+    <string name="set_adventure_detail">Where your mix starts</string>
+    <string name="set_reasons">Show reasons</string>
+    <string name="set_reasons_detail">A line under each suggestion</string>
+    <string name="set_never">Songs you said never to suggest</string>
+    <plurals name="set_never_value">
+        <item quantity="one">%d song</item>
+        <item quantity="other">%d songs</item>
+    </plurals>
+    <plurals name="set_not_now_value">
+        <item quantity="one">%d on Not now</item>
+        <item quantity="other">%d on Not now</item>
+    </plurals>
+    <string name="set_health">Suggestions health</string>
+    <string name="never_title">Never suggest</string>
+    <string name="never_sentence">Songs you said never to suggest. KJB leaves them out of Autoplay, Smart shuffle, For you and More like this. They still play when you pick them.</string>
+    <string name="never_since">Since %1$s</string>
+    <string name="never_allow">Allow again</string>
+    <string name="never_allow_song">Allow %1$s again</string>
+    <string name="never_not_now_sentence">Back in suggestions on the day shown, 30 days after Not now.</string>
+    <string name="never_back_on">Back on %1$s</string>
+    <string name="never_allow_now">Allow now</string>
+    <string name="never_allow_now_song">Allow %1$s now</string>
+    <string name="never_empty_title">No songs held out</string>
+    <string name="never_empty">Not now and Never suggest this, on any suggested song, put a song here.</string>
+    <string name="health_sentence">Your last 30 days, worked out on your phone.</string>
+    <string name="health_guessed">Guessed your next song</string>
+    <string name="health_guessing">Simple guessing: %1$s</string>
+    <string name="health_guessed_line">How often your next song was in KJB\'s top 10, replaying your own listening.</string>
+    <string name="health_guessed_better">Better than simple guessing</string>
+    <string name="health_guessed_not_yet">Not better than simple guessing yet</string>
+    <string name="health_skipped">Suggested songs you skipped</string>
+    <string name="health_shuffle_skipped">Shuffle songs you skipped: %1$s</string>
+    <string name="health_skipped_fewer">Fewer skips than Shuffle</string>
+    <string name="health_skipped_more">More skips than Shuffle</string>
+    <string name="health_kept">Discoveries you kept</string>
+    <string name="health_kept_value">%1$d of %2$d</string>
+    <string name="health_kept_line">Rediscoveries and new songs you then made a favourite or played again yourself.</string>
+    <string name="health_not_yet">Not enough listening yet</string>
+    <string name="health_checked">Last checked today at %1$s.</string>
+    <string name="health_check_again">Check again</string>
 </resources>

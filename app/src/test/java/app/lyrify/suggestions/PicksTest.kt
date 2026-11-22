@@ -111,6 +111,9 @@ class PicksTest {
         assertEquals(Mix(1.0 / 3, 0.5), startOf(Adventure.MIX))
         assertEquals(Mix(0.2, 0.35), startOf(Adventure.FAMILIAR))
         assertEquals(Mix(0.5, 0.6), startOf(Adventure.DISCOVER))
+        // What Smart shuffle's message and card say: about 1 song in 3 for Mix, 1 in 5 for Familiar, 1 in 2 for Discover.
+        assertEquals(listOf(5, 3, 2), Adventure.entries.map { startOf(it).oneIn })
+        assertEquals(6, Mix(0.01, 0.5).oneIn)
     }
 
     @Test

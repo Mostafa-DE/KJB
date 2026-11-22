@@ -239,11 +239,14 @@ class PlayerConnection(
         return next
     }
 
-    /** Shuffle on the queue playing; true when it is now on. */
-    fun toggleShuffle(): Boolean {
-        core.change { it.toggleShuffle(core.shuffleRandom()) }
-        return core.book.value.current?.shuffled == true
+    /** The Shuffle button on the queue playing: Off, Shuffle, Smart shuffle, and round again; the step it is on now. */
+    fun cycleShuffle(): ShuffleStep {
+        core.change { it.cycleShuffle(core.shuffleRandom()) }
+        return core.book.value.current?.shuffleStep ?: ShuffleStep.OFF
     }
+
+    /** Smart shuffle's Undo: plain Shuffle again. */
+    fun plainShuffle() = core.change { it.plainShuffle() }
 
     // The lists' commands
 

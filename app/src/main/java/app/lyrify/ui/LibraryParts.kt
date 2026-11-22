@@ -259,7 +259,8 @@ fun AboveChrome(content: @Composable () -> Unit) {
  * the song's place in it); [note] adds a word after the artist ("12 plays"); [keys]: the rows' own keys, by place (the
  * entries of a list that may hold a song twice, [OrderedEntries]), else each song's path. With [reorder] (a list in its
  * custom order, all of it shown) each row has a drag handle at its end and TalkBack's Move up and Move down. [tour]: the
- * tour's Play a song may point at these rows (Library's Songs).
+ * tour's Play a song may point at these rows (Library's Songs). [reason]: a suggestion's reason in grey under a row
+ * (For you, More like this).
  */
 fun LazyListScope.songRows(
     list: PageSongs,
@@ -270,6 +271,7 @@ fun LazyListScope.songRows(
     keys: List<Any> = songRowKeys(shown),
     reorder: SongReorder? = null,
     tour: Boolean = false,
+    reason: ((Song) -> String?)? = null,
 ) {
     // Places in [shown]: while a row is dragged, in the drag's order.
     val places = reorder?.shown(shown) ?: shown.indices.toList()
@@ -287,6 +289,7 @@ fun LazyListScope.songRows(
             selecting = list.selection.active,
             selected = song.path in list.selection.paths,
             note = note?.invoke(song),
+            reason = reason?.invoke(song),
             onTap = { list.tap(song, index) },
             onCheck = { list.check(song) },
             onLongPress = { list.onSelection(SongSelection(setOf(song.path))) },
@@ -497,7 +500,8 @@ fun <T> SortSheet(title: String, options: List<Pair<T, String>>, selected: T, on
  * press selects (none without [onLongPress]). Search passes its [shownTitle] with the match highlighted, and for a song
  * found in its lyrics the matching [line] under the artist. While selecting, a tap on the row or on its round check
  * ([onCheck], 48 dp) picks or unpicks it, and a picked row has its own rounded fill ([rowFill]). In a custom order a
- * [handle] comes before "⋯", and TalkBack gets the row's [moves].
+ * [handle] comes before "⋯", and TalkBack gets the row's [moves]. A suggested song may carry the suggestion [mark] before
+ * its artist and its [reason] in grey under it (suggestions/).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -516,6 +520,8 @@ fun SongRow(
     note: String? = null,
     shownTitle: AnnotatedString? = null,
     line: AnnotatedString? = null,
+    mark: String? = null,
+    reason: String? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val title = shownTitle?.text ?: ui.title(song)
@@ -526,7 +532,7 @@ fun SongRow(
         LyricsMark.PLAIN -> stringResource(R.string.lib_mark_plain)
         LyricsMark.NONE -> null
     }
-    val description = songRowWords(title, artist, markWords, note, line?.text, if (marks.playing) stringResource(R.string.lib_playing) else null)
+    val description = songRowWords(title, artist, markWords, note, line?.text, if (marks.playing) stringResource(R.string.lib_playing) else null, mark, reason)
     val tapLabel = stringResource(if (selecting) R.string.lib_select else R.string.lib_play)
     val holdLabel = if (onLongPress != null) stringResource(R.string.lib_select) else null
     val tap = rememberWaitingTap(onTap)
@@ -580,6 +586,7 @@ fun SongRow(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // Only the song playing has the green dot.
                     RowMark(playing, reduced) { PlayingDot(Modifier.padding(end = 6.dp)) }
+                    if (mark != null) SuggestedMark(mark, Modifier.padding(end = 6.dp))
                     Text(
                         listOfNotNull(artist, note).joinToString(" · "),
                         style = MaterialTheme.typography.bodyMedium,
@@ -597,6 +604,7 @@ fun SongRow(
                         Text(line, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
+                if (reason != null) ReasonLine(reason)
             }
         }
         // The handle sits at the end, before "⋯", clear of the system's back gesture at the screen's edges.
@@ -621,9 +629,12 @@ fun SongRow(
     }
 }
 
-/** What TalkBack says for a song's row: its title, artist, lyrics, note and lyrics line, and ([playing]) that it plays. */
-fun songRowWords(title: String, artist: String, lyrics: String?, note: String?, line: String?, playing: String?): String =
-    listOfNotNull(title, artist, lyrics, note, line, playing).joinToString(", ")
+/**
+ * What TalkBack says for a song's row: its title, artist, lyrics, note and lyrics line, ([playing]) that it plays, and a
+ * suggestion's [mark] and [reason].
+ */
+fun songRowWords(title: String, artist: String, lyrics: String?, note: String?, line: String?, playing: String?, mark: String? = null, reason: String? = null): String =
+    listOfNotNull(title, artist, lyrics, note, line, playing, mark, reason).joinToString(", ")
 
 /** The path of the song KJB's own player has loaded; the shell provides it, so its row shows it playing. */
 val LocalPlayingPath = staticCompositionLocalOf<String?> { null }
@@ -731,8 +742,12 @@ private const val MOSAIC = 4
 
 /** A playlist's tile: a 2x2 mosaic of its covers ([mosaicCovers]), one cover, or the playlist icon when it is empty. */
 @Composable
-fun PlaylistTile(playlist: Playlist, size: Dp = 48.dp) {
-    val covers = remember(playlist.songs) { mosaicCovers(playlist.songs) }
+fun PlaylistTile(playlist: Playlist, size: Dp = 48.dp) = MosaicTile(playlist.songs, size)
+
+/** A list's tile: a 2x2 mosaic of [songs]' covers ([mosaicCovers]), one cover, or the playlist icon when there is none. */
+@Composable
+fun MosaicTile(songs: List<SongRef>, size: Dp = 48.dp) {
+    val covers = remember(songs) { mosaicCovers(songs) }
     // The prototype's corners: 14 dp at 48 dp (.mosaic), 28 dp on a page's hero (.mosaic.big).
     val shape = RoundedCornerShape(if (size > 64.dp) 28.dp else 14.dp)
     when (covers.size) {

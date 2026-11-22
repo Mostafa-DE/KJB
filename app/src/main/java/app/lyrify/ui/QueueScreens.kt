@@ -116,6 +116,7 @@ import app.lyrify.player.PlayerUi
 import app.lyrify.player.Queue
 import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueItem
+import app.lyrify.player.ShuffleStep
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Undo
 import app.lyrify.player.queueLabel
@@ -459,7 +460,7 @@ private fun OneQueuePage(id: String) {
                     )
                 }
             }
-            queueSongs(queue, playing, library, names, connection, reorder, pageSurface, onRemoved = { undo ->
+            queueSongs(queue, playing, library, names, connection, reorder, pageSurface, onOpen = nav::open, onRemoved = { undo ->
                 scope.launch { if (toasts.show(Toast(resources.getString(R.string.queue_removed), R.drawable.ic_playlist_remove, action = undo?.let { resources.getString(R.string.player_undo) }))) undo?.undo() }
             })
         }
@@ -703,7 +704,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
                         LyrifyButton(stringResource(R.string.queue_all), { open(Page.Queues) }, kind = ButtonKind.GHOST, compact = true)
                     }
                 }
-                queueSongs(queue, playing = true, library, names, connection, reorder, sheetSurface, onRemoved = { undo ->
+                queueSongs(queue, playing = true, library, names, connection, reorder, sheetSurface, onOpen = open, onRemoved = { undo ->
                     scope.launch { if (toasts.show(Toast(resources.getString(R.string.queue_removed), R.drawable.ic_playlist_remove, action = undo?.let { resources.getString(R.string.player_undo) }))) undo?.undo() }
                 })
             }
@@ -770,12 +771,50 @@ internal fun RecentChips(others: List<Queue>, labels: Map<String, String>, onOpe
  * ([WaitingTap]), and a double tap only makes the song a favourite ([doubleTapFavourite]); the handle drags a song to
  * another place, the others sliding out of its way ([Reorder]); a swipe to the start, or "Remove from queue" in the
  * row's menu, takes it out (with Undo through [onRemoved]), the rows under it closing up. Songs not on the phone stay
- * listed, quietly marked, and are skipped (and have no double tap; their tap acts at once).
+ * listed, quietly marked, and are skipped (and have no double tap; their tap acts at once). In the queue playing, Smart
+ * shuffle's card comes first while it is on, and where the queue's own songs end, Autoplay's card with its switch, before
+ * the songs Autoplay put after them (or at the end, as the last song comes near) ([autoplayCut]).
  */
-private fun LazyListScope.queueSongs(queue: Queue, playing: Boolean, library: Library?, names: LibrarySettings, connection: PlayerConnection, reorder: Reorder, surface: Color, onRemoved: (Undo?) -> Unit) {
+@Suppress("LongParameterList")
+private fun LazyListScope.queueSongs(
+    queue: Queue,
+    playing: Boolean,
+    library: Library?,
+    names: LibrarySettings,
+    connection: PlayerConnection,
+    reorder: Reorder,
+    surface: Color,
+    onOpen: (Page) -> Unit,
+    onRemoved: (Undo?) -> Unit,
+) {
     // Each row acts on its place in the queue itself, also while a drag shows another order.
     val places = queue.items.withIndex().associate { (index, item) -> item.uid to index }
-    items(reorder.shown(queue), key = { it.uid }, contentType = { "song" }) { item ->
+    val shown = reorder.shown(queue)
+    val cut = if (playing) autoplayCut(queue, shown) else null
+    if (playing && queue.shuffleStep == ShuffleStep.SMART) item(key = "smart shuffle", contentType = "suggestions") { SmartShuffleCard() }
+    songs(queue, if (cut == null) shown else shown.take(cut), places, playing, library, names, connection, reorder, surface, onOpen, onRemoved)
+    if (cut != null) {
+        item(key = "autoplay", contentType = "suggestions") { AutoplayCard(queue) }
+        songs(queue, shown.drop(cut), places, playing, library, names, connection, reorder, surface, onOpen, onRemoved)
+    }
+}
+
+/** The rows of [shown], some of [queue]'s songs, each acting on its place in the queue ([places]). */
+@Suppress("LongParameterList")
+private fun LazyListScope.songs(
+    queue: Queue,
+    shown: List<QueueItem>,
+    places: Map<Long, Int>,
+    playing: Boolean,
+    library: Library?,
+    names: LibrarySettings,
+    connection: PlayerConnection,
+    reorder: Reorder,
+    surface: Color,
+    onOpen: (Page) -> Unit,
+    onRemoved: (Undo?) -> Unit,
+) {
+    items(shown, key = { it.uid }, contentType = { "song" }) { item ->
         val reduced = LocalReducedMotion.current
         // The held row follows the finger above the others; they move by their placement, a removed one fades.
         val motion = Modifier.animateItem(
@@ -783,7 +822,7 @@ private fun LazyListScope.queueSongs(queue: Queue, playing: Boolean, library: Li
             placementSpec = if (reorder.held == item.uid || reduced) null else spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntOffset.VisibilityThreshold),
             fadeOutSpec = tween(if (reduced) Motion.REDUCED_MS else Motion.FADE_OUT_MS),
         )
-        QueueSongRow(queue, item, places[item.uid] ?: -1, playing, library, names, connection, reorder, surface, motion, onRemoved)
+        QueueSongRow(queue, item, places[item.uid] ?: -1, playing, library, names, connection, reorder, surface, motion, onOpen, onRemoved)
     }
 }
 
@@ -887,10 +926,18 @@ private fun QueueSongRow(
     reorder: Reorder,
     surface: Color,
     motion: Modifier,
+    onOpen: (Page) -> Unit,
     onRemoved: (Undo?) -> Unit,
 ) {
     val resources = LocalResources.current
+    val context = LocalContext.current
+    val toasts = LocalToasts.current
+    val suggestions = rememberSuggestions()
     val song = library?.resolver?.find(item.song)
+    // A suggestion's reason, after the song before it (Often follows ...); its Why this? over the queue.
+    val before = queue.items.getOrNull(index - 1)?.let { library?.resolver?.find(it.song) }
+    val reason = song?.takeIf { item.suggested != null }?.let { rememberReason(it, before) }
+    var why by remember { mutableStateOf(false) }
     val title = song?.let { displayTitle(it, names) } ?: item.song.path.substringAfterLast('/')
     val here = index == queue.index
     val sub = when {
@@ -994,17 +1041,40 @@ private fun QueueSongRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(sub, style = QueueLine, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (item.suggested != null) SuggestedMark(stringResource(R.string.suggest_mark), Modifier.padding(end = 6.dp))
+                        Text(sub, style = QueueLine, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (reason != null) ReasonLine(reason)
                 }
             }
             Box {
                 ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.queue_song_more, title), { menu = true }, glass = false, tint = muted)
                 LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
+                    // A suggestion's own choices first: Not now and Never take it out of the queue too, Undo puts it back.
+                    if (item.suggested != null && song != null) {
+                        val hold = { never: Boolean ->
+                            menu = false
+                            val taken = if (here) null else connection.remove(queue.id, item.uid)
+                            scope.launch { toasts.hold(context, suggestions, item.song, never, taken) }
+                        }
+                        MenuRow(stringResource(R.string.suggest_not_now), R.drawable.ic_snooze, { hold(false) }, detail = stringResource(R.string.suggest_not_now_line))
+                        MenuRow(stringResource(R.string.suggest_never), R.drawable.ic_block, { hold(true) }, detail = stringResource(R.string.suggest_never_line))
+                        MenuRow(stringResource(R.string.suggest_more_like), R.drawable.ic_explore, {
+                            menu = false
+                            onOpen(Page.MoreLike(SeedKind.SONG, song.path))
+                        }, detail = stringResource(R.string.suggest_more_like_line))
+                        MenuRow(stringResource(R.string.suggest_why), R.drawable.ic_help, {
+                            menu = false
+                            why = true
+                        })
+                    }
                     MenuRow(stringResource(R.string.queue_remove), R.drawable.ic_playlist_remove, {
                         menu = false
                         remove()
                     })
                 }
+                if (why && song != null) WhySheet(song, before, item.suggested, onDismiss = { why = false })
             }
             Box(
                 contentAlignment = Alignment.Center,

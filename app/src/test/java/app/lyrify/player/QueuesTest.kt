@@ -866,6 +866,18 @@ class QueuesTest {
     }
 
     @Test
+    fun `Smart shuffle's Undo goes back to plain Shuffle, its suggestions to come gone and the order kept`() {
+        val book = playing(0).cycleShuffle(Random(2)).cycleShuffle(Random(2))
+        val queue = book.current!!
+        val withSuggestions = book.suggest(queue.id, listOf(queue.items[0].uid to folder[0], queue.items[2].uid to folder[1]), Suggested.SMART_SHUFFLE)
+        val plain = withSuggestions.plainShuffle()
+        assertEquals(ShuffleStep.SHUFFLE, plain.current!!.shuffleStep)
+        assertEquals(paths(queue), paths(plain.current))
+        assertEquals(queue.unshuffled, plain.current!!.unshuffled)
+        assertEquals(playing(0), playing(0).plainShuffle())
+    }
+
+    @Test
     fun `Smart shuffle off takes the suggestions still to come out with it, from the button or the notification`() {
         val book = playing(0).cycleShuffle(Random(2)).cycleShuffle(Random(2))
         val queue = book.current!!

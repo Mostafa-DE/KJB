@@ -126,6 +126,7 @@ import app.lyrify.player.Queue
 import app.lyrify.player.QueueItem
 import app.lyrify.player.Repeat
 import app.lyrify.player.SourceKind
+import app.lyrify.player.Suggested
 import app.lyrify.player.sourceLabel
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
@@ -586,6 +587,7 @@ fun PlayerView() {
                     modifier = Modifier.weight(1f),
                 )
                 TitleAndLinks(ui, settings.library, bookNow) { chapterSheet = true }
+                SuggestedLine(ui, settings.suggestions.showReasons)
                 PlayerChips(ui, extras)
                 Spacer(Modifier.height(LINKS_GAP))
                 PartHandles(ui, extras)
@@ -855,7 +857,7 @@ private fun Backdrop(path: String) {
 }
 
 /** The rows of the player's "⋯", in the order they show; Move to trash sits apart at the bottom, as on the song sheet. */
-enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, SPEED, SLEEP, REPEAT_PART, BOOKMARK, PLAY_ON, EQUALIZER, TONE, CUT, SHARE, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
+enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, MORE_LIKE, SPEED, SLEEP, REPEAT_PART, BOOKMARK, PLAY_ON, EQUALIZER, TONE, CUT, SHARE, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
 
 /**
  * The rows the player's "⋯" shows. A [song] of the library has Share (one row, Song or Lyrics asked from it when it has
@@ -869,7 +871,7 @@ fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean
         PlayerMenuRow.ARTIST -> artist
         PlayerMenuRow.TONE -> tone
         PlayerMenuRow.CUT -> cut
-        PlayerMenuRow.SHARE, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH -> song
+        PlayerMenuRow.SHARE, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH, PlayerMenuRow.MORE_LIKE -> song
         else -> true
     }
 }
@@ -898,10 +900,13 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
             .padding(horizontal = 8.dp),
     ) {
         PlayerCloseButton(onClose)
-        // Where it plays from, without the time the queue started that the queue lists add.
-        val name = ui.queue.name ?: sourceLabel(context, ui.queue.source, ui.queue.items.size)
+        // Where it plays from, without the time the queue started that the queue lists add; "Autoplay · after Road trip"
+        // once Autoplay keeps the music going after the queue's end.
+        val queueName = ui.queue.name ?: sourceLabel(context, ui.queue.source, ui.queue.items.size)
+        val name = if (ui.item.suggested == Suggested.AUTOPLAY) stringResource(R.string.suggest_from_autoplay, queueName) else queueName
+        val bold = if (ui.item.suggested == Suggested.AUTOPLAY) stringResource(R.string.suggest_autoplay) else name
         Text(
-            fromLine(stringResource(R.string.player_from, name), name, MaterialTheme.colorScheme.onSurface),
+            fromLine(stringResource(R.string.player_from, name), bold, MaterialTheme.colorScheme.onSurface),
             style = SourceStyle,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -923,6 +928,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                             PlayerMenuRow.ADD_TO -> MenuRow(stringResource(R.string.player_menu_add_to), R.drawable.ic_playlist_add, pick { onRoute(PlayerRoute.ADD_TO) })
                             PlayerMenuRow.ALBUM -> album?.let { at -> MenuRow(stringResource(R.string.player_menu_album), R.drawable.ic_album, pick { nav.open(Page.Album(at)) }) }
                             PlayerMenuRow.ARTIST -> artist?.let { go -> MenuRow(stringResource(R.string.player_menu_artist), R.drawable.ic_person, pick(go)) }
+                            PlayerMenuRow.MORE_LIKE -> song?.let { MenuRow(stringResource(R.string.suggest_more_like), R.drawable.ic_explore, pick { nav.open(Page.MoreLike(SeedKind.SONG, it.path)) }) }
                             PlayerMenuRow.SPEED -> MenuRow(stringResource(R.string.player_menu_speed), R.drawable.ic_speed, pick { onRoute(PlayerRoute.SPEED) })
                             // Out of the second row since 3.1; what a running timer has left shows under its name.
                             PlayerMenuRow.SLEEP -> SleepMenuRow(ui, pick { onRoute(PlayerRoute.SLEEP) })

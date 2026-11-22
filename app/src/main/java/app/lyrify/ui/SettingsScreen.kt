@@ -170,6 +170,7 @@ fun SettingsScreen(
                 ValueRow(R.drawable.ic_volume_up, R.string.set_levelling, stringResource(settings.audio.levelling.label)) { sheet = SettingsSheet.LEVELLING }
                 ValueRow(R.drawable.ic_swap_horiz, R.string.set_crossfade, crossfadeText(settings.audio.crossfadeSeconds)) { sheet = SettingsSheet.CROSSFADE }
             }
+            suggestionSettings(sections, onOpen)
             section(SettingsSection.LIBRARY, sections) {
                 val shown = library.tabs.count { it.shown }
                 ValueRow(R.drawable.ic_tab, R.string.set_tabs, pluralStringResource(R.plurals.set_tabs_value, shown, shown), first = true) { onOpen(Page.LibraryTabs) }
@@ -470,7 +471,7 @@ private fun neutralTile(): Pair<Color, Color> = MaterialTheme.colorScheme.let { 
 
 /** A row that opens a sheet or a page, with its value under its title. */
 @Composable
-private fun ValueRow(@DrawableRes icon: Int, @StringRes title: Int, value: String, first: Boolean = false, onClick: () -> Unit) {
+internal fun ValueRow(@DrawableRes icon: Int, @StringRes title: Int, value: String, first: Boolean = false, onClick: () -> Unit) {
     val (tile, onTile) = neutralTile()
     GroupedRow(
         icon,
