@@ -34,7 +34,7 @@ import java.util.zip.ZipInputStream
 /**
  * A long listening history in a backup (IL1): the plays section split in parts, so a backup stays complete past the
  * size any KJB reads in one entry (32 MB, about 100,000 plays), the first part 3.1.1 reads holding the newest plays.
- * Made-up history only.
+ * The book log's section (IN1) is split the same way. Made-up history only.
  */
 class LongHistoryBackupTest {
     /** [count] made-up plays a minute apart over [songs] made-up songs, with all a play keeps; every seventh a skip. */
@@ -62,8 +62,8 @@ class LongHistoryBackupTest {
         }
     }
 
-    private fun backup(plays: List<LoggedPlay>, interactions: List<Interaction>, partBytes: Int = BackupBundle.PART_BYTES): ByteArray =
-        ByteArrayOutputStream().also { BackupBundle.write(BackupSnapshot(plays = plays, interactions = interactions), emptyList(), VERSION, T0, it, partBytes) }.toByteArray()
+    private fun backup(plays: List<LoggedPlay>, interactions: List<Interaction>, partBytes: Int = BackupBundle.PART_BYTES, bookPlays: List<LoggedPlay>? = null): ByteArray =
+        ByteArrayOutputStream().also { BackupBundle.write(BackupSnapshot(plays = plays, interactions = interactions, bookPlays = bookPlays), emptyList(), VERSION, T0, it, partBytes) }.toByteArray()
 
     /** Each entry of [bytes], by name, as written: its bytes, a gzipped part's unpacked. */
     private fun unpacked(bytes: ByteArray): Map<String, ByteArray> = ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
@@ -73,12 +73,12 @@ class LongHistoryBackupTest {
         }
     }
 
-    /** How many parts the manifest gives the plays section; null when it says none (one part). */
-    private fun parts(bytes: ByteArray): Int? {
+    /** How many parts the manifest gives [section] (the plays by default); null when it says none (one part). */
+    private fun parts(bytes: ByteArray, section: Section = Section.PLAYS): Int? {
         val manifest = Json.parseToJsonElement(checkNotNull(unpacked(bytes)[BackupBundle.MANIFEST]).decodeToString()).jsonObject
-        val plays = manifest["sections"]!!.jsonObject["plays"]!!.jsonObject
-        assertEquals(1, plays["version"]!!.jsonPrimitive.int)
-        return plays["parts"]?.jsonPrimitive?.int
+        val about = manifest["sections"]!!.jsonObject[section.key]!!.jsonObject
+        assertEquals(1, about["version"]!!.jsonPrimitive.int)
+        return about["parts"]?.jsonPrimitive?.int
     }
 
     /**
@@ -147,6 +147,28 @@ class LongHistoryBackupTest {
         assertEquals(BackupRead.Unreadable(BackupRead.Why.TOO_BIG), read(bytes, ZipLimits(partsBytes = SMALL * 2L)))
     }
 
+    @Test
+    fun `a long book log is split in parts too, as the plays are, and every book play comes back`() {
+        val plays = history(5)
+        val books = history(400).map { it.copy(song = SongRef(it.song.path.replace("/Music/", "/Audiobooks/"))) }
+        val bytes = backup(plays, interactions(3), partBytes = SMALL, bookPlays = books)
+
+        // The plays fit in one part; the book log does not.
+        assertNull(parts(bytes))
+        val parts = parts(bytes, Section.BOOK_PLAYS) ?: 1
+        assertTrue("$parts parts", parts > 3)
+        val entries = unpacked(bytes)
+        assertEquals(listOf(Section.BOOK_PLAYS.file) + (2..parts).map(Section.BOOK_PLAYS::partFile), entries.keys.filter { it.startsWith(Section.BOOK_PLAYS.key) })
+        entries.filterKeys { it.startsWith(Section.BOOK_PLAYS.key) }.values.forEach { part -> assertTrue("a part of ${part.size} bytes", part.size <= SMALL) }
+
+        val read = contents(bytes)
+        assertEquals(asOnePart(books), read.bookPlays)
+        assertEquals(asOnePart(plays), read.plays)
+        // A book log part missing makes it no backup, as a plays part does.
+        val stored = ZipInputStream(ByteArrayInputStream(bytes)).use { zip -> generateSequence { zip.nextEntry }.map { it.name to zip.readBytes() }.toList() }
+        assertEquals(BackupRead.Unreadable(BackupRead.Why.NOT_A_BACKUP), read(zipOf(stored.filterNot { it.first == Section.BOOK_PLAYS.partFile(2) })))
+    }
+
     // The real sizes
 
     @Test
@@ -168,6 +190,26 @@ class LongHistoryBackupTest {
         // Compared whole, not printed: a failure's message would be the history twice.
         assertTrue("plays as one part has them", asOnePart(plays) == read.plays)
         assertTrue("interactions as written", interactions == read.interactions)
+    }
+
+    @Test
+    fun `a long play log and a long book log back up whole, 3_1_1 still reads the backup and its newest plays, and both come back here`() {
+        val plays = history(150_000)
+        val books = history(150_000).map { it.copy(song = SongRef(it.song.path.replace("/Music/", "/Audiobooks/"))) }
+        val bytes = backup(plays, interactions(1_000), bookPlays = books)
+
+        val entries = unpacked(bytes)
+        // As one entry the book log would be past what any KJB reads: the whole backup unreadable.
+        assertTrue(entries.filterKeys { it.startsWith(Section.BOOK_PLAYS.key) }.values.sumOf { it.size.toLong() } > ZipLimits().entryBytes)
+        // 3.1.1 reads the backup (it skips the book log, a section it does not know) and the newest plays.
+        assertWithin311(bytes)
+        val first = checkNotNull(plays311(checkNotNull(entries[Section.PLAYS.file]).decodeToString()))
+        assertEquals(plays.filterNot { it.isShort }.takeLast(first.size).map(::noId), first)
+
+        val read = contents(bytes)
+        // Compared whole, not printed: a failure's message would be the history twice.
+        assertTrue("plays as one part has them", asOnePart(plays) == read.plays)
+        assertTrue("book plays as one part has them", asOnePart(books) == read.bookPlays)
     }
 
     private companion object {
