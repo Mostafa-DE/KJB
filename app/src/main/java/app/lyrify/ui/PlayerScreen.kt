@@ -109,6 +109,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.books.BookNow
+import app.lyrify.books.bookNowAt
+import app.lyrify.books.chapterStepPart
 import app.lyrify.books.knownBookPart
 import app.lyrify.cut.CutFormats
 import app.lyrify.data.LyricsStatus
@@ -274,9 +276,15 @@ fun swipeOutcome(axis: SwipeAxis?, dx: Float): SwipeOutcome = when {
  * The song whose cover slides in for a skip [way]: the one Next or Previous plays, as the player decides it (Next on the
  * last song goes to the first whatever Repeat says, LyrifyPlayer's sessionSeek; Previous wraps round only with Repeat all,
  * and past 3 s starts this song over). Null when no other song comes: a queue of one, the first song's Previous, or
- * Previous starting the song over.
+ * Previous starting the song over. In a [book] the swipe goes by chapter, as the player's buttons do: the part the
+ * chapter goes to ([chapterStepPart]), none inside the part playing.
  */
-fun incoming(queue: Queue, way: SkipWay, repeat: Repeat, positionMs: Long): QueueItem? {
+fun incoming(queue: Queue, way: SkipWay, repeat: Repeat, positionMs: Long, book: BookNow? = null): QueueItem? {
+    if (book != null) {
+        val part = chapterStepPart(bookNowAt(book, positionMs), forward = way == SkipWay.NEXT) ?: return null
+        val path = book.book.parts[part].path
+        return queue.items.firstOrNull { it.song.path == path }?.takeIf { it.uid != queue.current?.uid }
+    }
     val items = queue.items
     val at = when (way) {
         SkipWay.NEXT -> (queue.index + 1).let { if (it < items.size) it else 0 }
@@ -570,8 +578,10 @@ fun PlayerView() {
                     onFlip = { lyrics -> scope.launch { store.update { it.copy(playerUi = flipped(it.playerUi, lyrics, bookPart)) } } },
                     onSeek = connection::seekTo,
                     onPlay = connection::play,
-                    onNext = connection::next,
-                    onPrevious = connection::previous,
+                    // In a book the swipe goes by chapter, as the buttons under it do.
+                    book = bookNow,
+                    onNext = { if (bookNow != null) chapterStep(connection, ui, bookNow, forward = true) else connection.next() },
+                    onPrevious = { if (bookNow != null) chapterStep(connection, ui, bookNow, forward = false) else connection.previous() },
                     onRoute = route,
                     modifier = Modifier.weight(1f),
                 )
@@ -946,8 +956,8 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
 /**
  * The cover, and the lyrics panel on its back, in the free space: a tap flips it (a short 3D turn; a crossfade under
  * reduced motion), the "Lyrics" chip and the round cover chip are its visible twins; a book's part never [flips], so its
- * cover has neither tap nor chip ([showsLyrics]). A sideways swipe on the cover skips (twins: Previous and Next); a drag
- * down closes the player, as anywhere on it ([PlayerFrame]; twin: the chevron).
+ * cover has neither tap nor chip ([showsLyrics]). A sideways swipe on the cover skips (twins: Previous and Next; in a
+ * [book], by chapter); a drag down closes the player, as anywhere on it ([PlayerFrame]; twin: the chevron).
  */
 @Composable
 private fun FlipArea(
@@ -957,6 +967,7 @@ private fun FlipArea(
     onFlip: (Boolean) -> Unit,
     onSeek: (Long) -> Unit,
     onPlay: () -> Unit,
+    book: BookNow?,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onRoute: (PlayerRoute) -> Unit,
@@ -984,7 +995,7 @@ private fun FlipArea(
                     cameraDistance = CAMERA * density
                     alpha = frontAlpha
                 },
-            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = if (flips) { { onFlip(true) } } else null, onNext, onPrevious, onFlipBack = { onFlip(false) }) }
+            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = if (flips) { { onFlip(true) } } else null, onNext, onPrevious, book, onFlipBack = { onFlip(false) }) }
         }
         if (lyricsShown || (reduced && fade.value > 0f)) {
             Box(
@@ -1005,7 +1016,9 @@ private data class Landing(val way: SkipWay, val item: QueueItem)
  * The cover and its swipe ([swipeAxis] to [settleShift]): it follows the finger and tilts; the next or previous song's
  * cover rides in beside it from the screen's edge; past [SWIPE_SKIP_DP] it finishes the way (the prototype's 0.2 s ease)
  * and only then plays that song, with the incoming cover already in place, so nothing jumps. Short of it, or with no
- * song to slide in (Previous starting the song over, the end of the queue), it springs back. A tap flips to the lyrics
+ * song to slide in (Previous starting the song over, the end of the queue), it springs back. In a [book] it goes by
+ * chapter, as [onNext] and [onPrevious] do there: the part they go to slides in, and for a chapter in the same file the
+ * cover springs back. A tap flips to the lyrics
  * ([onFlip]; null for a book: no tap, no chip). The turn starts at once, never waiting for a second tap: one soon after
  * turns it back ([onFlipBack]) and makes the song a favourite ([doubleTapFavourite]; a book's part too, as its heart
  * does). A drag down is the player's own ([PlayerFrame]): the cover lets it go, and settles back if it was still moving.
@@ -1019,6 +1032,7 @@ internal fun CoverFace(
     onFlip: (() -> Unit)?,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    book: BookNow? = null,
     onFlipBack: () -> Unit = {},
 ) {
     val density = LocalDensity.current
@@ -1049,12 +1063,13 @@ internal fun CoverFace(
     }
     val latest by rememberUpdatedState(ui)
     val actions by rememberUpdatedState(listOf(onNext, onPrevious))
+    val latestBook by rememberUpdatedState(book)
     val place = { if (arrived) 0f else dragging ?: shift.value }
     // Which side the cover is moving to changes rarely; reading it so does not recompose on every pixel.
     val moving by remember { derivedStateOf { comingFrom(dragging ?: shift.value) } }
     val way = if (arrived) null else landing?.way ?: moving
-    val beside = remember(moving, ui.item.uid, ui.queue, ui.repeat) {
-        moving?.let { incoming(ui.queue, it, ui.repeat, ui.positionAt(SystemClock.elapsedRealtime())) }
+    val beside = remember(moving, ui.item.uid, ui.queue, ui.repeat, book) {
+        moving?.let { incoming(ui.queue, it, ui.repeat, ui.positionAt(SystemClock.elapsedRealtime()), book) }
     }
     val neighbour = if (arrived) null else landing?.item ?: beside
     val label = stringResource(if (onFlip != null) R.string.player_cover else R.string.book_cover, ui.named?.title ?: ui.item.song.path.substringAfterLast('/'))
@@ -1122,7 +1137,7 @@ internal fun CoverFace(
                         val outcome = if (lifted) swipeOutcome(axis, moved.x / density.density) else SwipeOutcome.Return
                         val from = dragging ?: shift.value
                         val now = latest
-                        val coming = (outcome as? SwipeOutcome.Skip)?.let { incoming(now.queue, it.way, now.repeat, now.positionAt(SystemClock.elapsedRealtime())) }
+                        val coming = (outcome as? SwipeOutcome.Skip)?.let { incoming(now.queue, it.way, now.repeat, now.positionAt(SystemClock.elapsedRealtime()), latestBook) }
                         val (next, previous) = actions
                         scope.launch {
                             shift.snapTo(from)

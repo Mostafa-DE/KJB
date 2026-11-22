@@ -14,6 +14,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -82,6 +83,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -105,13 +107,17 @@ import androidx.media3.session.MediaLibraryService
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.books.BOOK_SKIP_MS
+import app.lyrify.books.inBook
 import app.lyrify.books.knownBookPart
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerState
 import app.lyrify.logFailures
 import app.lyrify.lyrics.LrcLine
 import app.lyrify.player.PlaybackService
+import app.lyrify.player.PlayerConnection
 import app.lyrify.player.PlayerGraph
+import app.lyrify.player.Queue
 import app.lyrify.player.ServicePart
 import app.lyrify.settings.Settings
 import coil3.compose.AsyncImage
@@ -306,7 +312,7 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
                 }
             },
             bottom = {
-                LockControls(ui.durationMs, playing, ui::positionAt, connection::seekTo, connection::previous, connection::playPause, connection::next)
+                LockControls(ui.durationMs, playing, ui::positionAt, connection::seekTo, lockSkips(ui.queue), connection)
                 Text(stringResource(R.string.lock_hint), style = MaterialTheme.typography.labelMedium, color = LockMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp))
             },
         )
@@ -412,23 +418,48 @@ internal fun LockLines(lyrics: PanelLyrics?, positionMs: Long, onLine: (LrcLine)
     }
 }
 
-/** The progress bar ([LockSeekBar]), Previous, Play/Pause and Next. */
+/** A button beside Play/Pause on the lock screen: its icon, and in a book its jump ([jumpMs], back when negative); null for Previous and Next. */
+internal data class LockSkip(@DrawableRes val icon: Int, val jumpMs: Long? = null)
+
+/**
+ * The lock screen's buttons before and after Play/Pause for [queue]: Previous and Next; in a book ([inBook]) back and
+ * forward 30 s ([BOOK_SKIP_MS]) with the player's 30 s icons, as the notification, the car and the widget have them.
+ */
+internal fun lockSkips(queue: Queue?): Pair<LockSkip, LockSkip> = if (inBook(queue)) {
+    LockSkip(seekIcon(back = true, BOOK_SKIP_S), -BOOK_SKIP_MS) to LockSkip(seekIcon(back = false, BOOK_SKIP_S), BOOK_SKIP_MS)
+} else {
+    LockSkip(R.drawable.ic_skip_previous_fill) to LockSkip(R.drawable.ic_skip_next_fill)
+}
+
+/** The progress bar ([LockSeekBar]), then [skips] around Play/Pause: Previous and Next, or a book's jumps ([lockSkips]). */
 @Composable
 private fun LockControls(
     durationMs: Long,
     playing: Boolean,
     positionAt: (now: Long) -> Long,
     onSeek: (Long) -> Unit,
-    onPrevious: () -> Unit,
-    onPlayPause: () -> Unit,
-    onNext: () -> Unit,
+    skips: Pair<LockSkip, LockSkip>,
+    connection: PlayerConnection,
 ) {
     LockSeekBar(durationMs, playing, positionAt, onSeek)
     Row(horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        ChromeIconButton(R.drawable.ic_skip_previous_fill, stringResource(R.string.player_previous), onPrevious, glass = false, size = 56.dp, iconSize = 32.dp, tint = LockText)
-        PlayPauseButton(playing, onPlayPause, size = 72.dp)
-        ChromeIconButton(R.drawable.ic_skip_next_fill, stringResource(R.string.player_next), onNext, glass = false, size = 56.dp, iconSize = 32.dp, tint = LockText)
+        LockSkipButton(skips.first, stringResource(R.string.player_previous), connection::previous, connection::seekBy)
+        PlayPauseButton(playing, connection::playPause, size = 72.dp)
+        LockSkipButton(skips.second, stringResource(R.string.player_next), connection::next, connection::seekBy)
     }
+}
+
+/** [skip]: [onTrack] under [trackLabel] (Previous, Next), or its jump ([onJump]) named as the player's seek buttons are. */
+@Composable
+private fun LockSkipButton(skip: LockSkip, trackLabel: String, onTrack: () -> Unit, onJump: (Long) -> Unit) {
+    val jump = skip.jumpMs
+    if (jump == null) {
+        ChromeIconButton(skip.icon, trackLabel, onTrack, glass = false, size = 56.dp, iconSize = 32.dp, tint = LockText)
+        return
+    }
+    val seconds = (abs(jump) / 1_000).toInt()
+    val label = pluralStringResource(if (jump < 0) R.plurals.player_back_seconds else R.plurals.player_forward_seconds, seconds, seconds)
+    ChromeIconButton(skip.icon, label, { onJump(jump) }, glass = false, size = 56.dp, iconSize = 32.dp, tint = LockText)
 }
 
 /**

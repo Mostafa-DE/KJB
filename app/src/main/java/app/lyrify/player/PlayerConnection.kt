@@ -15,6 +15,10 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import app.lyrify.LOG_TAG
 import app.lyrify.R
+import app.lyrify.books.BookState
+import app.lyrify.books.BookStore
+import app.lyrify.books.asBook
+import app.lyrify.books.resumeIntoBook
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryRepository
@@ -23,6 +27,7 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -147,23 +152,30 @@ fun sourceLabel(context: Context, source: QueueSource, songs: Int): String {
  * The screens' side of KJB's player, one per process ([PlayerGraph.connection]): [ui] for the player, the Now bar and
  * the queue pages; transport through a MediaController to [PlaybackService] (which starts the service, and keeps it in
  * the foreground while it plays); queue changes straight into the model ([PlayerCore]), which the service applies.
- * Implements the lists' [PlaybackCommands], the Add to sheet's queues included. Connected while a screen is shown
- * ([attach], [detach]), or on demand for a command. Main thread only.
+ * Implements the lists' [PlaybackCommands], the Add to sheet's queues included; a book's file started from a list or a
+ * queue plays its book ([asBook], by the [repository]'s library and [books], `books.json`). Connected while a screen is
+ * shown ([attach], [detach]), or on demand for a command. Main thread only.
  */
 @OptIn(UnstableApi::class)
 class PlayerConnection(
     private val context: Context,
     private val core: PlayerCore,
-    library: LibraryRepository,
+    private val repository: LibraryRepository,
     private val scope: CoroutineScope,
+    /** `books.json`: where a book started from a list or a queue plays from, and an Opened file queue's place kept. */
+    private val bookStore: BookStore,
 ) : PlaybackCommands {
+    private val books: StateFlow<BookState> get() = bookStore.state
     private val transport = MutableStateFlow(Transport())
     private var controller: MediaController? = null
     private var connecting: ListenableFuture<MediaController>? = null
     private val waiting = mutableListOf<(MediaController) -> Unit>()
     private var users = 0
+
+    /** A Resume waiting on a cache copy's lookup. */
+    private var resuming: Job? = null
     /** The library, for the songs of queues that are not playing; null while it is read. */
-    val library: StateFlow<Library?> = library.state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
+    val library: StateFlow<Library?> = repository.state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
 
     /** Every queue, for the queue pages. */
     val book: StateFlow<QueueBook> get() = core.book
@@ -235,7 +247,7 @@ class PlayerConnection(
     // The lists' commands
 
     override fun play(songs: List<SongRef>, start: Int, source: QueueSource) {
-        core.switch { it.play(songs, start, source, core.now()) }
+        switchAsBook { it.play(songs, start, source, core.now()) }
         send { it.play() }
     }
 
@@ -297,19 +309,25 @@ class PlayerConnection(
         book.deleted(queueId)?.let { gone -> gone.book to Undo { core.change { it.undelete(gone) } } }
     }
 
+    /**
+     * "Resume": that queue plays at its place; an "Opened file" queue on a book's file as that book ([resumeIntoBook]), a
+     * cache copy looked up off the main thread. A later Resume, or another start meanwhile, wins.
+     */
     fun resume(queueId: String) {
-        core.switch { it.resume(queueId, core.now()) }
-        send { it.play() }
+        resuming?.cancel()
+        resuming = scope.launch {
+            if (core.resumeIntoBook(queueId, library(), bookStore) { path -> library()?.let { OpenedFiles.libraryCopyOf(context, path, it.all) } }) send { it.play() }
+        }
     }
 
     fun playFromStart(queueId: String) {
-        core.switch { it.playFromStart(queueId, core.now()) }
+        switchAsBook { it.playFromStart(queueId, core.now()) }
         send { it.play() }
     }
 
-    /** A tap on a song of a queue's list: that queue plays from it. */
+    /** A tap on a song of a queue's list: that queue plays from it (a book's file in another queue: its book). */
     fun jump(queueId: String, index: Int) {
-        core.switch { it.jump(queueId, index, core.now()) }
+        switchAsBook { it.jump(queueId, index, core.now()) }
         send { it.play() }
     }
 
@@ -329,6 +347,14 @@ class PlayerConnection(
     }
 
     private fun picked(): QueueSource = pickedSource("")
+
+    /** [change], or the book's own queue when the song it starts is a book's file ([asBook]): a book always plays as a book. */
+    private fun switchAsBook(change: (QueueBook) -> Switched) {
+        core.switch { book -> book.asBook(change(book), library(), books.value, core.now()) }
+    }
+
+    /** The library as read now, not as [library] last passed it on: a book started right after the read is known. */
+    private fun library(): Library? = (repository.state.value as? LibraryState.Ready)?.library
 
     // The controller
 

@@ -1,14 +1,23 @@
 package app.lyrify.ui
 
+import app.lyrify.books.BookState
+import app.lyrify.books.Chapter
+import app.lyrify.books.bookNow
+import app.lyrify.books.bookSource
+import app.lyrify.library.Library
 import app.lyrify.library.SongRef
+import app.lyrify.library.song
 import app.lyrify.player.Queue
 import app.lyrify.player.QueueItem
 import app.lyrify.player.QueueSource
 import app.lyrify.player.Repeat
 import app.lyrify.player.SourceKind
+import app.lyrify.settings.Settings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * The player cover's swipe (the prototype's coverSwipe): it locks to an axis after 12 dp, follows the finger at 0.6 with
@@ -103,5 +112,44 @@ class CoverSwipeTest {
         // It moved somewhere else: the cover springs back and nothing skips.
         assertEquals(Settled.RETURN, settledSwipe(startedOn = 4, playingNow = 9, coming = 5))
         assertEquals(Settled.RETURN, settledSwipe(startedOn = 4, playingNow = 9, coming = null))
+    }
+
+    // In a book (BK1): the swipe is the player's chapter Previous and Next, as its buttons are
+
+    @Test
+    fun `in a book the cover brings in the part the chapter buttons go to, never round to the first`() {
+        val parts = (1..3).map { song("Audiobooks/Folder Book/$it.mp3", album = "Folder Book", durationMs = 600_000) }
+        val book = Library.of(parts, Settings()).books.single()
+        val queue = Queue("b", bookSource(book), parts.mapIndexed { i, part -> QueueItem(uid = i.toLong(), song = part.ref) }, index = 1)
+        // Where the chapter was last looked at does not matter: the swipe reads the place at its end.
+        val now = bookNow(book, 1, 0, BookState())
+        assertEquals(2L, incoming(queue, SkipWay.NEXT, Repeat.OFF, positionMs = 60_000, book = now)?.uid)
+        assertEquals(0L, incoming(queue, SkipWay.PREVIOUS, Repeat.OFF, positionMs = 3_000, book = now)?.uid)
+        // Past 3 s Previous starts the part over, as the button does: nothing slides in.
+        assertNull(incoming(queue, SkipWay.PREVIOUS, Repeat.OFF, positionMs = 3_001, book = now))
+        // The last part's Next goes nowhere, and the first part's Previous neither, whatever Repeat says.
+        assertNull(incoming(queue.copy(index = 2), SkipWay.NEXT, Repeat.ALL, positionMs = 0, book = bookNow(book, 2, 0, BookState())))
+        assertNull(incoming(queue.copy(index = 0), SkipWay.PREVIOUS, Repeat.ALL, positionMs = 0, book = bookNow(book, 0, 0, BookState())))
+    }
+
+    @Test
+    fun `in a one-file book no other cover comes, its chapters are inside the file`() {
+        val orchard = song("Audiobooks/Quiet Orchard.m4b", durationMs = 900_000)
+        val book = Library.of(listOf(orchard), Settings()).books.single()
+        val chapters = BookState().withChapters(book, "stamp", listOf(Chapter(0, 300_000, "One"), Chapter(300_000, 600_000, "Two"), Chapter(600_000, 900_000, "Three")))
+        val queue = Queue("o", bookSource(book), listOf(QueueItem(uid = 9, song = orchard.ref)))
+        val now = bookNow(book, 0, 400_000, chapters)
+        assertNull(incoming(queue, SkipWay.NEXT, Repeat.OFF, positionMs = 400_000, book = now))
+        assertNull(incoming(queue, SkipWay.PREVIOUS, Repeat.ALL, positionMs = 301_000, book = now))
+        // Nothing slides in, yet the swipe still runs its chapter step (BookCoverDeviceTest swipes it on a phone).
+        assertEquals(Settled.SKIP, settledSwipe(startedOn = 9, playingNow = 9, coming = null))
+    }
+
+    @Test
+    fun `in a book the swipe goes by chapter, as the player's chapter buttons do`() {
+        // Unit tests run in the module's folder.
+        val player = File("src/main/java/app/lyrify/ui/PlayerScreen.kt").readText()
+        assertTrue(player.contains("onNext = { if (bookNow != null) chapterStep(connection, ui, bookNow, forward = true) else connection.next() }"))
+        assertTrue(player.contains("onPrevious = { if (bookNow != null) chapterStep(connection, ui, bookNow, forward = false) else connection.previous() }"))
     }
 }

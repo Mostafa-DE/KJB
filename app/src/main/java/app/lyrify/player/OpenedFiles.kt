@@ -2,6 +2,7 @@ package app.lyrify.player
 
 import android.content.ContentResolver
 import android.content.Context
+import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
@@ -39,8 +40,10 @@ import kotlin.math.max
 // files. They play at once as one queue, "Opened file". Only `content:` addresses are taken, and each is read through the
 // opening app's grant (ContentResolver), never as a path with KJB's own All files access: a caller cannot make KJB read a
 // file the caller could not. MediaStore's own address of an audio file is the library's song with that id, so its plays,
-// lyrics and heart apply; anything else plays from a copy in KJB's own cache, never added to the library, and nothing is
-// written next to it.
+// lyrics and heart apply (a book's file plays its book); any other address is the library's song when exactly one has
+// the file name and size the opening app tells (BK1), which plays only what KJB plays already and reads nothing of the
+// caller's; anything else plays from a copy in KJB's own cache, never added to the library, and nothing is written next
+// to it.
 
 /** MediaStore's id in its own address of an audio file (`content://media/<volume>/audio/media/<id>`); null for any other. */
 fun mediaStoreAudioId(uri: String): Long? {
@@ -52,6 +55,70 @@ fun mediaStoreAudioId(uri: String): Long? {
 
 /** The library's song with MediaStore id [id]; null when none, or more than one has it: a guess between songs is no answer. */
 fun matchOpened(id: Long?, songs: List<Song>): Song? = id?.let { songs.filter { song -> song.ref.mediaStoreId == it }.singleOrNull() }
+
+/** What the app that opened a file tells of it (OpenableColumns): the file's [name] and [sizeBytes], each null when unsaid. */
+data class Openable(val name: String?, val sizeBytes: Long?)
+
+/**
+ * The library's song an opened file is by what the opening app tells of it ([told]): the one song of [songs] with that
+ * file name and that size in bytes. Null when either is unknown, or no song or several have both: a guess between songs
+ * is no answer.
+ */
+fun matchNamed(told: Openable, songs: List<Song>): Song? {
+    val name = told.name?.takeIf(String::isNotEmpty) ?: return null
+    val size = told.sizeBytes?.takeIf { it > 0 } ?: return null
+    return songs.filter { it.fileName == name && it.sizeBytes == size }.singleOrNull()
+}
+
+/**
+ * The library's song the file opened at [address] is: by the id in MediaStore's own address ([matchOpened]); any other
+ * address (a file manager's own) by its name and size ([matchNamed]), which [told] reads from the opening app only then.
+ * Null: it plays from a copy.
+ */
+fun openedSong(address: String, songs: List<Song>, told: () -> Openable): Song? {
+    val id = mediaStoreAudioId(address) ?: return matchNamed(told(), songs)
+    return matchOpened(id, songs)
+}
+
+/**
+ * What the file opened at [address] plays: the library's song ([openedSong]); else, for a `content:` address, its copy
+ * ([copy], under the name the opening app gives); else nothing. [tell] asks the opening app for the file's name and size
+ * once, and only for a `content:` address that needs them.
+ */
+fun openedRef(address: String, songs: List<Song>, tell: (String) -> Openable, copy: (String, String?) -> SongRef?): SongRef? {
+    val content = address.startsWith("content://", ignoreCase = true)
+    val told = lazy { if (content) tell(address) else Openable(null, null) }
+    openedSong(address, songs) { told.value }?.let { return it.ref }
+    return if (content) copy(address, told.value.name) else null
+}
+
+/**
+ * The library's song a copy of an opened file is, by its name and size ([matchNamed]): [file] in KJB's copies under
+ * [root]; null for any other file, or one gone. Blocking.
+ */
+fun copyMatch(file: File, root: File, songs: List<Song>): Song? {
+    val inside = try {
+        file.canonicalPath.startsWith(root.canonicalPath + "/")
+    } catch (e: IOException) {
+        false
+    }
+    if (!inside || !file.isFile) return null
+    // A copy keeps the name it was opened with, made safe ([OpenedFiles.safeName]): the library's name is made safe the same way.
+    val size = file.length().takeIf { it > 0 } ?: return null
+    return songs.filter { it.sizeBytes == size && OpenedFiles.safeName(it.fileName) == file.name }.singleOrNull()
+}
+
+/** [column] of the first row of [row] as a number, found by its name; null without a row, or with the column missing or empty. */
+internal fun firstLong(row: Cursor, column: String): Long? {
+    val at = row.getColumnIndex(column)
+    return if (at >= 0 && row.moveToFirst() && !row.isNull(at)) row.getLong(at) else null
+}
+
+/** [column] of the first row of [row] as text, found by its name; null without a row, or with the column missing or empty. */
+internal fun firstString(row: Cursor, column: String): String? {
+    val at = row.getColumnIndex(column)
+    return if (at >= 0 && row.moveToFirst() && !row.isNull(at)) row.getString(at) else null
+}
 
 /**
  * The batches of copies under [root] (one folder per open, named by its time) that no queue holds a file of any more
@@ -309,6 +376,16 @@ object OpenedFiles {
         held.value[ref.path] ?: ref.path.takeIf { it.startsWith(folder(context).path + "/") }?.let { plainSong(File(it), readTags = false) }
 
     /**
+     * The library's song the copy at [path] is, by its name and size ([copyMatch]), read on the IO threads; null at once
+     * for any other path.
+     */
+    suspend fun libraryCopyOf(context: Context, path: String, songs: List<Song>): Song? {
+        val root = folder(context)
+        if (!path.startsWith(root.path + "/")) return null
+        return withContext(Dispatchers.IO) { copyMatch(File(path), root, songs) }
+    }
+
+    /**
      * The embedded cover of the copy at [path], decoded at the largest halving still at least [px] on its longer side
      * ([coverSample]); null for a path outside KJB's copies (nothing else is read), a copy without one, or one whose tags
      * do not keep it within [MAX_COVER_BYTES] ([embeddedPictureBytes]): the retriever would hand it over whole. Blocking.
@@ -351,7 +428,9 @@ object OpenedFiles {
 
     /**
      * Plays [uris] (`content:` addresses) at once as one queue, "Opened file", in their order: each the library's song when
-     * it is MediaStore's address of one, else a copy. Returns how many play; 0 when none could be read. Main thread.
+     * it is MediaStore's address of one, or the one song with the name and size the opening app tells ([openedSong]), else
+     * a copy. The first one a book's file of the library, its book plays instead (books/BookPlayback.kt, asBook). Returns
+     * how many play; 0 when none could be read. Main thread.
      */
     suspend fun play(context: Context, uris: List<String>): Int = one.withLock {
         val app = context.applicationContext
@@ -406,22 +485,30 @@ object OpenedFiles {
         val batch = File(folder(context), System.currentTimeMillis().toString())
         var budget = MAX_COPIED_BYTES
         val refs = uris.mapIndexedNotNull { index, address ->
-            matchOpened(mediaStoreAudioId(address), library)?.let { return@mapIndexedNotNull it.ref }
-            if (!address.startsWith("content://", ignoreCase = true)) return@mapIndexedNotNull null
-            val uri = address.toUri()
-            val copy = copy(context.contentResolver, uri, File(batch, index.toString()), displayName(context.contentResolver, uri), budget)
-            copy?.also { budget -= it.length() }?.let { plainSong(it, readTags = true) }?.also { song -> held.update { it + (song.path to song) } }?.ref
+            openedRef(address, library, tell = { openable(context.contentResolver, it.toUri()) }) { at, name ->
+                val copy = copy(context.contentResolver, at.toUri(), File(batch, index.toString()), name, budget)
+                copy?.also { budget -= it.length() }?.let { plainSong(it, readTags = true) }?.also { song -> held.update { it + (song.path to song) } }?.ref
+            }
         }
         if (refs.isEmpty()) batch.deleteRecursively()
         if (refs.size < uris.size) Log.w(LOG_TAG, "open: ${uris.size - refs.size} of ${uris.size} files not readable")
         return refs
     }
 
+    /** What the app that opened [uri] tells of the file: its name ([displayName]) and its size ([size]). */
+    private fun openable(resolver: ContentResolver, uri: Uri): Openable = Openable(displayName(resolver, uri), size(resolver, uri))
+
+    /** The file's size in bytes as the app that opened it gives it; null when it does not say. */
+    private fun size(resolver: ContentResolver, uri: Uri): Long? = try {
+        resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { firstLong(it, OpenableColumns.SIZE) }
+    } catch (e: RuntimeException) {
+        Log.w(LOG_TAG, "open: no size for a file (${e.javaClass.simpleName})")
+        null
+    }
+
     /** The file's name as the app that opened it gives it, for the copy's name and the player's title. */
     private fun displayName(resolver: ContentResolver, uri: Uri): String? = try {
-        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { row ->
-            if (row.moveToFirst() && !row.isNull(0)) row.getString(0)?.substringAfterLast('/') else null
-        }
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { firstString(it, OpenableColumns.DISPLAY_NAME) }?.substringAfterLast('/')
     } catch (e: RuntimeException) {
         Log.w(LOG_TAG, "open: no name for a file (${e.javaClass.simpleName})")
         null
@@ -468,7 +555,7 @@ object OpenedFiles {
     }
 
     /** A file name safe to keep: no folders, control characters or leading dots, at most [MAX_NAME] characters. */
-    private fun safeName(name: String?): String {
+    internal fun safeName(name: String?): String {
         val clean = name.orEmpty().filterNot { it == '/' || it == '\\' || it.isISOControl() }.trim().trimStart('.')
         if (clean.isEmpty()) return "audio"
         val extension = clean.substringAfterLast('.', missingDelimiterValue = "").takeIf { it.length in 1..5 }?.let { ".$it" }.orEmpty()

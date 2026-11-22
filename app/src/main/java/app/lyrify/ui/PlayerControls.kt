@@ -199,18 +199,19 @@ internal fun PointerInputChange.takeMoveX(): Float {
 
 /**
  * Back N s, Previous, Play/Pause, Next, Forward N s: the seek buttons smaller, showing the chosen amounts. In a [book],
- * 30 s each way, and Previous and Next go by chapter (BooksScreen.kt).
+ * 30 s each way, and Previous and Next go by chapter (BooksScreen.kt), with the chapter icons ([stepIcons]).
  */
 @Composable
 internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnection, book: BookNow? = null) {
     val back = if (book != null) BOOK_SKIP_S else settings.playback.skipBackSeconds
     val forward = if (book != null) BOOK_SKIP_S else settings.playback.skipForwardSeconds
+    val icons = stepIcons(book != null)
     Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
         SeekJump(seekIcon(back = true, back), pluralStringResource(R.plurals.player_back_seconds, back, back)) { connection.seekBy(-back * 1_000L) }
         if (book != null) {
-            RoundButton(R.drawable.ic_skip_previous_fill, stringResource(R.string.book_previous_chapter), size = 56.dp, iconSize = 38.dp) { chapterStep(connection, ui, book, forward = false) }
+            RoundButton(icons.first, stringResource(R.string.book_previous_chapter), size = 56.dp, iconSize = 38.dp) { chapterStep(connection, ui, book, forward = false) }
         } else {
-            RoundButton(R.drawable.ic_skip_previous_fill, stringResource(R.string.player_previous), size = 56.dp, iconSize = 38.dp, onClick = connection::previous)
+            RoundButton(icons.first, stringResource(R.string.player_previous), size = 56.dp, iconSize = 38.dp, onClick = connection::previous)
         }
         val chrome = LocalChromeColors.current
         val label = stringResource(if (ui.playing) R.string.player_pause else R.string.player_play)
@@ -227,9 +228,9 @@ internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnect
             PlayPauseIcon(ui.playing, tint = chrome.onAction, modifier = Modifier.size(40.dp))
         }
         if (book != null) {
-            RoundButton(R.drawable.ic_skip_next_fill, stringResource(R.string.book_next_chapter), size = 56.dp, iconSize = 38.dp) { chapterStep(connection, ui, book, forward = true) }
+            RoundButton(icons.second, stringResource(R.string.book_next_chapter), size = 56.dp, iconSize = 38.dp) { chapterStep(connection, ui, book, forward = true) }
         } else {
-            RoundButton(R.drawable.ic_skip_next_fill, stringResource(R.string.player_next), size = 56.dp, iconSize = 38.dp, onClick = connection::next)
+            RoundButton(icons.second, stringResource(R.string.player_next), size = 56.dp, iconSize = 38.dp, onClick = connection::next)
         }
         SeekJump(seekIcon(back = false, forward), pluralStringResource(R.plurals.player_forward_seconds, forward, forward)) { connection.seekBy(forward * 1_000L) }
     }
@@ -402,8 +403,15 @@ private fun ToggleButton(@DrawableRes icon: Int, label: String, on: Boolean, bar
     }
 }
 
-/** A book's jumps, in seconds (books/BookPlayback.kt). */
-private const val BOOK_SKIP_S: Int = (BOOK_SKIP_MS / 1_000).toInt()
+/**
+ * The main row's Previous and Next icons: in a [book] the chapter pair, the skip arrow pointing at KJB's book (back and
+ * forward), so they read as this book's chapters, not the next song; for music the skip pair.
+ */
+internal fun stepIcons(book: Boolean): Pair<Int, Int> =
+    if (book) R.drawable.ic_chapter_previous to R.drawable.ic_chapter_next else R.drawable.ic_skip_previous_fill to R.drawable.ic_skip_next_fill
+
+/** A book's jumps, in seconds (books/BookPlayback.kt): the player's and the lock screen's. */
+internal const val BOOK_SKIP_S: Int = (BOOK_SKIP_MS / 1_000).toInt()
 
 /** The progress knob grows this much under the finger (the prototype's scale(1.3) over 0.12 s). */
 internal const val KNOB_DRAG_SCALE = 1.3f

@@ -43,6 +43,8 @@ import app.lyrify.books.BookPlayFilter
 import app.lyrify.books.BooksGraph
 import app.lyrify.books.inBook
 import app.lyrify.books.isBookPart
+import app.lyrify.books.openedIntoBook
+import app.lyrify.books.playIsBook
 import app.lyrify.books.playingBook
 import app.lyrify.books.skipsFor
 import app.lyrify.library.Library
@@ -147,7 +149,7 @@ class PlaybackService : MediaLibraryService() {
     /** Songs that could not be played since one last played: the whole queue failing stops the player. */
     private var failedInARow = 0
     /** The play counter, without a book's plays (books/BookPlayback.kt). */
-    private val plays = BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }) { path -> library.value?.bookOf(path) != null }
+    private val plays = BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }
     private val tracker = PlayTracker(plays::onEvent, System::currentTimeMillis)
     private val offload = OffloadGate { engine.setOffload(it) }
 
@@ -465,15 +467,21 @@ class PlaybackService : MediaLibraryService() {
 
         /**
          * Play on a headset or Bluetooth after KJB was closed: the queue playing at its place, once the queues and the
-         * library are read; nothing when the library cannot be read (no All files access), or after [RESUME_WAIT_MS].
+         * library are read; nothing when the library cannot be read (no All files access), or after [RESUME_WAIT_MS]. An
+         * "Opened file" queue left on a book's file is that book's queue first (BK1), so the play resumes a book.
          */
         override fun onPlaybackResumption(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, isForPlayback: Boolean): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
             val none = MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0)
             val songs = LibraryGraph.repository(this@PlaybackService).state
+            val books = BooksGraph.store(this@PlaybackService)
             return resumption(scope, RESUME_WAIT_MS, none, ready = {
                 core.ready.first { it }
                 // The service's own view of the library is what playing() reads: wait for it too, not only the read.
-                songs.first { it !is LibraryState.Loading } is LibraryState.Ready && library.first { it != null } != null
+                val read = songs.first { it !is LibraryState.Loading } is LibraryState.Ready && library.first { it != null } != null
+                library.value?.let { known ->
+                    core.openedIntoBook(known, books, { path -> OpenedFiles.libraryCopyOf(this@PlaybackService, path, known.all) }) { !engine.playWhenReady }
+                }
+                read
             }) { playing() }
         }
     }

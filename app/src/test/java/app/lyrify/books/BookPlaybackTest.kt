@@ -74,24 +74,27 @@ class BookPlaybackTest {
     }
 
     @Test
-    fun `an m4b another app opens plays as a plain file, never as its book, and nothing is kept for the book`() = runTest {
+    fun `an m4b another app opens plays as its book when it is the library's, a copy as a plain file that keeps nothing`() = runTest {
         val orchard = song("Audiobooks/Quiet Orchard.m4b", durationMs = 900_000)
         val withOrchard = Library.of(parts + music + orchard, Settings())
         // MediaStore's own address opens the library's file; any other (Files) a copy in KJB's cache (player/OpenedFiles.kt).
         val copy = SongRef("/data/user/0/app.lyrify/cache/opened/1800000000000/Quiet Orchard.m4b")
         val opened = QueueSource(SourceKind.OPENED, "opened", "")
         assertEquals(orchard.path, withOrchard.bookOf(orchard.path)?.id)
-        listOf(orchard.ref, copy).forEach { ref ->
-            val queue = QueueBook().play(listOf(ref), 0, opened, now = 1).book.current!!
-            assertFalse(inBook(queue))
-            assertNull(playingBook(queue, withOrchard))
-            assertFalse(playsAsBook(queue, null, queue.items[0].uid))
-            assertFalse(playsAsBook(queue, withOrchard, queue.items[0].uid))
-        }
+        // The library's file plays as its book (BK1, BookStartTest), as the Books tab plays it.
+        val own = QueueBook().let { it.asBook(it.play(listOf(orchard.ref), 0, opened, now = 1), withOrchard, BookState(), now = 1) }.book.current!!
+        assertTrue(inBook(own))
+        assertEquals(PlayingBook(withOrchard.bookOf(orchard.path)!!, 0), playingBook(own, withOrchard))
+        // A copy is in no library: a plain file.
+        val queue = QueueBook().let { it.asBook(it.play(listOf(copy), 0, opened, now = 1), withOrchard, BookState(), now = 1) }.book.current!!
+        assertFalse(inBook(queue))
+        assertNull(playingBook(queue, withOrchard))
+        assertFalse(playsAsBook(queue, null, queue.items[0].uid))
+        assertFalse(playsAsBook(queue, withOrchard, queue.items[0].uid))
         assertNull(withOrchard.bookOf(copy.path))
-        // Played, paused, stopped and played to its end: books.json gets nothing.
+        // The copy played, paused, stopped and played to its end: books.json gets nothing.
         val run = driving()
-        run.playing = playingBook(QueueBook().play(listOf(orchard.ref), 0, opened, now = 1).book.current, withOrchard)
+        run.playing = playingBook(queue, withOrchard)
         run.driver.songStarted(uid = 1, lap = false, natural = false)
         run.driver.playingChanged(true)
         run.port.positionMs = 40_000
@@ -124,6 +127,30 @@ class BookPlaybackTest {
         filter.onEvent(PlayEvent.Started(2, music.ref, 50, 200_000))
         filter.onEvent(PlayEvent.Ended(2, music.ref, 60, 200_000))
         assertEquals(listOf(2L, 2L), passed.map { it.playId })
+    }
+
+    @Test
+    fun `while the library is read a play is a book's by its path or its book's queue, once read by the library`() {
+        val orchard = song("Download/Quiet Orchard.m4b", durationMs = 900_000)
+        val tagged = song("Music/Night Readings/01 Lantern Keeper.mp3", album = "Night Readings", genre = "Audiobook", durationMs = 900_000)
+        val withBooks = Library.of(parts + music + orchard + tagged, Settings())
+        val inBookQueue = QueueBook().play(listOf(tagged.ref), 0, bookSource(withBooks.bookOf(tagged.path)!!), now = 1).book.current
+        val inMusicQueue = musicQueue().current
+        // Not read yet (a cold start): an .m4b or a file in an Audiobooks folder by its path, a book's queue by its source.
+        assertTrue(playIsBook(orchard.path, inMusicQueue, null))
+        assertTrue(playIsBook(parts[0].path, inMusicQueue, null))
+        assertTrue(playIsBook(tagged.path, inBookQueue, null))
+        assertFalse(playIsBook(music.path, inMusicQueue, null))
+        // Read: the library says, whatever the queue.
+        assertTrue(playIsBook(tagged.path, inMusicQueue, withBooks))
+        assertTrue(playIsBook(orchard.path, inMusicQueue, withBooks))
+        assertFalse(playIsBook(music.path, inBookQueue, withBooks))
+        assertFalse(playIsBook(music.path, inMusicQueue, withBooks))
+        // A file the library does not have goes by its path, as the lyrics judge it: a cache copy of an .m4b is a book's.
+        assertTrue(playIsBook("/data/user/0/app.lyrify/cache/opened/1800000000000/0/Quiet Orchard.m4b", inMusicQueue, withBooks))
+        // The play counter wired to it in the service.
+        val service = java.io.File("src/main/java/app/lyrify/player/PlaybackService.kt").readText()
+        assertTrue(service.contains("BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }"))
     }
 
     // The place, kept as the book plays

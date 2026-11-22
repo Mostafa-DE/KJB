@@ -1,5 +1,7 @@
 package app.lyrify.player
 
+import android.database.Cursor
+import android.provider.OpenableColumns
 import app.lyrify.auto.DEFAULT_COVER
 import app.lyrify.auto.coverPath
 import app.lyrify.library.SongRef
@@ -13,6 +15,7 @@ import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.File
+import java.lang.reflect.Proxy
 
 /**
  * A file another app opens in KJB: only MediaStore's own address of an audio file names a library song (by its id); any
@@ -53,6 +56,143 @@ class OpenedFilesTest {
         assertNull(matchOpened(null, listOf(lantern, tide)))
         assertNull("two songs with one id: no guess", matchOpened(42, listOf(lantern, song("Music/Copies/01 Paper Lantern.mp3", id = 42))))
     }
+
+    // Another app's own address (decision 1b): the library's song by its file name and size, when exactly one has both
+
+    private val orchard = song("Audiobooks/Quiet Orchard.m4b", id = 50).copy(sizeBytes = 512_000_000)
+    private val tide = song("Music/Tide/Tide.flac", id = 43).copy(sizeBytes = 31_000_000)
+    private val library = listOf(song("Music/Harbour Glass/01 Paper Lantern.mp3", id = 42), tide, orchard)
+    private val files = "content://com.example.files.provider/root/storage/emulated/0/Download/Quiet%20Orchard.m4b"
+
+    @Test
+    fun `another app's own address is the library's song when exactly one has its file name and size, a book or music`() {
+        assertEquals(orchard, matchNamed(Openable("Quiet Orchard.m4b", 512_000_000), library))
+        assertEquals(tide, matchNamed(Openable("Tide.flac", 31_000_000), library))
+        assertEquals(orchard, openedSong(files, library) { Openable("Quiet Orchard.m4b", 512_000_000) })
+    }
+
+    @Test
+    fun `several songs with that name and size, or a size or name that differs, are no answer`() {
+        val twin = song("Music/Backup/Quiet Orchard.m4b", id = 51).copy(sizeBytes = 512_000_000)
+        assertNull("two songs match: no guess", matchNamed(Openable("Quiet Orchard.m4b", 512_000_000), library + twin))
+        assertNull("the size differs", matchNamed(Openable("Quiet Orchard.m4b", 512_000_001), library))
+        assertNull("the name differs", matchNamed(Openable("Quiet Orchard (1).m4b", 512_000_000), library))
+        assertNull("the name differs in case", matchNamed(Openable("quiet orchard.m4b", 512_000_000), library))
+    }
+
+    @Test
+    fun `an unknown name or size is no answer`() {
+        assertNull(matchNamed(Openable(null, 512_000_000), library))
+        assertNull(matchNamed(Openable("", 512_000_000), library))
+        assertNull(matchNamed(Openable("Quiet Orchard.m4b", null), library))
+        assertNull(matchNamed(Openable("Quiet Orchard.m4b", 0), library))
+        // A library song MediaStore could not measure never matches by size.
+        assertNull(matchNamed(Openable("Tide.flac", 0), listOf(tide.copy(sizeBytes = 0))))
+        assertNull(openedSong(files, library) { Openable(null, null) })
+    }
+
+    @Test
+    fun `MediaStore's own address goes by its id only, and the opening app is never asked`() {
+        val never: () -> Openable = { throw AssertionError("asked for a name") }
+        assertEquals(tide, openedSong("content://media/external/audio/media/43", library, never))
+        // An id the library lacks plays from a copy, as before, whatever the name says.
+        assertNull(openedSong("content://media/external/audio/media/99", library, never))
+    }
+
+    @Test
+    fun `an open plays the library's song when it matches, else copies a content address under the name the opening app gives`() {
+        val asked = mutableListOf<String>()
+        val copied = mutableListOf<Pair<String, String?>>()
+        val tell = { at: String -> asked += at; Openable("Quiet Orchard.m4b", 512_000_000) }
+        val copy = { at: String, name: String? -> copied += at to name; SongRef("/data/user/0/app.lyrify/cache/opened/1/0/$name") }
+        // A file manager's own address that matches: the library's own file, asked once, no copy.
+        assertEquals(orchard.ref, openedRef(files, library, tell, copy))
+        assertEquals(listOf(files), asked)
+        assertTrue(copied.isEmpty())
+        // No match: copied under the name the app gave, still asked only once.
+        asked.clear()
+        assertEquals("/data/user/0/app.lyrify/cache/opened/1/0/Quiet Orchard.m4b", openedRef(files, listOf(tide), tell, copy)?.path)
+        assertEquals(listOf(files), asked)
+        assertEquals(listOf(files to "Quiet Orchard.m4b"), copied)
+        // MediaStore's address: by its id, the app never asked; an id the library lacks is copied, its name asked then.
+        asked.clear()
+        copied.clear()
+        assertEquals(tide.ref, openedRef("content://media/external/audio/media/43", library, tell, copy))
+        assertTrue(asked.isEmpty())
+        openedRef("content://media/external/audio/media/99", library, tell, copy)
+        assertEquals(listOf("content://media/external/audio/media/99"), asked)
+        assertEquals(listOf("content://media/external/audio/media/99" to "Quiet Orchard.m4b"), copied)
+        // Anything but a content address: nothing asked, nothing copied, nothing plays.
+        asked.clear()
+        copied.clear()
+        assertNull(openedRef("file:///storage/emulated/0/Download/Quiet%20Orchard.m4b", library, tell, copy))
+        assertTrue(asked.isEmpty())
+        assertTrue(copied.isEmpty())
+    }
+
+    @Test
+    fun `a copy in KJB's cache is the library's song when exactly one has its name and size, nothing outside the copies`() {
+        val root = temp.newFolder("opened")
+        val copy = File(root, "1800000000000/0/Quiet Orchard.m4b").apply { parentFile!!.mkdirs(); writeBytes(ByteArray(1_234)) }
+        val book = orchard.copy(sizeBytes = 1_234)
+        assertEquals(book, copyMatch(copy, root, listOf(tide, book)))
+        assertNull("the size differs", copyMatch(copy, root, listOf(tide, orchard)))
+        assertNull("two songs match", copyMatch(copy, root, listOf(book, song("Music/Backup/Quiet Orchard.m4b").copy(sizeBytes = 1_234))))
+        val outside = File(temp.newFolder("elsewhere"), "Quiet Orchard.m4b").apply { writeBytes(ByteArray(1_234)) }
+        assertNull("not a copy", copyMatch(outside, root, listOf(book)))
+        assertNull("gone", copyMatch(File(root, "1800000000000/1/Quiet Orchard.m4b"), root, listOf(book)))
+    }
+
+    @Test
+    fun `a copy kept under a shortened name still matches the library's song by the name it was opened with`() {
+        val root = temp.newFolder("opened")
+        val long = "Quiet Orchard, the whole tale in one file, read slowly by a made-up narrator over three long winter evenings, part one of two.m4b"
+        assertTrue(long.length > 120)
+        // KJB keeps a copy under at most 120 characters, its extension kept.
+        val copy = File(root, "1800000000000/0/" + long.take(116) + ".m4b").apply { parentFile!!.mkdirs(); writeBytes(ByteArray(2_048)) }
+        val book = song("Audiobooks/$long").copy(sizeBytes = 2_048)
+        assertEquals(book, copyMatch(copy, root, listOf(book)))
+    }
+
+    @Test
+    fun `the name and size are read by their columns, whatever order the opening app gives them in`() {
+        // A provider that hands back more columns than asked for, the size not first.
+        val row = rows(listOf(OpenableColumns.DISPLAY_NAME, "_data_length", OpenableColumns.SIZE), listOf("Quiet Orchard.m4b", 7L, 512_000_000L))
+        assertEquals(512_000_000L, firstLong(row, OpenableColumns.SIZE))
+        assertEquals("Quiet Orchard.m4b", firstString(row, OpenableColumns.DISPLAY_NAME))
+        // A column it leaves out, or leaves empty, or no row at all: unknown.
+        assertNull(firstLong(rows(listOf(OpenableColumns.DISPLAY_NAME), listOf("Quiet Orchard.m4b")), OpenableColumns.SIZE))
+        assertNull(firstLong(rows(listOf(OpenableColumns.SIZE), listOf(null)), OpenableColumns.SIZE))
+        assertNull(firstString(rows(listOf(OpenableColumns.DISPLAY_NAME), null), OpenableColumns.DISPLAY_NAME))
+    }
+
+    @Test
+    fun `an open never logs a file's name, address or path, only exception names and counts`() {
+        assertEquals(listOf("uri", "file.path", "name"), unsafeLogged("""Log.w(LOG_TAG, "open: ${'$'}uri at ${'$'}{file.path} as ${'$'}name (${'$'}{e.javaClass.simpleName})")"""))
+        // Unit tests run in the module's folder.
+        val source = File("src/main/java/app/lyrify/player/OpenedFiles.kt").readText()
+        assertEquals(emptyList<String>(), unsafeLogged(source))
+    }
+
+    /** What the log lines of [source] put in besides an exception's class name and a count. */
+    private fun unsafeLogged(source: String): List<String> =
+        source.lines().filter { Regex("""\bLog\.(v|d|i|w|e|wtf)\(""").containsMatchIn(it) }.flatMap { line ->
+            Regex("""\$\{([^}]*)\}|\$([A-Za-z_]\w*)""").findAll(line).map { it.groupValues[1].ifEmpty { it.groupValues[2] } }.toList()
+        }.filterNot { it == "e.javaClass.simpleName" || Regex("""[\w.]+\.size( - [\w.]+\.size)?""").matches(it) }
+
+    /** A provider's answer: one row of [values] under [columns], or none when [values] is null. */
+    private fun rows(columns: List<String>, values: List<Any?>?): Cursor =
+        Proxy.newProxyInstance(Cursor::class.java.classLoader, arrayOf(Cursor::class.java)) { _, method, args ->
+            when (method.name) {
+                "getColumnIndex" -> columns.indexOf(args!![0])
+                "moveToFirst" -> values != null
+                "isNull" -> values!![args!![0] as Int] == null
+                "getLong" -> values!![args!![0] as Int] as Long
+                "getString" -> values!![args!![0] as Int] as String
+                "getColumnCount" -> columns.size
+                else -> null
+            }
+        } as Cursor
 
     @Test
     fun `a batch of copies stays while any queue holds one of its files, and the newest always stays`() {
