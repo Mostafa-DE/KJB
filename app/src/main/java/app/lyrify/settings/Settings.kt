@@ -119,6 +119,11 @@ data class LibrarySettings(
      * [tabs]' order. A chosen tab that is hidden, or Books while the library holds no book, gives way to that first one.
      */
     val opensOn: LibraryTab? = null,
+    /**
+     * "Find similar artists online" (similar/): on by default (user, 2026-11-22), the artists the user plays are looked
+     * up on MusicBrainz and ListenBrainz, slowly, in the background; off, nothing more is asked and what was found stays.
+     */
+    val findSimilarOnline: Boolean = true,
 ) {
     /** [list]'s order: as the user left it, else its default. */
     fun sortOf(list: SongList): ListSort = listSorts[list] ?: list.default
@@ -346,7 +351,8 @@ enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
  * names" (3.1): a file without them reads as the defaults, a page order this version cannot use as that page's default.
  * The bottom bar, its style, Hide while scrolling and the tab Library opens on came in 3.1 as new keys too: a file
  * without them reads today's bar, Standard, never hiding, and Library on the first tab in its order. So did Settings'
- * open and closed sections, after 3.1.0: a file without them reads each section as at first.
+ * open and closed sections, after 3.1.0: a file without them reads each section as at first. So did "Find similar
+ * artists online" (3.2): a file without it reads it on.
  */
 object SettingsJson {
     const val VERSION: Int = 4
@@ -389,6 +395,7 @@ object SettingsJson {
                                 obj("enabled" to split.enabled, "separators" to JsonArray(split.separators.map(::JsonPrimitive)), "exceptions" to JsonArray(split.exceptions.map(::JsonPrimitive)))
                             },
                             "opensOn" to (it.opensOn?.name?.let(::JsonPrimitive) ?: JsonNull),
+                            "findSimilarOnline" to JsonPrimitive(it.findSimilarOnline),
                         ),
                     )
                 },
@@ -484,6 +491,7 @@ object SettingsJson {
                     hiddenSongs = (it["hiddenSongs"] as? JsonArray)?.let(::hiddenSongs) ?: d.library.hiddenSongs,
                     artistSplit = (it["artistSplit"] as? JsonObject)?.let { split -> artistSplit(split, d.library.artistSplit) } ?: d.library.artistSplit,
                     opensOn = if ("opensOn" in it) it.choiceOrNull<LibraryTab>("opensOn") else d.library.opensOn,
+                    findSimilarOnline = it.flag("findSimilarOnline", d.library.findSimilarOnline),
                 )
             } ?: d.library,
             lyrics = root.section("lyrics")?.let {
