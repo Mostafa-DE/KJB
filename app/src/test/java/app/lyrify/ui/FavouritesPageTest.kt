@@ -138,7 +138,9 @@ class FavouritesPageTest {
         assertTrue("FavouritesHead(" in favourites)
         assertFalse("Hero(" in favourites)
         val head = page.substringAfter("internal fun FavouritesHead(").substringBefore("\n}\n")
-        assertTrue("BuiltInTile(BuiltInList.FAVOURITES, FAV_TILE)" in head)
+        // Its tile is the list's own (the heart's by default), as the period lists share the head too (below).
+        assertTrue("BuiltInTile(list, FAV_TILE)" in head)
+        assertTrue("list: BuiltInList = BuiltInList.FAVOURITES" in page.substringAfter("internal fun FavouritesHead(").substringBefore(") {"))
         assertTrue("heading()" in head)
         assertEquals(56f, FAV_TILE.value)
     }
@@ -159,6 +161,17 @@ class FavouritesPageTest {
         val words = 2f * (AppTypography.titleLarge.lineHeight.value + FavouritesMeta.lineHeight.value)
         val stacked = favouritesHeadHeight(FAV_TILE.value, words, LIST_HEADER_HEIGHT.value, side = false, top = FAV_HEAD_TOP.value)
         assertEquals(FAV_HEAD_TOP.value + words + LIST_HEADER_HEIGHT.value, stacked)
+    }
+
+    @Test
+    fun `Recently added, Recently played and Most played have Favourites' compact head, their chips and Search right under it`() {
+        // User 2026-11-22 (r2 phone test): the big tile took the screen; the same small head as Favourites, its sizes too.
+        val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText().substringAfter("private fun BuiltInPage(").substringBefore("\n}\n")
+        assertFalse("Hero(" in page)
+        assertTrue("FavouritesHead(title, songsMeta(songs, hours = true), list) {" in page)
+        // Shuffle, Play, Add all and the sort in the head, as on Favourites; then the chips and Search, then the songs.
+        assertTrue(page.indexOf("ListHeader(songs.size,") in page.indexOf("FavouritesHead(")..page.indexOf("key = \"periods\""))
+        assertTrue(page.indexOf("key = \"periods\"") < page.indexOf("key = \"find\"") && page.indexOf("key = \"find\"") < page.indexOf("songRows("))
     }
 
     // KJB 3.1: Favourites as a bar item has the bar's header with its name, as Queues, Downloads and Books do.

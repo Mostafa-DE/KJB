@@ -702,7 +702,13 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
     }
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null && shown != null) { songList ->
-        item(key = "hero", contentType = "hero") { Box(rowMotion(reduced)) { Hero(title, songsMeta(songs, hours = true), art = { BuiltInTile(list, HERO) }) } }
+        item(key = "hero", contentType = "hero") {
+            Box(rowMotion(reduced)) {
+                FavouritesHead(title, songsMeta(songs, hours = true), list) {
+                    ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = sortChip(order, R.string.lib_sort_title), onSort = { sorting = true }, gutter = 0.dp)
+                }
+            }
+        }
         if (list == BuiltInList.MOST_PLAYED) {
             item(key = "listening", contentType = "listening") { ListeningCard(rowMotion(reduced).padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 4.dp)) }
         }
@@ -732,11 +738,6 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
                 onSearch = { keyboard?.hide() },
             ) {
                 if (words.isNotEmpty()) ChromeIconButton(R.drawable.ic_close, stringResource(R.string.search_clear), { words = "" }, glass = false, size = 36.dp)
-            }
-        }
-        item(key = "header", contentType = "header") {
-            Box(rowMotion(reduced)) {
-                ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = sortChip(order, R.string.lib_sort_title), onSort = { sorting = true })
             }
         }
         if (rows != null && shown != null && songs.isEmpty()) {
@@ -853,14 +854,16 @@ internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
  * title and its counts line, then [buttons], the list header (Shuffle, Play, Add all, the sort), under them; on the same
  * row where the width leaves it room ([favouritesSideBySide]). Large words wrap and the row grows with them, the tile
  * beside their middle ([favouritesHeadHeight]). TalkBack hears the title as the page's heading; the tile is decorative.
- * Without a [title] (the bar's Favourites, [favouritesHeadTitle]) the tile has the counts line alone beside it.
+ * Without a [title] (the bar's Favourites, [favouritesHeadTitle]) the tile has the counts line alone beside it. The
+ * period lists (Recently added, Recently played, Most played) have the same head with their [list]'s tile (user
+ * 2026-11-22: "make it small like Favourites").
  */
 @Composable
-internal fun FavouritesHead(title: String?, meta: String, buttons: @Composable () -> Unit) {
+internal fun FavouritesHead(title: String?, meta: String, list: BuiltInList = BuiltInList.FAVOURITES, buttons: @Composable () -> Unit) {
     Layout(
         content = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                BuiltInTile(BuiltInList.FAVOURITES, FAV_TILE)
+                BuiltInTile(list, FAV_TILE)
                 Column(Modifier.padding(start = FAV_HEAD_GAP)) {
                     // Shrunk to fit its lines where large words would not (phone session 9: it was cut at font scale 2).
                     val style = MaterialTheme.typography.titleLarge
