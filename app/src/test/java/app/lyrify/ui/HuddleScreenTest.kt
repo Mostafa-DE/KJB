@@ -72,9 +72,21 @@ class HuddleScreenTest {
         assertTrue(File("src/main/java/app/lyrify/player/PlayerConnection.kt").readText().contains("SourceKind.HUDDLE -> return context.getString(R.string.huddle_from, source.name)"))
         assertTrue(File("src/main/java/app/lyrify/ui/SongActions.kt").readText().contains("SourceKind.HUDDLE -> resources.getString(R.string.huddle_from, source.name)"))
         // The player's own line is "From <name>" already: the friend's name goes in it as it is.
-        assertTrue(File("src/main/java/app/lyrify/ui/PlayerScreen.kt").readText().contains("val queueName = ui.queue.name ?: ui.queue.source.name.takeIf { ui.queue.source.kind == SourceKind.HUDDLE } ?: sourceLabel("))
+        val player = File("src/main/java/app/lyrify/ui/PlayerScreen.kt").readText()
+        assertTrue(player.contains("val queueName = ui.queue.name ?: ui.queue.source.name.takeIf { ui.queue.source.kind == SourceKind.HUDDLE } ?: sourceLabel("))
+        assertTrue(player.contains("fromLine(stringResource(R.string.player_from, name), bold,"))
         assertTrue("""<string name="huddle_from">From %1${'$'}s</string>""" in File("src/main/res/values/strings_huddle.xml").readText())
         assertTrue("""<string name="player_from">From %1${'$'}s</string>""" in File("src/main/res/values/strings_player.xml").readText())
+    }
+
+    @Test
+    fun `a card not opened yet is New to TalkBack too, not coral alone, on the start screen and the Huddle page`() {
+        assertEquals(
+            2,
+            Regex(Regex.escape("modifier = if (received.opened) Modifier else stringResource(R.string.huddle_new).let { new -> Modifier.semantics { stateDescription = new } },"))
+                .findAll(File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText()).count(),
+        )
+        assertTrue("""<string name="huddle_new">New</string>""" in File("src/main/res/values/strings_huddle.xml").readText())
     }
 
     @Test
