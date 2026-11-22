@@ -3,10 +3,12 @@ package app.lyrify.books
 import app.lyrify.library.Library
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
+import app.lyrify.player.Openable
 import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Switched
+import app.lyrify.player.openedSong
 import app.lyrify.settings.Settings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -82,6 +84,23 @@ class BookStartTest {
         assertEquals(BookStart(oneFile, BookPlace(0, 420_000)), bookStart(orchard.path, library, state))
         // Never played: from its start.
         assertEquals(BookStart(oneFile, BookPlace()), bookStart(orchard.path, library, BookState()))
+    }
+
+    @Test
+    fun `a book a file manager opens by its own address plays as the book when its name and size are the library file's`() {
+        val address = "content://com.example.files.provider/root/Download/Quiet%20Orchard.m4b"
+        val all = parts + orchard + lantern + tin
+        val found = openedSong(address, all) { Openable(orchard.fileName, orchard.sizeBytes) }!!
+        // The library's own file, never a copy: its book, at its place.
+        val queue = musicPlaying.started { it.play(listOf(found.ref), 0, opened, now = 10) }.current!!
+        assertEquals(bookSource(oneFile), queue.source)
+        assertEquals(listOf(orchard.path), queue.items.map { it.song.path })
+        assertEquals(420_000L, queue.positionMs)
+        // Music found the same way plays as an opened file, the library's own.
+        val song = openedSong(address, all) { Openable(tin.fileName, tin.sizeBytes) }!!
+        val music = musicPlaying.started { it.play(listOf(song.ref), 0, opened, now = 10) }.current!!
+        assertEquals(opened, music.source)
+        assertEquals(listOf(tin.path), music.items.map { it.song.path })
     }
 
     @Test

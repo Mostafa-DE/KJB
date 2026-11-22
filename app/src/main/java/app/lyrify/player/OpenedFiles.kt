@@ -39,8 +39,10 @@ import kotlin.math.max
 // files. They play at once as one queue, "Opened file". Only `content:` addresses are taken, and each is read through the
 // opening app's grant (ContentResolver), never as a path with KJB's own All files access: a caller cannot make KJB read a
 // file the caller could not. MediaStore's own address of an audio file is the library's song with that id, so its plays,
-// lyrics and heart apply; anything else plays from a copy in KJB's own cache, never added to the library, and nothing is
-// written next to it.
+// lyrics and heart apply (a book's file plays its book); any other address is the library's song when exactly one has
+// the file name and size the opening app tells (BK1), which plays only what KJB plays already and reads nothing of the
+// caller's; anything else plays from a copy in KJB's own cache, never added to the library, and nothing is written next
+// to it.
 
 /** MediaStore's id in its own address of an audio file (`content://media/<volume>/audio/media/<id>`); null for any other. */
 fun mediaStoreAudioId(uri: String): Long? {
@@ -52,6 +54,30 @@ fun mediaStoreAudioId(uri: String): Long? {
 
 /** The library's song with MediaStore id [id]; null when none, or more than one has it: a guess between songs is no answer. */
 fun matchOpened(id: Long?, songs: List<Song>): Song? = id?.let { songs.filter { song -> song.ref.mediaStoreId == it }.singleOrNull() }
+
+/** What the app that opened a file tells of it (OpenableColumns): the file's [name] and [sizeBytes], each null when unsaid. */
+data class Openable(val name: String?, val sizeBytes: Long?)
+
+/**
+ * The library's song an opened file is by what the opening app tells of it ([told]): the one song of [songs] with that
+ * file name and that size in bytes. Null when either is unknown, or no song or several have both: a guess between songs
+ * is no answer.
+ */
+fun matchNamed(told: Openable, songs: List<Song>): Song? {
+    val name = told.name?.takeIf(String::isNotEmpty) ?: return null
+    val size = told.sizeBytes?.takeIf { it > 0 } ?: return null
+    return songs.filter { it.fileName == name && it.sizeBytes == size }.singleOrNull()
+}
+
+/**
+ * The library's song the file opened at [address] is: by the id in MediaStore's own address ([matchOpened]); any other
+ * address (a file manager's own) by its name and size ([matchNamed]), which [told] reads from the opening app only then.
+ * Null: it plays from a copy.
+ */
+fun openedSong(address: String, songs: List<Song>, told: () -> Openable): Song? {
+    val id = mediaStoreAudioId(address) ?: return matchNamed(told(), songs)
+    return matchOpened(id, songs)
+}
 
 /**
  * The batches of copies under [root] (one folder per open, named by its time) that no queue holds a file of any more
@@ -351,8 +377,9 @@ object OpenedFiles {
 
     /**
      * Plays [uris] (`content:` addresses) at once as one queue, "Opened file", in their order: each the library's song when
-     * it is MediaStore's address of one, else a copy. The first one a book's file of the library, its book plays instead
-     * (books/BookPlayback.kt, asBook). Returns how many play; 0 when none could be read. Main thread.
+     * it is MediaStore's address of one, or the one song with the name and size the opening app tells ([openedSong]), else
+     * a copy. The first one a book's file of the library, its book plays instead (books/BookPlayback.kt, asBook). Returns
+     * how many play; 0 when none could be read. Main thread.
      */
     suspend fun play(context: Context, uris: List<String>): Int = one.withLock {
         val app = context.applicationContext
@@ -407,15 +434,31 @@ object OpenedFiles {
         val batch = File(folder(context), System.currentTimeMillis().toString())
         var budget = MAX_COPIED_BYTES
         val refs = uris.mapIndexedNotNull { index, address ->
-            matchOpened(mediaStoreAudioId(address), library)?.let { return@mapIndexedNotNull it.ref }
-            if (!address.startsWith("content://", ignoreCase = true)) return@mapIndexedNotNull null
+            val content = address.startsWith("content://", ignoreCase = true)
+            // What the opening app tells of its file, asked once: its name and size find the library's, its name names a copy.
+            val told = lazy { if (content) openable(context.contentResolver, address.toUri()) else Openable(null, null) }
+            openedSong(address, library) { told.value }?.let { return@mapIndexedNotNull it.ref }
+            if (!content) return@mapIndexedNotNull null
             val uri = address.toUri()
-            val copy = copy(context.contentResolver, uri, File(batch, index.toString()), displayName(context.contentResolver, uri), budget)
+            val copy = copy(context.contentResolver, uri, File(batch, index.toString()), told.value.name, budget)
             copy?.also { budget -= it.length() }?.let { plainSong(it, readTags = true) }?.also { song -> held.update { it + (song.path to song) } }?.ref
         }
         if (refs.isEmpty()) batch.deleteRecursively()
         if (refs.size < uris.size) Log.w(LOG_TAG, "open: ${uris.size - refs.size} of ${uris.size} files not readable")
         return refs
+    }
+
+    /** What the app that opened [uri] tells of the file: its name ([displayName]) and its size ([size]). */
+    private fun openable(resolver: ContentResolver, uri: Uri): Openable = Openable(displayName(resolver, uri), size(resolver, uri))
+
+    /** The file's size in bytes as the app that opened it gives it; null when it does not say. */
+    private fun size(resolver: ContentResolver, uri: Uri): Long? = try {
+        resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { row ->
+            if (row.moveToFirst() && !row.isNull(0)) row.getLong(0) else null
+        }
+    } catch (e: RuntimeException) {
+        Log.w(LOG_TAG, "open: no size for a file (${e.javaClass.simpleName})")
+        null
     }
 
     /** The file's name as the app that opened it gives it, for the copy's name and the player's title. */

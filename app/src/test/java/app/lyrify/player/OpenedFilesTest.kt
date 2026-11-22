@@ -54,6 +54,57 @@ class OpenedFilesTest {
         assertNull("two songs with one id: no guess", matchOpened(42, listOf(lantern, song("Music/Copies/01 Paper Lantern.mp3", id = 42))))
     }
 
+    // Another app's own address (decision 1b): the library's song by its file name and size, when exactly one has both
+
+    private val orchard = song("Audiobooks/Quiet Orchard.m4b", id = 50).copy(sizeBytes = 512_000_000)
+    private val tide = song("Music/Tide/Tide.flac", id = 43).copy(sizeBytes = 31_000_000)
+    private val library = listOf(song("Music/Harbour Glass/01 Paper Lantern.mp3", id = 42), tide, orchard)
+    private val files = "content://com.example.files.provider/root/storage/emulated/0/Download/Quiet%20Orchard.m4b"
+
+    @Test
+    fun `another app's own address is the library's song when exactly one has its file name and size, a book or music`() {
+        assertEquals(orchard, matchNamed(Openable("Quiet Orchard.m4b", 512_000_000), library))
+        assertEquals(tide, matchNamed(Openable("Tide.flac", 31_000_000), library))
+        assertEquals(orchard, openedSong(files, library) { Openable("Quiet Orchard.m4b", 512_000_000) })
+    }
+
+    @Test
+    fun `several songs with that name and size, or a size or name that differs, are no answer`() {
+        val twin = song("Music/Backup/Quiet Orchard.m4b", id = 51).copy(sizeBytes = 512_000_000)
+        assertNull("two songs match: no guess", matchNamed(Openable("Quiet Orchard.m4b", 512_000_000), library + twin))
+        assertNull("the size differs", matchNamed(Openable("Quiet Orchard.m4b", 512_000_001), library))
+        assertNull("the name differs", matchNamed(Openable("Quiet Orchard (1).m4b", 512_000_000), library))
+        assertNull("the name differs in case", matchNamed(Openable("quiet orchard.m4b", 512_000_000), library))
+    }
+
+    @Test
+    fun `an unknown name or size is no answer`() {
+        assertNull(matchNamed(Openable(null, 512_000_000), library))
+        assertNull(matchNamed(Openable("", 512_000_000), library))
+        assertNull(matchNamed(Openable("Quiet Orchard.m4b", null), library))
+        assertNull(matchNamed(Openable("Quiet Orchard.m4b", 0), library))
+        // A library song MediaStore could not measure never matches by size.
+        assertNull(matchNamed(Openable("Tide.flac", 0), listOf(tide.copy(sizeBytes = 0))))
+        assertNull(openedSong(files, library) { Openable(null, null) })
+    }
+
+    @Test
+    fun `MediaStore's own address goes by its id only, and the opening app is never asked`() {
+        val never: () -> Openable = { throw AssertionError("asked for a name") }
+        assertEquals(tide, openedSong("content://media/external/audio/media/43", library, never))
+        // An id the library lacks plays from a copy, as before, whatever the name says.
+        assertNull(openedSong("content://media/external/audio/media/99", library, never))
+    }
+
+    @Test
+    fun `an open asks the library by its address, name and size first, and never logs the name`() {
+        // Unit tests run in the module's folder.
+        val source = File("src/main/java/app/lyrify/player/OpenedFiles.kt").readText()
+        assertTrue(source.contains("openedSong(address, library) { told.value }?.let { return@mapIndexedNotNull it.ref }"))
+        val logged = Regex("""Log\.\w\([^\n]*\$\{?(name|told)""").find(source)
+        assertNull(logged?.value, logged)
+    }
+
     @Test
     fun `a batch of copies stays while any queue holds one of its files, and the newest always stays`() {
         val root = "/data/user/0/app.lyrify/cache/opened"
