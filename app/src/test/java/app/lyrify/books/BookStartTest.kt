@@ -190,6 +190,29 @@ class BookStartTest {
     }
 
     @Test
+    fun `a bookmark in a book's file plays the book's own queue from that spot, from music or inside the book, never for music`() {
+        // From music: the folder book's third part, 2 min in, in the book's own queue, not at the book's place.
+        val fromMusic = musicPlaying.toBookmark(parts[2].path, 120_000, library, now = 10)!!.book.current!!
+        assertEquals(bookSource(folderBook), fromMusic.source)
+        assertEquals(parts.map { it.path }, fromMusic.items.map { it.song.path })
+        assertEquals(2, fromMusic.index)
+        assertEquals(120_000L, fromMusic.positionMs)
+        // The book's own queue playing another part: the same queue goes there, at the bookmark.
+        val reading = QueueBook().play(parts.map { it.ref }, 1, bookSource(folderBook), now = 1).book.place(1, 100_000)
+        val jumped = reading.toBookmark(parts[0].path, 30_000, library, now = 11)!!.book
+        assertEquals(reading.currentId, jumped.currentId)
+        assertEquals(0, jumped.current!!.index)
+        assertEquals(30_000L, jumped.current!!.positionMs)
+        // The one-file book, at the bookmark rather than its place.
+        val single = musicPlaying.toBookmark(orchard.path, 61_000, library, now = 10)!!.book.current!!
+        assertEquals(bookSource(oneFile), single.source)
+        assertEquals(61_000L, single.positionMs)
+        // Music, or a library not read yet: nothing here, the queue playing takes the jump.
+        assertNull(musicPlaying.toBookmark(lantern.path, 30_000, library, now = 10))
+        assertNull(musicPlaying.toBookmark(orchard.path, 30_000, null, now = 10))
+    }
+
+    @Test
     fun `nothing changed is nothing instead, even on an old queue that holds a book's file`() {
         val old = QueueBook().play(listOf(orchard.ref), 0, opened, now = 1).book
         val nothing = old.play(emptyList(), 0, album, now = 10)
