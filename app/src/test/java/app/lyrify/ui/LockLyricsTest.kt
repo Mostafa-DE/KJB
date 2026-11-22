@@ -1,5 +1,13 @@
 package app.lyrify.ui
 
+import app.lyrify.R
+import app.lyrify.books.skipsFor
+import app.lyrify.library.SongRef
+import app.lyrify.player.Queue
+import app.lyrify.player.QueueItem
+import app.lyrify.player.QueueSource
+import app.lyrify.player.SourceKind
+import app.lyrify.settings.PlaybackSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -193,5 +201,20 @@ class LockLyricsTest {
         assertEquals(250L, lockBarTickMs(3_600_000, 1_080))
         assertEquals(250L, lockBarTickMs(0, 1_080))
         assertEquals(250L, lockBarTickMs(240_000, 0))
+    }
+
+    @Test
+    fun `in a book the buttons beside Play and Pause jump back and forward 30 s, as the notification's, music keeps Previous and Next`() {
+        val items = listOf(QueueItem(uid = 1, song = SongRef("/storage/emulated/0/Audiobooks/Quiet Orchard.m4b")))
+        val book = Queue("b", QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Quiet Orchard.m4b", "Quiet Orchard"), items)
+        val music = Queue("m", QueueSource(SourceKind.OPENED, "opened", ""), items)
+        assertEquals(LockSkip(R.drawable.ic_replay_30, -30_000) to LockSkip(R.drawable.ic_forward_30, 30_000), lockSkips(book))
+        assertEquals(LockSkip(R.drawable.ic_skip_previous_fill) to LockSkip(R.drawable.ic_skip_next_fill), lockSkips(music))
+        assertEquals(lockSkips(music), lockSkips(null))
+        // The book's jumps are book mode's own, whatever the music's Skip amounts.
+        val skips = skipsFor(book, PlaybackSettings(skipBackSeconds = 5, skipForwardSeconds = 10))
+        assertEquals(-skips.backMs to skips.forwardMs, lockSkips(book).let { it.first.jumpMs to it.second.jumpMs })
+        // The screen draws them for the queue playing.
+        assertTrue(File("src/main/java/app/lyrify/ui/LockLyricsActivity.kt").readText().contains("lockSkips(ui.queue)"))
     }
 }

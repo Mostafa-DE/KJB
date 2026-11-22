@@ -402,8 +402,8 @@ private fun ToggleButton(@DrawableRes icon: Int, label: String, on: Boolean, bar
     }
 }
 
-/** A book's jumps, in seconds (books/BookPlayback.kt). */
-private const val BOOK_SKIP_S: Int = (BOOK_SKIP_MS / 1_000).toInt()
+/** A book's jumps, in seconds (books/BookPlayback.kt): the player's and the lock screen's. */
+internal const val BOOK_SKIP_S: Int = (BOOK_SKIP_MS / 1_000).toInt()
 
 /** The progress knob grows this much under the finger (the prototype's scale(1.3) over 0.12 s). */
 internal const val KNOB_DRAG_SCALE = 1.3f
