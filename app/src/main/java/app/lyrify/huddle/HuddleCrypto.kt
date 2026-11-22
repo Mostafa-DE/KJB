@@ -43,10 +43,10 @@ object HuddleCrypto {
 
     /**
      * The 32-byte secret [private] and the other side's [public] key agree on; null when [public] is not a point of
-     * P-256 ([onCurve]), so a made-up key never takes part.
+     * P-256 ([isPublicKey]), so a made-up key never takes part.
      */
     fun agree(private: ByteArray, public: ByteArray): ByteArray? {
-        if (!onCurve(public)) return null
+        if (!isPublicKey(public)) return null
         return try {
             val keys = KeyFactory.getInstance(EC)
             val agreement = KeyAgreement.getInstance(ECDH)
@@ -130,7 +130,7 @@ object HuddleCrypto {
      * Whether [point] is an uncompressed point of P-256: 0x04, then x and y below the field's prime with y² = x³ - 3x + b.
      * Checked here rather than left to the phone's provider, so an invalid-curve key is refused on every Android version.
      */
-    private fun onCurve(point: ByteArray): Boolean {
+    fun isPublicKey(point: ByteArray): Boolean {
         if (point.size != PUBLIC_KEY_BYTES || point[0] != UNCOMPRESSED) return false
         val x = BigInteger(1, point.copyOfRange(1, 1 + COORDINATE_BYTES))
         val y = BigInteger(1, point.copyOfRange(1 + COORDINATE_BYTES, PUBLIC_KEY_BYTES))

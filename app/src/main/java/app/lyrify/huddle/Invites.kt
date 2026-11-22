@@ -58,14 +58,14 @@ object Invites {
 
     /**
      * The invite in [text]: a link on one of [hosts] (alone, or in a chat's message), or the code after its `#` pasted
-     * alone; null for anything else, a link changed on the way or a code cut short.
+     * alone; null for anything else, a link changed on the way, a code cut short or a key that is not one.
      */
     fun parse(text: String, hosts: Collection<String>): Invite? {
         val code = LINK.findAll(text).firstOrNull { link -> hosts.any { it.equals(link.groupValues[1], ignoreCase = true) } }?.groupValues?.get(2)
             ?: text.trim().takeIf(CODE::matches)
             ?: return null
         val bytes = HuddleCrypto.decode(code)?.takeIf { it.size > HEADER_BYTES && it[0] == FORMAT } ?: return null
-        val key = bytes.copyOfRange(1, 1 + HuddleCrypto.PUBLIC_KEY_BYTES)
+        val key = bytes.copyOfRange(1, 1 + HuddleCrypto.PUBLIC_KEY_BYTES).takeIf(HuddleCrypto::isPublicKey) ?: return null
         val token = bytes.copyOfRange(1 + HuddleCrypto.PUBLIC_KEY_BYTES, HEADER_BYTES)
         val details = HuddleCrypto.open(inviteKey(token), bytes.copyOfRange(HEADER_BYTES, bytes.size), key)?.let { jsonObject(it.decodeToString()) } ?: return null
         val name = details.text(NAME_KEY)?.let(::cleanName) ?: return null
