@@ -79,12 +79,14 @@ import app.lyrify.lyrics.Removal
 import app.lyrify.media.CurrentTrack
 import app.lyrify.media.NowPlaying
 import app.lyrify.media.SweepProgress
+import app.lyrify.player.PlayerExtras
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.Settings
 import app.lyrify.tones.ToneListStore
 import app.lyrify.tones.TonesState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
@@ -189,7 +191,10 @@ fun AppShell(
     )
     val dupes by rememberDuplicates().state.collectAsStateWithLifecycle()
     val tones by remember(context) { ToneListStore.of(context).state }.collectAsStateWithLifecycle(TonesState())
-    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsRow(), ai, aiWaiting, downloadsRow(), rememberTrashSongs())
+    // Bookmarks' count once they are read: a place kept as music plays changes no count, so it redraws nothing here.
+    val extras = remember(context) { PlayerExtras.of(context) }
+    val bookmarks by remember(extras) { extras.state.combine(extras.ready) { state, read -> state.bookmarks.values.sumOf { it.size }.takeIf { read } } }.collectAsStateWithLifecycle(null)
+    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsRow(), ai, aiWaiting, downloadsRow(), rememberTrashSongs(), bookmarks)
     val own = rememberOwnNow()
     val followed by NowPlaying.followed.collectAsStateWithLifecycle()
     val other = rememberOtherSession(followed?.takeIf { grants.access.notifications })
@@ -396,6 +401,7 @@ private fun PageContent(
         Page.Duplicates -> DuplicatesPage { back() }
         Page.Trash -> TrashPage { back() }
         Page.Tones -> TonesPage(lyrics.ledger) { back() }
+        Page.Bookmarks -> BookmarksPage { back() }
         Page.Ai -> AiPage(ai, counts, aiWaiting, aiDoneToday, aiActions, onOpenStatus = { nav.open(Page.Songs(it.group, it)) }) { back() }
         Page.Downloads -> DownloadsPage { back() }
         Page.CoversTags -> CoversTagsPage()

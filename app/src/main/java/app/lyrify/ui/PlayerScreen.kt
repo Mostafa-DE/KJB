@@ -453,6 +453,7 @@ enum class PlayerRoute {
     SPEED,
     REPEAT_PART,
     BOOKMARK,
+    BOOKMARKS,
     PLAY_ON,
     MAKE_TONE,
     CUT,
@@ -855,16 +856,17 @@ private fun Backdrop(path: String) {
 }
 
 /** The rows of the player's "⋯", in the order they show; Move to trash sits apart at the bottom, as on the song sheet. */
-enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, SPEED, SLEEP, REPEAT_PART, BOOKMARK, PLAY_ON, EQUALIZER, TONE, CUT, SHARE, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
+enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, SPEED, SLEEP, REPEAT_PART, BOOKMARK, BOOKMARKS, PLAY_ON, EQUALIZER, TONE, CUT, SHARE, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
 
 /**
  * The rows the player's "⋯" shows. A [song] of the library has Share (one row, Song or Lyrics asked from it when it has
  * lyrics), Edit tags and Move to trash, as on its sheet (a file another app opened has none of them); Go to album and Go
  * to artist when the song has their pages ([album], [artist]); Make a tone when [tone] ([makesTone]), and Cut right
- * after it when [cut] ([cutsSong]).
+ * after it when [cut] ([cutsSong]); Bookmarks, the list, right after Bookmark while what plays has [bookmarks].
  */
-fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean, cut: Boolean): List<PlayerMenuRow> = PlayerMenuRow.entries.filter { row ->
+fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean, cut: Boolean, bookmarks: Boolean = false): List<PlayerMenuRow> = PlayerMenuRow.entries.filter { row ->
     when (row) {
+        PlayerMenuRow.BOOKMARKS -> bookmarks
         PlayerMenuRow.ALBUM -> album
         PlayerMenuRow.ARTIST -> artist
         PlayerMenuRow.TONE -> tone
@@ -917,7 +919,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                 val album = song?.let(::albumKey)
                 val pages = song?.let { ui.library?.artistsOf(it) }.orEmpty().map { it.name }
                 val artist = artistTap(pages, { nav.open(Page.Artist(it)) }) { artists = it }
-                playerMenuRows(song != null, album != null, artist != null, tone, cut).forEach { row ->
+                playerMenuRows(song != null, album != null, artist != null, tone, cut, bookmarks = rememberPlayingMarks(ui).isNotEmpty()).forEach { row ->
                     key(row) {
                         when (row) {
                             PlayerMenuRow.ADD_TO -> MenuRow(stringResource(R.string.player_menu_add_to), R.drawable.ic_playlist_add, pick { onRoute(PlayerRoute.ADD_TO) })
@@ -928,6 +930,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                             PlayerMenuRow.SLEEP -> SleepMenuRow(ui, pick { onRoute(PlayerRoute.SLEEP) })
                             PlayerMenuRow.REPEAT_PART -> MenuRow(stringResource(if (rememberPartOn(ui)) R.string.part_stop else R.string.player_menu_ab), R.drawable.ic_repeat, pick { onRoute(PlayerRoute.REPEAT_PART) })
                             PlayerMenuRow.BOOKMARK -> MenuRow(stringResource(R.string.player_menu_bookmark), R.drawable.ic_bookmark_add, pick { onRoute(PlayerRoute.BOOKMARK) })
+                            PlayerMenuRow.BOOKMARKS -> MenuRow(stringResource(R.string.bookmarks_title), R.drawable.ic_bookmark, pick { onRoute(PlayerRoute.BOOKMARKS) })
                             PlayerMenuRow.PLAY_ON -> MenuRow(stringResource(R.string.player_menu_play_on), R.drawable.ic_speaker, pick { onRoute(PlayerRoute.PLAY_ON) })
                             // KJB's equalizer (AudioScreens.kt); the phone's own sound effects open from inside it.
                             PlayerMenuRow.EQUALIZER -> MenuRow(stringResource(R.string.player_menu_equalizer), R.drawable.ic_equalizer, pick { nav.show(FullScreen.Equalizer) })

@@ -217,6 +217,8 @@
 
     <!-- Bookmarks -->
     <string name="bookmark_at">Bookmark at %1$s</string>
+    <string name="bookmark_added">Bookmark added at %1$s</string>
+    <string name="bookmark_add_note">Add note</string>
     <string name="bookmark_note">Note (optional)</string>
     <string name="bookmark_save">Save</string>
     <string name="bookmark_cancel">Cancel</string>
@@ -227,6 +229,14 @@
     <string name="bookmark_no_note">No note</string>
     <string name="bookmark_play_from">Play from %1$s, %2$s</string>
     <string name="bookmark_remove">Remove the bookmark at %1$s</string>
+    <string name="bookmark_edit">Change the note at %1$s</string>
+    <!-- Tools > Bookmarks: its line in Tools, and the page with none yet. -->
+    <plurals name="tools_bookmarks">
+        <item quantity="one">%d bookmark</item>
+        <item quantity="other">%d bookmarks</item>
+    </plurals>
+    <string name="tools_bookmarks_none">No bookmarks yet</string>
+    <string name="bookmarks_empty_text">In the player, tap ⋯ and then Bookmark to mark a spot. It waits here with its note.</string>
 
     <!-- Remember my place, Play on -->
     <string name="place_resumed">Resumed at %1$s</string>

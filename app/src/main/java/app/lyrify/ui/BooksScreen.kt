@@ -88,6 +88,7 @@ import app.lyrify.books.sleepToChapterEnd
 import app.lyrify.library.Folder
 import app.lyrify.library.Library
 import app.lyrify.player.PlayerConnection
+import app.lyrify.player.PlayerExtras
 import app.lyrify.player.PlayerGraph
 import app.lyrify.player.PlayerUi
 import app.lyrify.player.SleepTimer
@@ -163,7 +164,7 @@ fun BooksPage() {
 /**
  * Books, after Folders in Library, shown while the library holds a book: the Continue row (the book played last, not
  * finished), then every book as a card with its cover, title, author and where it stands, played ones first. A tap
- * plays from the book's place; a long press offers Start over, Mark finished and Not a book.
+ * plays from the book's place; a long press offers Start over, Mark finished and Not a book, and lists its bookmarks.
  */
 @Composable
 internal fun BooksTab(library: Library, padding: PaddingValues, reselect: Int) {
@@ -307,14 +308,16 @@ private fun ThinProgress(share: Float) {
     }
 }
 
-/** A long press on a card: Start over, Mark finished, Not a book. */
+/** A long press on a card: Start over, Mark finished, Not a book, then the book's bookmarks, each playing it from there. */
 @Composable
 private fun BookActionsSheet(book: Book, state: BookState, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val nav = LocalNavigator.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
     val scope = rememberCoroutineScope()
     val store = remember(context) { BooksGraph.store(context) }
+    val marks = remember(context) { PlayerExtras.of(context) }.state.collectAsStateWithLifecycle().value.marksOf(book.parts.first().path, book)
     LyrifySheet(onDismiss = onDismiss, spacing = 4.dp, padding = 12.dp) {
         Text(book.title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp).semantics { heading() })
         SheetAction(R.drawable.ic_replay, stringResource(R.string.book_start_over)) {
@@ -330,6 +333,14 @@ private fun BookActionsSheet(book: Book, state: BookState, onDismiss: () -> Unit
         SheetAction(R.drawable.ic_auto_stories, stringResource(R.string.book_not)) {
             onDismiss()
             scope.launch { toasts.markBooks(context, resources, marked = false) { it.notABook(book) } }
+        }
+        if (marks.isNotEmpty()) {
+            SectionTitle(stringResource(R.string.bookmarks_title), Modifier.padding(start = 8.dp, top = 12.dp, bottom = 4.dp))
+            BookmarkList(marks, book, scope) { at ->
+                onDismiss()
+                jumpTo(context, at.song, at.mark.positionMs)
+                nav.show(FullScreen.Player)
+            }
         }
     }
 }
