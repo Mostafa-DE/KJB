@@ -123,14 +123,14 @@ over.
 
 ## Install
 
-1. On your phone, download `KJB-3.1.0.apk` (about 10 MB) from the
+1. On your phone, download `KJB-3.1.1.apk` (about 10 MB) from the
    [release page](https://github.com/Mostafa-DE/KJB/releases/latest).
 2. Open it. If asked, allow your browser or file manager to install apps.
 3. Open KJB and allow All files access. "See what's playing" and "Keep running" are optional.
 4. If a switch is greyed out ("Restricted setting"), your phone blocks it for apps from outside an app store: in KJB tap
    **Greyed out?**, open App info, tap the three dots at the top right, then **Allow restricted settings**, and try again.
 
-With adb instead: `adb install -r KJB-3.1.0.apk`.
+With adb instead: `adb install -r KJB-3.1.1.apk`.
 
 ## Add-ons
 
