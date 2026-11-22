@@ -55,9 +55,12 @@ data class Friend(
     val shownName: String get() = rename ?: name
 }
 
-/** An invite no friend joined yet: its key pair and token (base64url), when it was made, and a [card] to send once joined. */
+/**
+ * An invite no friend joined yet: its key pair and token (base64url), its [owner] id on the server (only this phone
+ * knows it: it reads and deletes the invite), when it was made, and a [card] to send once joined.
+ */
 @Serializable
-data class PendingInvite(val publicKey: String, val privateKey: String, val token: String, val madeAt: Long, val card: Card? = null)
+data class PendingInvite(val publicKey: String, val privateKey: String, val token: String, val owner: String, val madeAt: Long, val card: Card? = null)
 
 /** A card [friend] (their id) sent, [at] when, under its message [id]; [opened] once you played it, looked at it or put it away. */
 @Serializable
@@ -67,13 +70,13 @@ data class Received(val id: String, val friend: String, val at: Long, val card: 
 @Serializable
 data class FriendPlay(val friend: String, val at: Long, val song: CardSong)
 
-/** How long the server keeps a box's message: a day for plays, a month for cards. */
+/** A message's kind as the server knows it (huddle-server/API.md): it keeps a card 30 days until read, a play a day. */
 @Serializable
-enum class Keep { DAY, MONTH }
+enum class Kind { CARD, PLAY }
 
-/** A sealed message ([data], base64url) waiting to go to [box], made [at], going no earlier than [notBefore] (Undo); [id] is its message's. */
+/** A sealed message ([data], base64url) of [kind] waiting to go to [box], made [at], going no earlier than [notBefore] (Undo); [id] is its message's. */
 @Serializable
-data class Outgoing(val id: String, val box: String, val data: String, val keep: Keep, val at: Long, val notBefore: Long = at)
+data class Outgoing(val id: String, val box: String, val data: String, val kind: Kind, val at: Long, val notBefore: Long = at)
 
 /** The backup passphrase's key, never the passphrase: its [salt] and [rounds] go into each backup beside the sealed friends. */
 @Serializable

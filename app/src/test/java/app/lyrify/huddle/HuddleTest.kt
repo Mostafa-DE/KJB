@@ -30,9 +30,12 @@ class HuddleTest {
     private fun TestScope.phone(name: String? = null, storage: MemoryHuddle = MemoryHuddle(HuddleState(name = name))): Pair<Huddle, MemoryHuddle> =
         Huddle(storage, server, host, hosts, { now + testScheduler.currentTime }, random, backgroundScope) to storage
 
+    /** [huddle]'s new invite link with [card]. */
+    private suspend fun link(huddle: Huddle, card: Card? = null): String = (huddle.invite(card) as Invited.Link).text
+
     /** Wren invites Juniper with [card], Juniper accepts, Wren's KJB sees the join: both are friends. */
     private suspend fun friends(wren: Huddle, juniper: Huddle, card: Card? = null): Pair<Friend, Friend> {
-        val link = checkNotNull(wren.invite(card))
+        val link = link(wren, card)
         val accepted = juniper.accept(checkNotNull(juniper.parse(link))) as Accepted.Joined
         assertTrue(wren.sync())
         return wren.state.first().friends.single() to accepted.friend
@@ -42,9 +45,10 @@ class HuddleTest {
     fun `an invite accepted on the other phone makes both friends, with each other's names and the first song`() = runTest {
         val (wren, wrenState) = phone("Wren")
         val (juniper, juniperState) = phone("Juniper")
-        val link = wren.invite(song)!!
+        val link = link(wren, song)
         assertTrue(link.startsWith("https://$host/i#"))
         assertEquals(1, wrenState.now.invites.size)
+        assertEquals("the invite waits on the server under its owner id", wrenState.now.invites.single().owner, server.invites.values.single().first)
         val invite = juniper.parse(link)!!
         assertEquals("Wren", invite.name)
         val accepted = juniper.accept(invite) as Accepted.Joined
@@ -57,7 +61,7 @@ class HuddleTest {
         val juniperOnWren = wrenState.now.friends.single()
         assertEquals("Juniper", juniperOnWren.name)
         assertTrue(wrenState.now.invites.isEmpty())
-        assertTrue("the join mailbox is forgotten", server.joined.isEmpty())
+        assertTrue("the invite is deleted once read", server.invites.isEmpty())
         assertEquals(juniperOnWren.outBox, accepted.friend.inBox)
         assertEquals(juniperOnWren.inBox, accepted.friend.outBox)
     }
@@ -67,7 +71,7 @@ class HuddleTest {
         val (wren, _) = phone("Wren")
         val (juniper, juniperState) = phone("Juniper")
         val album = Card(CardKind.ALBUM, (1..40).map { lantern.copy(title = "Track $it") }, name = "Harbour Glass")
-        val invite = juniper.parse(wren.invite(album)!!)!!
+        val invite = juniper.parse(link(wren, album))!!
         assertNull(invite.card)
         juniper.accept(invite)
         wren.sync()
@@ -85,7 +89,7 @@ class HuddleTest {
         assertNotNull(wren.send(juniperOnWren.id, card))
         advanceTimeBy(Huddle.UNDO_MS + 1)
         assertEquals(1, server.waiting(juniperOnWren.outBox).size)
-        assertEquals(Keep.MONTH, server.keeps.values.last())
+        assertEquals(Kind.CARD, server.kinds.values.last())
 
         assertTrue(juniper.sync())
         val received = juniperState.now.inbox.first()
@@ -150,7 +154,7 @@ class HuddleTest {
         val (wren, _) = phone("Wren")
         val (juniper, juniperState) = phone("Juniper")
         val (rook, rookState) = phone("Rook")
-        val link = wren.invite(null)!!
+        val link = link(wren)
         assertTrue(juniper.accept(juniper.parse(link)!!) is Accepted.Joined)
         assertEquals(Accepted.Taken, rook.accept(rook.parse(link)!!))
         assertTrue(rookState.now.friends.isEmpty())
@@ -163,11 +167,15 @@ class HuddleTest {
     fun `without a name nothing is invited or accepted, and without network nothing is half made`() = runTest {
         val (wren, wrenState) = phone()
         val (juniper, juniperState) = phone()
-        assertNull(wren.invite(song))
+        assertEquals(Invited.NoName, wren.invite(song))
         assertTrue(wren.setName("  Wren "))
         assertEquals("Wren", wrenState.now.name)
         assertFalse(wren.setName("   "))
-        val invite = juniper.parse(wren.invite(song)!!)!!
+        server.online = false
+        assertEquals(Invited.NoAnswer, wren.invite(song))
+        assertTrue("no invite the server never heard of", wrenState.now.invites.isEmpty())
+        server.online = true
+        val invite = juniper.parse(link(wren, song))!!
         assertEquals(Accepted.NoName, juniper.accept(invite))
         juniper.setName("Juniper")
         server.online = false
@@ -189,7 +197,7 @@ class HuddleTest {
         assertTrue(juniper.sharePlays(wrenOnJuniper.id, true))
         juniper.played(bell, now + 1)
         assertEquals(1, server.waiting(wrenOnJuniper.outBox).size)
-        assertEquals(Keep.DAY, server.keeps.values.last())
+        assertEquals(Kind.PLAY, server.kinds.values.last())
         wren.sync()
         assertEquals(listOf(FriendPlay(juniperOnWren.id, now + 1, bell)), wrenState.now.plays)
     }
@@ -262,20 +270,49 @@ class HuddleTest {
     }
 
     @Test
-    fun `an invite nobody joined goes after two weeks, and a card is marked opened`() = runTest {
+    fun `an invite nobody joined goes after a week or once the server forgot it, and a card is marked opened`() = runTest {
         val (wren, wrenState) = phone("Wren")
         val (juniper, juniperState) = phone("Juniper")
-        wren.invite(null)
+        link(wren)
         wren.sync()
         assertEquals(1, wrenState.now.invites.size)
         advanceTimeBy(Huddle.INVITE_KEPT_MS + 1)
+        val asked = server.requests.size
+        wren.sync()
+        assertTrue(wrenState.now.invites.isEmpty())
+        assertEquals("an invite past its week is not asked about", asked, server.requests.size)
+
+        link(wren)
+        server.invites.clear()
         wren.sync()
         assertTrue(wrenState.now.invites.isEmpty())
 
-        juniper.accept(juniper.parse(wren.invite(song)!!)!!)
+        juniper.accept(juniper.parse(link(wren, song))!!)
         val received = juniperState.now.inbox.single()
         assertTrue(juniper.opened(received.id))
         assertTrue(juniperState.now.inbox.single().opened)
+    }
+
+    @Test
+    fun `an invite the server no longer has says it expired`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val invite = juniper.parse(link(wren, song))!!
+        server.invites.clear()
+        assertEquals(Accepted.Expired, juniper.accept(invite))
+        assertTrue(juniperState.now.friends.isEmpty())
+    }
+
+    @Test
+    fun `a join that does not open ends the invite, and nobody is added`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        link(wren)
+        val id = server.invites.keys.single()
+        assertEquals(JoinAnswer.JOINED, server.acceptInvite(id, HuddleCrypto.encode(ByteArray(200) { 7 })))
+        wren.sync()
+        assertTrue(wrenState.now.friends.isEmpty())
+        assertTrue(wrenState.now.invites.isEmpty())
+        assertTrue(server.invites.isEmpty())
     }
 
     @Test

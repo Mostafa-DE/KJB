@@ -4,51 +4,67 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Huddle's server in memory, as huddle-server/API.md has it: one join per join mailbox, mailboxes of numbered sealed
- * boxes, ack deletes up to a number, drop deletes a mailbox. [online] false answers nothing; [requests] counts each call.
+ * Huddle's server in memory, as huddle-server/API.md has it: invite slots made by their owner, accepted once, read and
+ * deleted by the owner; mailboxes of numbered messages, plays gone once read, cards until acknowledged; mailboxes
+ * deleted on request. [online] false answers nothing; [requests] names each call.
  */
 class FakeServer : HuddleServer {
     var online: Boolean = true
-    val joined = HashMap<String, PostedJoin>()
+    /** Invite id to its owner id and the accept's data, null while waiting. */
+    val invites = HashMap<String, Pair<String, String?>>()
     val boxes = HashMap<String, MutableList<Posted>>()
-    val keeps = LinkedHashMap<Long, Keep>()
+    val kinds = LinkedHashMap<Long, Kind>()
     val requests = ArrayList<String>()
     private var seq = 0L
 
-    /** The fetches so far: one per sync that had something to ask. */
-    val fetches: Int get() = requests.count { it == "fetch" }
+    /** The inbox reads so far: one per sync that had friends to ask for. */
+    val fetches: Int get() = requests.count { it == "inbox" }
 
-    override suspend fun join(joinId: String, publicKey: String, hello: String): JoinAnswer {
-        requests += "join"
+    override suspend fun createInvite(invite: String, owner: String): Boolean {
+        requests += "createInvite"
+        if (!online || invite in invites) return false
+        invites[invite] = owner to null
+        return true
+    }
+
+    override suspend fun acceptInvite(invite: String, data: String): JoinAnswer {
+        requests += "acceptInvite"
         if (!online) return JoinAnswer.NO_ANSWER
-        if (joinId in joined) return JoinAnswer.TAKEN
-        joined[joinId] = PostedJoin(publicKey, hello)
+        val (owner, accepted) = invites[invite] ?: return JoinAnswer.GONE
+        if (accepted != null) return JoinAnswer.TAKEN
+        invites[invite] = owner to data
         return JoinAnswer.JOINED
     }
 
-    override suspend fun joins(joinIds: List<String>): Map<String, PostedJoin>? {
-        requests += "joins"
-        return if (online) joinIds.mapNotNull { id -> joined[id]?.let { id to it } }.toMap() else null
+    override suspend fun inviteStatus(owner: String): InviteStatus? {
+        requests += "inviteStatus"
+        if (!online) return null
+        val accepted = invites.values.firstOrNull { it.first == owner } ?: return InviteStatus.Gone
+        return accepted.second?.let { InviteStatus.Accepted(it) } ?: InviteStatus.Waiting
     }
 
-    override suspend fun forgetJoin(joinId: String): Boolean {
-        requests += "forgetJoin"
-        if (online) joined.remove(joinId)
+    override suspend fun deleteInvite(owner: String): Boolean {
+        requests += "deleteInvite"
+        if (online) invites.entries.removeAll { it.value.first == owner }
         return online
     }
 
-    override suspend fun post(box: String, data: String, keep: Keep): PostAnswer {
-        requests += "post"
+    override suspend fun send(box: String, kind: Kind, data: String): PostAnswer {
+        requests += "send"
         if (!online) return PostAnswer.NO_ANSWER
         val next = ++seq
         boxes.getOrPut(box) { ArrayList() } += Posted(next, data)
-        keeps[next] = keep
+        kinds[next] = kind
         return PostAnswer.POSTED
     }
 
-    override suspend fun fetch(boxes: List<String>): Map<String, List<Posted>>? {
-        requests += "fetch"
-        return if (online) boxes.associateWith { this.boxes[it].orEmpty().toList() }.filterValues { it.isNotEmpty() } else null
+    override suspend fun inbox(boxes: List<String>): Map<String, List<Posted>>? {
+        requests += "inbox"
+        if (!online) return null
+        val read = boxes.associateWith { this.boxes[it].orEmpty().toList() }.filterValues { it.isNotEmpty() }
+        // Plays go as they are read.
+        read.values.flatten().filter { kinds[it.seq] == Kind.PLAY }.forEach { play -> this.boxes.values.forEach { box -> box.removeAll { it.seq == play.seq } } }
+        return read
     }
 
     override suspend fun ack(upTo: Map<String, Long>): Boolean {
@@ -57,15 +73,17 @@ class FakeServer : HuddleServer {
         return online
     }
 
-    override suspend fun drop(box: String): Boolean {
-        requests += "drop"
-        if (online) boxes.remove(box)
+    override suspend fun dropBoxes(boxes: List<String>): Boolean {
+        requests += "dropBoxes"
+        if (online) boxes.forEach { this.boxes.remove(it) }
         return online
     }
 
-    /** Puts [data] in [box] again, as a server replaying an old message would. */
+    /** Puts [data] in [box] again as a card, as a server replaying an old message would. */
     fun replay(box: String, data: String) {
-        boxes.getOrPut(box) { ArrayList() } += Posted(++seq, data)
+        val next = ++seq
+        boxes.getOrPut(box) { ArrayList() } += Posted(next, data)
+        kinds[next] = Kind.CARD
     }
 
     fun waiting(box: String): List<Posted> = boxes[box].orEmpty()

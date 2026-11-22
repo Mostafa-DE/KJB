@@ -32,10 +32,10 @@ class HuddleStoreTest {
     private val full = HuddleState(
         name = "Wren",
         friends = listOf(friend("f1"), friend("f2", "Rook")),
-        invites = listOf(PendingInvite("pub", "priv", "tok", 3_000, card)),
+        invites = listOf(PendingInvite("pub", "private-key-1", "tok", "owner-id-1", 3_000, card)),
         inbox = listOf(Received("m9", "f1", 4_000, card, opened = true)),
         plays = listOf(FriendPlay("f2", 5_000, bell)),
-        outbox = listOf(Outgoing("m10", "out-f1", "data", Keep.DAY, 6_000, 6_500)),
+        outbox = listOf(Outgoing("m10", "out-f1", "data", Kind.PLAY, 6_000, 6_500)),
         privateUntil = HuddleState.FOREVER,
         backupKey = BackupKey("salt", 1_000, "key"),
     )
@@ -91,7 +91,7 @@ class HuddleStoreTest {
     fun `the section holds no name, mailbox or key in the clear`() {
         val key = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)
         val section = HuddleBackup.seal(full.copy(backupKey = key), random)!!
-        listOf("Wren", "Juniper", "out-f1", "in-f1", "ok-f1", "ik-f1", "priv", key.key, "correct horse").forEach { assertFalse(it, section.contains(it)) }
+        listOf("Wren", "Juniper", "out-f1", "in-f1", "ok-f1", "ik-f1", "private-key-1", "owner-id-1", key.key, "correct horse").forEach { assertFalse(it, section.contains(it)) }
     }
 
     @Test
