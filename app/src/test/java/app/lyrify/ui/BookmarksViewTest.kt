@@ -60,7 +60,7 @@ class BookmarksViewTest {
     }
 
     @Test
-    fun `the player says where a bookmark was added in plain words`() {
+    fun `the words for a bookmark just added are plain, with Add note as its action`() {
         val text = File("src/main/res/values/strings_player.xml").readText()
         val strings = Regex("""<string name="([^"]+)">([^<]*)</string>""").findAll(text).associate { it.groupValues[1] to it.groupValues[2] }
         assertEquals("Bookmark added at %1\$s", strings["bookmark_added"])
