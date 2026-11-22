@@ -672,6 +672,12 @@ class QueueBridgeTest {
         // No move known: a song that could not be played, the song playing taken out of the queue, KJB starting.
         assertEquals(PlayEnd.UNKNOWN to StartedBy.UNKNOWN, playTurn(natural = false, move = null, playNext = false))
         assertEquals(PlayEnd.UNKNOWN to StartedBy.PICKED, playTurn(natural = false, move = null, playNext = true))
+        // A suggestion's song (v4): a suggestion started it, unless the user picked that very song or put it next.
+        assertEquals(PlayEnd.FINISHED to StartedBy.SUGGESTED, playTurn(natural = true, move = null, playNext = false, suggested = true))
+        assertEquals(PlayEnd.NEXT to StartedBy.SUGGESTED, playTurn(natural = false, move = Move.NEXT, playNext = false, suggested = true))
+        assertEquals(PlayEnd.JUMP to StartedBy.SUGGESTED, playTurn(natural = false, move = Move.START, playNext = false, suggested = true))
+        assertEquals(PlayEnd.JUMP to StartedBy.PICKED, playTurn(natural = false, move = Move.PICK, playNext = false, suggested = true))
+        assertEquals(PlayEnd.FINISHED to StartedBy.PICKED, playTurn(natural = true, move = null, playNext = true, suggested = true))
     }
 
     /**

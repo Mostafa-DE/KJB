@@ -414,9 +414,10 @@ enum class Move {
 /**
  * At a song start: how the play before it ended and how the new one began, from the engine's word ([natural]: the song
  * before played to its end, or Repeat one went round) and the user's [move] to this song, if any. A song that waited
- * from Play next ([playNext]) is one the user picked, however it came on.
+ * from Play next ([playNext]) is one the user picked, however it came on; a song a suggestion put there ([suggested]) is
+ * the suggestion's, unless the user picked that very song.
  */
-fun playTurn(natural: Boolean, move: Move?, playNext: Boolean): Pair<PlayEnd, StartedBy> {
+fun playTurn(natural: Boolean, move: Move?, playNext: Boolean, suggested: Boolean = false): Pair<PlayEnd, StartedBy> {
     val ended = when {
         natural -> PlayEnd.FINISHED
         move == Move.NEXT -> PlayEnd.NEXT
@@ -426,6 +427,7 @@ fun playTurn(natural: Boolean, move: Move?, playNext: Boolean): Pair<PlayEnd, St
     }
     val by = when {
         playNext || (!natural && move == Move.PICK) -> StartedBy.PICKED
+        suggested -> StartedBy.SUGGESTED
         natural -> StartedBy.AUTO
         move == Move.NEXT -> StartedBy.NEXT
         move == Move.BACK -> StartedBy.BACK

@@ -155,6 +155,7 @@ object QueuesJson {
         put(UPDATED_AT_KEY, JsonPrimitive(queue.updatedAt))
         put(STARTED_AT_KEY, JsonPrimitive(queue.startedAt))
         queue.listSize?.let { put(LIST_SIZE_KEY, JsonPrimitive(it)) }
+        if (queue.smart) put(SMART_KEY, JsonPrimitive(true))
     }
 
     private fun item(item: QueueItem): JsonElement = JsonObject(
@@ -164,6 +165,7 @@ object QueuesJson {
             item.song.mediaStoreId?.let { put(MEDIA_STORE_ID_KEY, JsonPrimitive(it)) }
             item.sourceIndex?.let { put(SOURCE_INDEX_KEY, JsonPrimitive(it)) }
             if (item.playNext) put(PLAY_NEXT_KEY, JsonPrimitive(true))
+            item.suggested?.let { put(SUGGESTED_KEY, JsonPrimitive(it.name)) }
         },
     )
 
@@ -193,6 +195,8 @@ object QueuesJson {
             startedAt = stored.long(STARTED_AT_KEY) ?: stored.long(UPDATED_AT_KEY) ?: 0,
             // A size that could not be the list's (shorter than a song's place in it) reads as unknown.
             listSize = stored.int(LIST_SIZE_KEY)?.takeIf { size -> items.all { (it.sourceIndex ?: -1) < size } },
+            // Smart shuffle is Shuffle with suggestions: only a shuffled queue has it.
+            smart = stored.containsKey(UNSHUFFLED_KEY) && (stored[SMART_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true,
         )
     }
 
@@ -224,6 +228,8 @@ object QueuesJson {
             song = SongRef(path, stored.long(MEDIA_STORE_ID_KEY)),
             sourceIndex = stored.int(SOURCE_INDEX_KEY)?.takeIf { it >= 0 },
             playNext = (stored[PLAY_NEXT_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull ?: false,
+            // A mark a newer KJB wrote that this one does not know reads as a song like any other.
+            suggested = stored[SUGGESTED_KEY]?.text()?.let { name -> Suggested.entries.firstOrNull { it.name == name } },
         )
     }
 
@@ -254,6 +260,8 @@ object QueuesJson {
     private const val MEDIA_STORE_ID_KEY: String = "mediaStoreId"
     private const val SOURCE_INDEX_KEY: String = "sourceIndex"
     private const val PLAY_NEXT_KEY: String = "playNext"
+    private const val SUGGESTED_KEY: String = "suggested"
+    private const val SMART_KEY: String = "smart"
 }
 
 /** The stored form of [PlaybackPlace]: read leniently, a field it cannot use as its default; null when it is no JSON object. */

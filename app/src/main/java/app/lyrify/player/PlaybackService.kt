@@ -359,7 +359,7 @@ class PlaybackService : MediaLibraryService() {
             // Every song start, each lap of Repeat one too: the place names the song playing.
             savePlace()
             val song = find(item.song)
-            val (ended, by) = playTurn(natural, move, item.playNext)
+            val (ended, by) = playTurn(natural, move, item.playNext, suggested = item.suggested != null || queue.source.kind == SourceKind.SUGGESTIONS)
             // A natural crossfade's song going out is left where its fade began (the engine says so only now).
             tracker.start(
                 item.song, song?.durationMs ?: C.TIME_UNSET, engine.positionMs, engine.isPlaying,

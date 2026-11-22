@@ -38,6 +38,12 @@ interface PlayLogStore {
     suspend fun all(): List<LoggedPlay>?
 
     /**
+     * The plays that started from [from] (wall-clock millis, inclusive), the short ones too, the oldest first, with all
+     * they keep: what suggestions read as plays come (suggestions/); null when the log cannot be read.
+     */
+    suspend fun since(from: Long): List<LoggedPlay>? = all()?.filter { it.startedAt >= from }
+
+    /**
      * A restore's [plays], each written as [put] writes it without an [OpenState], all in one go or none: a play of the
      * same song and start is the same play, so restoring a backup twice adds nothing. False when none was written.
      */
@@ -238,6 +244,10 @@ object PlaysSchema {
     const val ALL: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
         "ended_how, ended_at_ms, imported FROM plays ORDER BY started_at, path"
 
+    /** [ALL] from a start on (inclusive), by plays_by_start: suggestions read only the plays since they last read. */
+    const val SINCE: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
+        "ended_how, ended_at_ms, imported FROM plays WHERE started_at >= CAST(? AS INTEGER) ORDER BY started_at, path"
+
     const val KEEP_OPEN: String = "INSERT OR REPLACE INTO open_plays (path, started_at, duration_ms, position_ms, spans) VALUES (?, ?, ?, ?, ?)"
 
     const val LET_GO: String = "DELETE FROM open_plays WHERE path = ? AND started_at = ?"
@@ -374,6 +384,20 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
             }
         } catch (e: Exception) {
             log("plays: not read for a backup (${e.javaClass.simpleName})")
+            null
+        }
+    }
+
+    override suspend fun since(from: Long): List<LoggedPlay>? = withContext(io) {
+        try {
+            db.readableDatabase.rawQuery(PlaysSchema.SINCE, arrayOf(from.toString())).use { rows ->
+                val row = CursorRow(rows)
+                buildList {
+                    while (rows.moveToNext()) loggedPlayOf(row)?.let(::add)
+                }
+            }
+        } catch (e: Exception) {
+            log("plays: not read for suggestions (${e.javaClass.simpleName})")
             null
         }
     }

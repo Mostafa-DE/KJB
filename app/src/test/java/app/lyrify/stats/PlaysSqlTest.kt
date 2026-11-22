@@ -148,6 +148,21 @@ class PlaysSqlTest {
     }
 
     @Test
+    fun `suggestions read the plays from a start on, the short ones too, the oldest first, as the fake log does`() = runBlocking {
+        val store = store()
+        val plays = listOf(
+            LoggedPlay(salt, T0, 200_000, counted = true, start = picked, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 210_000)),
+            LoggedPlay(ember, T0 + 1_000, 400, counted = false, start = picked.copy(by = StartedBy.AUTO), zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.NEXT, 400)),
+            LoggedPlay(alder, T0 + 2_000, 90_000, counted = true, start = picked.copy(by = StartedBy.SUGGESTED), zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 95_000)),
+            LoggedPlay(salt, T0 + 3_000, 0, counted = true, imported = true),
+        )
+        store.putAll(plays.reversed())
+        assertEquals(plays.drop(1), store.since(T0 + 1_000))
+        assertEquals(emptyList<LoggedPlay>(), store.since(T0 + 3_001))
+        assertEquals(plays.drop(2), FakePlayLog(plays).since(T0 + 2_000))
+    }
+
+    @Test
     fun `a damaged row reads leniently`() = runBlocking {
         val store = store()
         store.update(

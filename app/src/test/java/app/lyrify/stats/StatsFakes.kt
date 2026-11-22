@@ -154,6 +154,11 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
         buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
     }
 
+    override suspend fun since(from: Long): List<LoggedPlay> = query(PlaysSchema.SINCE, from) { rows ->
+        val row = ResultRow(rows)
+        buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
+    }
+
     override suspend fun putAll(plays: List<LoggedPlay>): Boolean {
         transaction { plays.forEach { update(PlaysSchema.PUT, *PlaysSchema.putArgs(it)) } }
         return true
