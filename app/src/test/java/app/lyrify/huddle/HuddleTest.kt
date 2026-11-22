@@ -449,6 +449,46 @@ class HuddleTest {
     }
 
     @Test
+    fun `a sync without an answer that took long waits its whole time again, from its end`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        friends(wren, juniper)
+        server.online = false
+        // The inbox keeps KJB waiting 20 s, then gives no answer: a server past its timeouts.
+        server.slowMs = 20_000
+        val before = server.fetches
+        val front = wren.syncWhileInFront()
+        runCurrent()
+        assertEquals(before + 1, server.fetches)
+        advanceTimeBy(20_000 + 30_000 - 1)
+        runCurrent()
+        assertEquals("30 s after the try ended, not after it began", before + 1, server.fetches)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(before + 2, server.fetches)
+        front.cancel()
+    }
+
+    @Test
+    fun `cards sent while the server does not answer share one set of next tries`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        server.online = false
+        wren.send(juniperOnWren.id, song)
+        wren.send(juniperOnWren.id, Card(CardKind.SONG, listOf(bell)))
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        val sends = server.requests.count { it == "send" }
+        advanceTimeBy(30_000)
+        assertEquals("one next try for both, not one each", sends + 1, server.requests.count { it == "send" })
+        server.online = true
+        advanceTimeBy(2 * 60_000L)
+        runCurrent()
+        assertTrue(wrenState.now.outbox.isEmpty())
+        assertEquals(2, server.waiting(juniperOnWren.outBox).size)
+    }
+
+    @Test
     fun `a sync step without an answer is logged with a reason code, never a name, an id or a title`() = runTest {
         val logged = ArrayList<String>()
         val (wren, wrenState) = phone("Wren", log = { logged += it })

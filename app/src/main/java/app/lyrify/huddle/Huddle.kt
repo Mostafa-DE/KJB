@@ -15,6 +15,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** A message waiting in a mailbox: the server's [seq] in it (its message id), and the sealed [data] (base64url). */
 data class Posted(val seq: Long, val data: String)
@@ -102,7 +103,7 @@ sealed interface Accepted {
  *
  * - Cards go after [UNDO_MS] (the toast's Undo), plays at once, each sealed with the friend's key for their mailbox;
  *   what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play within a day only. A card without an
- *   answer is tried again after each of [RETRY_MS]'s waits.
+ *   answer is tried again after each of [RETRY_MS]'s waits, one card's tries at a time.
  * - A play goes only to friends you share plays with ([Friend.sharePlays]), never while you listen privately.
  * - [sync] asks the server only when there is something to ask: invites waiting for a join, friends' mailboxes, the outbox,
  *   each whatever the others answered. Each message is read once ([Friend.seen]) and acknowledged so the server deletes it.
@@ -133,6 +134,9 @@ class Huddle(
 
     @Volatile
     private var lastSync: Long? = null
+
+    /** A card's next tries ([send]) are under way. */
+    private val retrying = AtomicBoolean(false)
 
     /** Sets your name as friends see it; false when nothing is left of [name] ([Invites.cleanName]). */
     suspend fun setName(name: String): Boolean {
@@ -218,11 +222,16 @@ class Huddle(
         if (!kept) return null
         scope.launch {
             delay(hold)
-            if (flush()) return@launch
-            for (wait in RETRY_MS) {
-                log("huddle: card not sent, next try in ${wait / 1_000} s")
-                delay(wait)
-                if (flush()) return@launch
+            // One card's tries at a time: a flush posts the whole outbox, so a card sent meanwhile goes with them.
+            if (flush() || !retrying.compareAndSet(false, true)) return@launch
+            try {
+                for (wait in RETRY_MS) {
+                    log("huddle: card not sent, next try in ${wait / 1_000} s")
+                    delay(wait)
+                    if (flush()) return@launch
+                }
+            } finally {
+                retrying.set(false)
             }
         }
         return message.id
@@ -324,8 +333,8 @@ class Huddle(
     /**
      * KJB is in front, until the job returned is cancelled: syncs now, then an hour after the last sync; while the Huddle
      * page is open ([pageOpen]), at once and then every [FAST_MS]. A sync without an answer is tried again after each of
-     * [RETRY_MS]'s waits (never later than the usual time), then as usual. Each sync is a job of its own in [scope], so one
-     * under way runs on when KJB goes.
+     * [RETRY_MS]'s waits from its end (never later than the usual time), then as usual. Each sync is a job of its own in
+     * [scope], so one under way runs on when KJB goes.
      */
     fun syncWhileInFront(): Job = scope.launch {
         var first = true
@@ -345,7 +354,8 @@ class Huddle(
             while (true) {
                 val wait = RETRY_MS.getOrNull(failed - 1)?.coerceAtMost(every) ?: every
                 if (failed > 0) log("huddle: sync failed $failed in a row, next try in ${wait / 1_000} s")
-                delay(((lastSync ?: clock()) + wait - clock()).coerceIn(1, wait))
+                // After one without an answer, its whole wait from its end, however long its timeouts took.
+                delay(if (failed > 0) wait else ((lastSync ?: clock()) + wait - clock()).coerceIn(1, wait))
                 trySync()
             }
         }
