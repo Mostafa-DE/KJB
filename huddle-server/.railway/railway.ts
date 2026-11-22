@@ -1,12 +1,12 @@
-import { defineRailway, github, postgres, project, service } from "railway/iac"
+import { defineRailway, postgres, project, service } from "railway/iac"
 
-// Railway Infrastructure as Code for Huddle (railway.json is deprecated). The user applies it with
-// `railway config plan` and `railway config apply` from huddle-server/; see the deploy steps in README.md.
+// Railway Infrastructure as Code for Huddle (railway.json is deprecated), applied with `railway config plan` and
+// `railway config apply` from huddle-server/. The service has no repository: `railway up` from huddle-server/
+// uploads the code and deploys it. README.md has the steps.
 export default defineRailway(() => {
   const database = postgres("postgres")
   const huddle = service("huddle", {
-    source: github("Mostafa-DE/KJB", { branch: "main", rootDirectory: "huddle-server" }),
-    build: { builder: "RAILPACK", buildCommand: "pnpm build", watchPatterns: ["/huddle-server/**"] },
+    build: { builder: "RAILPACK", buildCommand: "pnpm build" },
     start: "pnpm start",
     preDeploy: "pnpm db:migrate",
     healthcheck: "/health",

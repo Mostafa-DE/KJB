@@ -26,31 +26,40 @@ storage guard (1024 by default). `PORT` comes from Railway.
 
 ## Deploy on Railway
 
-The project is described in [.railway/railway.ts](.railway/railway.ts) (Railway Infrastructure as Code, in beta):
-a Postgres database and the `huddle` service, built from `huddle-server/` on the `main` branch of GitHub
-`Mostafa-DE/KJB`, with `pnpm db:migrate` before each deploy and `/health` as its health check. One replica: the rate
-limits are counted in the server's memory.
+Live at `https://kjb-huddle.up.railway.app`: Railway project `kjb-huddle`, environment `production`, services
+`huddle` (this server) and `postgres`. [.railway/railway.ts](.railway/railway.ts) describes both (Railway
+Infrastructure as Code, in beta): Railpack builds with `pnpm build`, `pnpm db:migrate` runs before each deploy,
+`pnpm start` runs the server, `/health` is the health check, and `DATABASE_URL` refers to the database. One replica:
+the rate limits are counted in the server's memory. The service has no repository; `railway up` uploads this folder.
 
-First time:
+Every command below runs from `huddle-server/` with Railway CLI 5.42.1 or newer. Link the folder first, once per
+checkout, and check the link before anything else:
 
-1. Make sure `huddle-server/` is on `main` on GitHub, and that Railway's GitHub app may read `Mostafa-DE/KJB`
-   (Railway dashboard, Account Settings, Integrations or GitHub).
-2. Install or update the Railway CLI (`npm i -g @railway/cli`, then `railway upgrade`). The IaC file needs CLI
-   5.42.1 or newer: check with `railway --version`.
-3. `railway login`
-4. `cd huddle-server && pnpm install` (the CLI reads `.railway/railway.ts`, which imports the `railway` package).
-5. `railway init` and name the project `kjb-huddle`. This creates an empty project and links this folder to it.
-6. `railway config plan`. Expect two creates and nothing else: the Postgres database `postgres`, and the service
-   `huddle` from `Mostafa-DE/KJB` (branch `main`, root `huddle-server`) with its build and start commands, the
-   pre-deploy migration, the `/health` check and a `DATABASE_URL` variable that refers to the database.
-7. `railway config apply` and confirm.
-8. Give the service its address: `railway domain` (or the service's Settings, Networking, Generate Domain). If
-   Railway lets you choose the name, choose `kjb-huddle`, for `https://kjb-huddle.up.railway.app`. KJB lists the
-   exact host in its App Links, so pass it on before KJB's Huddle release.
-9. If no deployment started, press Deploy on the service in the dashboard (or push a commit that changes
-   `huddle-server/` to `main`). The deploy log should show the migration, then the server listening.
+```bash
+railway link --project kjb-huddle --environment production --service huddle
+railway status   # must say Project: kjb-huddle
+```
 
-Check it (replace the host):
+Deploy the code in this folder (build logs stream, then it returns; the deploy log shows the migration, then srvx
+listening):
+
+```bash
+pnpm install && pnpm test && pnpm build   # locally first
+railway up --service huddle --ci
+```
+
+Change the settings: edit `.railway/railway.ts`, then `railway config plan` (it must list only what you changed) and
+`railway config apply`. A plan with nothing changed says "already up to date".
+
+Redeploy the running build without uploading: `railway redeploy --service huddle`. Restart it without rebuilding:
+`railway restart --service huddle`. Logs: `railway logs --service huddle --deployment --lines 100`, and
+`--http` for Railway's request log.
+
+Roll back: in the Railway dashboard, open the `huddle` service, Deployments, and choose Rollback on the earlier
+deployment. From the command line, check out the earlier commit and `railway up --service huddle --ci` again.
+`railway deployment list --service huddle` lists the deployments. A rollback never undoes a migration.
+
+Check it after a deploy:
 
 ```bash
 curl https://kjb-huddle.up.railway.app/health
@@ -61,9 +70,9 @@ curl "https://digitalassetlinks.googleapis.com/v1/statements:list?source.web.sit
 # lists app.lyrify
 ```
 
-Then open `https://kjb-huddle.up.railway.app/i#test-code` on a phone: the page shows `test-code` with Copy code.
-
 Later, for `huddle.kjb.mostafade.com`: add `domains: ["huddle.kjb.mostafade.com"]` to the `huddle` service in
 `.railway/railway.ts`, run `railway config plan` and `railway config apply`, then `railway domain status
 huddle.kjb.mostafade.com` shows the DNS records to add where `mostafade.com` is managed. Once the certificate is
-issued (within an hour of the DNS change), run the checks above on the new host too.
+issued (within an hour of the DNS change), run the checks above on the new host too. To deploy from GitHub instead of
+`railway up`, add `source: github("Mostafa-DE/KJB", { branch: "main", rootDirectory: "huddle-server" })` to the
+service once `huddle-server/` is on `main`, then plan and apply.
