@@ -45,9 +45,9 @@ val dlAddonSha256 = findProperty("dlAddonSha256")?.toString() ?: "e2d6f1fe469f0b
 val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "55916018" // the release asset's size in bytes
 
 /**
- * Huddle's server (huddle-server/, plan Q3.2): its Railway address, kjb-huddle.up.railway.app until the service is
- * deployed and named, and the user's own domain, added later. KJB talks to the first and opens invite links on both
- * (App Links), so the move to the domain needs no KJB update. -PhuddleHost points a test build at another server.
+ * Huddle's server (huddle-server/, plan Q3.2): its Railway address (live since 2026-11-22, serving assetlinks.json for
+ * the release key), and the user's own domain, added later. KJB talks to the first and opens invite links on both (App
+ * Links), so the move to the domain needs no KJB update. -PhuddleHost points a test build at another server.
  */
 val huddleHost = findProperty("huddleHost")?.toString() ?: "kjb-huddle.up.railway.app"
 val huddleDomain = "huddle.kjb.mostafade.com"
