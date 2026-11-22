@@ -38,13 +38,19 @@ sealed interface Message {
 
     /** The friend removed you: your KJB removes them too. */
     data class Bye(override val id: String, override val at: Long) : Message
+
+    /**
+     * The friend's [name], sent whenever they set it, and whether yours is the name of another of their friends
+     * ([taken]: pick another, so they can tell you apart). The server keeps only the newest one waiting.
+     */
+    data class Profile(override val id: String, override val at: Long, val name: String, val taken: Boolean = false) : Message
 }
 
 /**
  * Messages as their sealed boxes hold them: JSON, then 0x80 and zero bytes up to one of a few sizes ([SIZES]), so the
  * server learns little from a box's length. Keys are short to fit long playlists: "v" format, "i" id, "t" time, "k" kind,
- * "c" card, "s" song or songs, "n" name, "m" note, "f" a favourite; a song is "t" title, "a" artist, "l" album, "d" length
- * in millis.
+ * "c" card, "s" song or songs, "n" name, "m" note, "f" a favourite, "x" your name taken; a song is "t" title, "a" artist,
+ * "l" album, "d" length in millis.
  * A message of an unknown kind or format (a newer KJB's) reads as null and is dropped.
  */
 object Messages {
@@ -105,6 +111,7 @@ object Messages {
             SHARE -> (root[CARD_KEY] as? JsonObject)?.let(::cardOf)?.let { Message.Share(id, at, it) }
             PLAY -> (root[SONG_KEY] as? JsonObject)?.let(::songOf)?.let { Message.Play(id, at, it, favourite = root.flag(FAVOURITE_KEY) == true) }
             BYE -> Message.Bye(id, at)
+            PROFILE -> root.text(NAME_KEY)?.let(Invites::cleanName)?.let { Message.Profile(id, at, it, taken = root.flag(TAKEN_KEY) == true) }
             else -> null
         }
     }
@@ -142,6 +149,11 @@ object Messages {
                     if (message.favourite) put(FAVOURITE_KEY, JsonPrimitive(true))
                 }
                 is Message.Bye -> put(KIND_KEY, JsonPrimitive(BYE))
+                is Message.Profile -> {
+                    put(KIND_KEY, JsonPrimitive(PROFILE))
+                    put(NAME_KEY, JsonPrimitive(message.name))
+                    if (message.taken) put(TAKEN_KEY, JsonPrimitive(true))
+                }
             }
         },
     ).toString().encodeToByteArray()
@@ -187,6 +199,7 @@ object Messages {
     private const val NAME_KEY = "n"
     private const val NOTE_KEY = "m"
     private const val FAVOURITE_KEY = "f"
+    private const val TAKEN_KEY = "x"
     private const val TITLE_KEY = "t"
     private const val ARTIST_KEY = "a"
     private const val ALBUM_KEY = "l"
@@ -195,6 +208,7 @@ object Messages {
     private const val SHARE = "share"
     private const val PLAY = "play"
     private const val BYE = "bye"
+    private const val PROFILE = "profile"
 }
 
 /** [text] trimmed and at most [max] characters, never cutting a character of two halves; null when blank. */

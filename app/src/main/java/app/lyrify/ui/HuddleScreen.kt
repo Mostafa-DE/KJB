@@ -37,7 +37,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -159,7 +158,7 @@ private fun rememberNow(): Long = produceState(System.currentTimeMillis()) {
 
 /**
  * Huddle in the app, once (MainActivity): it syncs while KJB is in front (when it comes to the front, then each hour, every
- * 30 s while the Huddle page is open), and an [invite] link another app opened asks whether to add the friend
+ * 30 s), and an [invite] link another app opened asks whether to add the friend
  * ([AcceptInviteSheet]); [onInviteTaken] once it is shown. A song that came with the invite opens after it ([ReceivedHost]).
  */
 @Composable
@@ -208,8 +207,7 @@ fun HuddleFromRow() {
 /**
  * Tools > Huddle: Invite a friend and Paste invite, what friends sent (the newest first, those not opened in coral), the
  * friends with what they play now (each with Share what I play, Rename and Remove under its "⋯"), invites waiting with
- * Cancel, then your name, Listen privately, Keep friends in backups, and what leaves your phone. While it is open
- * friends' plays come every 30 s ([Huddle.pageOpen]).
+ * Cancel, then your name, Listen privately, Keep friends in backups, and what leaves your phone.
  */
 @Composable
 fun HuddlePage(onBack: () -> Unit) {
@@ -220,10 +218,6 @@ fun HuddlePage(onBack: () -> Unit) {
     val huddle = rememberHuddle()
     val state = rememberHuddleState()
     val now = rememberNow()
-    LifecycleResumeEffect(huddle) {
-        huddle.pageOpen.value = true
-        onPauseOrDispose { huddle.pageOpen.value = false }
-    }
     var naming by rememberSaveable { mutableStateOf(false) }
     var inviting by rememberSaveable { mutableStateOf(false) }
     var renaming by rememberSaveable { mutableStateOf<String?>(null) }

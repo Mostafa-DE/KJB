@@ -51,13 +51,29 @@ class HuddleStoreTest {
         val text = """{"schemaVersion":1,"name":"Wren","later":{"x":1},"friends":[{"id":"f1","name":"Juniper","outBox":"o","inBox":"i","outKey":"ok","inKey":"ik","joinId":"j","addedAt":1,"mood":"good"}]}"""
         val read = HuddleJson.decode(text)
         assertEquals("Wren", read.name)
-        assertFalse(read.friends.single().sharePlays)
         assertTrue(read.inbox.isEmpty())
+        assertNull(read.friends.single().taken)
+        assertFalse(read.friends.single().asksNewName)
+        assertTrue(read.joined.isEmpty())
+    }
+
+    @Test
+    fun `friends made before sharing was on by default get it once, and one turned off since stays off`() {
+        fun stored(shares: Boolean) = """{"id":"f1","name":"Juniper","outBox":"o","inBox":"i","outKey":"ok","inKey":"ik","joinId":"j","addedAt":1,"sharePlays":$shares}"""
+        // Written by a KJB before this version (schema 1, or none): sharing turns on for every friend, once.
+        assertTrue(HuddleJson.decode("""{"schemaVersion":1,"friends":[${stored(false)}]}""").friends.single().sharePlays)
+        assertTrue(HuddleJson.decode("""{"friends":[${stored(false)}]}""").friends.single().sharePlays)
+        // Written by this version: the user's choice stays as it is.
+        val off = HuddleJson.decode(HuddleJson.encode(HuddleState(friends = listOf(friend("f2").copy(sharePlays = false)))))
+        assertFalse(off.friends.single().sharePlays)
+        assertTrue(HuddleJson.encode(HuddleState()).contains(""""schemaVersion":2"""))
+        // A new friend shares by default.
+        assertTrue(Friend("f3", "Rook", "o", "i", "ok", "ik", "j", addedAt = 1).sharePlays)
     }
 
     @Test
     fun `a newer schema is told apart, and what is not Huddle's state throws`() {
-        assertTrue(HuddleJson.fromNewer("""{"schemaVersion":2}"""))
+        assertTrue(HuddleJson.fromNewer("""{"schemaVersion":3}"""))
         assertFalse(HuddleJson.fromNewer(HuddleJson.encode(full)))
         assertFalse(HuddleJson.fromNewer("not json"))
         assertThrows { HuddleJson.decode("not json") }
