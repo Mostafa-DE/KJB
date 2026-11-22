@@ -49,6 +49,8 @@ import app.lyrify.library.search.withSearch
 import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.Interaction
 import app.lyrify.stats.LoggedPlay
+import app.lyrify.stats.PlayEnd
+import app.lyrify.stats.PlayEnded
 import app.lyrify.stats.playEndedOf
 import app.lyrify.stats.playStartOf
 import app.lyrify.stats.zoneOffsetOf
@@ -129,6 +131,12 @@ object BackupFixtures {
         LoggedPlay(lantern.ref, T0, 150_000, counted = true),
         LoggedPlay(bell.ref, T0 + 600_000, 20_000, counted = false),
         LoggedPlay(lantern.ref, T0 + 1_200_000, 201_000, counted = true),
+    )
+
+    /** The book log (Insights, KJB 3.2): time heard in the books, kept as the plays are. */
+    val bookPlays: List<LoggedPlay> = listOf(
+        LoggedPlay(keeperOne.ref, T0 + 1_800_000, 900_000, counted = true, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.STOPPED, 900_000), clockMs = 600_000),
+        LoggedPlay(archive.ref, T0 + 3_600_000, 300_000, counted = false, clockMs = 300_000),
     )
 
     val songState: SongState = SongState(
@@ -212,7 +220,7 @@ object BackupFixtures {
     val snapshot: BackupSnapshot = BackupSnapshot(
         playlists, queues, plays, songState, equalizer, ledger.put(writing), settings,
         repeat = Repeat.ALL, aiLyrics = true, tones = TonesState(mapOf(tone.id to tone)), duplicates = duplicates, coversTags = coversTags,
-        keptApart = keptApart, searches = searches, books = books,
+        keptApart = keptApart, searches = searches, books = books, bookPlays = bookPlays,
     )
 
     const val VOLUME_SD: String = "/storage/1A2B-3C4D/"
@@ -301,6 +309,8 @@ class MemoryStores(
     var repeatFails: Boolean = false,
     var aiFails: Boolean = false,
     var books: BookState = BookState(),
+    /** The book log. */
+    val bookLog: FakePlayLog = FakePlayLog(),
 ) : BackupStores {
     private fun <T> change(section: Section, now: T, change: (T) -> T, set: (T) -> Unit): Boolean = (section !in failing).also { if (it) set(change(now)) }
 
@@ -376,4 +386,8 @@ class MemoryStores(
     override suspend fun books(): BookState = books
 
     override suspend fun updateBooks(change: (BookState) -> BookState) = change(Section.BOOKS, books, change) { books = it }
+
+    override suspend fun bookPlays(): List<LoggedPlay>? = bookLog.all()
+
+    override suspend fun addBookPlays(plays: List<LoggedPlay>): Boolean = Section.BOOK_PLAYS !in failing && bookLog.putAll(plays)
 }

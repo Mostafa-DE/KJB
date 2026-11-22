@@ -1,8 +1,8 @@
 package app.lyrify.ui
 
+import android.content.Context
 import android.text.format.DateFormat
 import android.text.format.DateUtils
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,7 +16,10 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -29,12 +32,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -43,97 +51,226 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.library.Album
 import app.lyrify.library.Artist
+import app.lyrify.library.Genre
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.displayTitle
+import app.lyrify.settings.DockTab
 import app.lyrify.settings.Settings
-import app.lyrify.stats.Listening
+import app.lyrify.stats.Insights
 import app.lyrify.stats.ListeningPeriod
 import app.lyrify.stats.SongPlays
 import app.lyrify.stats.StatsGraph
 import app.lyrify.stats.Top
 import app.lyrify.stats.WhenPlayed
 import app.lyrify.stats.dayOf
+import app.lyrify.stats.recapMonthOf
 import app.lyrify.stats.whenPlayed
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.launch
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.ZoneId
 import java.time.temporal.WeekFields
 import java.util.Date
 import java.util.Locale
 
-// Your listening: its page, the "View all" of its top lists, and what the library's screens show of plays (L1 places
-// them): the card on Most played, the rows' notes, and Song info's plays lines.
+// Insights, grown out of Your listening (S1; KJB 3.2): its page, a month's recap, the list of recaps, the "View all" of
+// its top lists, and what the library's screens show of plays (L1 places them): the card on Most played, the rows'
+// notes, and Song info's plays lines. Its cards are in InsightsCards.kt.
 
-/** The period both pages show: Month at first, then the one last picked while the app runs. */
+/** The period Insights and its top lists show: Month at first, then the one last picked while the app runs. */
 private var shownPeriod by mutableStateOf(ListeningPeriod.MONTH)
 
-/** Your listening, or the "View all" of one of its top lists. */
+/** Insights ([root]: on its own bottom bar item, without a back arrow), a month's recap, the recaps, or the "View all" of a top list. */
 @Composable
-fun ListeningPage(page: Page.ListeningPages) {
+fun ListeningPage(page: Page.ListeningPages, root: Boolean = false) {
     val nav = LocalNavigator.current
+    val back: () -> Unit = { nav.back() }
     when (page) {
-        Page.Listening -> YourListening(onBack = { nav.back() }, onOpen = nav::open)
-        is Page.TopList -> TopListPage(page.kind, onBack = { nav.back() }, onOpen = nav::open)
+        Page.Listening -> InsightsPage(back.takeUnless { root }, nav::open)
+        is Page.TopList -> TopListPage(page.kind, back, nav::open)
+        is Page.Recap -> RecapPage(remember(page.month) { runCatching { YearMonth.parse(page.month) }.getOrNull() }, back, nav::open)
+        Page.Recaps -> RecapsPage(back, nav::open)
     }
 }
 
 /**
- * The period switch, then the period's listening time and plays, then its top songs, artists and albums, the first 5
- * of each with "View all". With no plays in the period, the empty state.
+ * The period switch, then the period's cards (plan part 1): its totals, For you (lane sg1), against the period before,
+ * its top songs, artists, albums and genres (the first 5 of each with "View all"), when you listen, milestones, books
+ * and podcasts, then the nudges, the monthly recaps and where it all comes from. With nothing heard in the period, the
+ * empty state where the totals go; the nudges still show.
  */
 @Composable
-private fun YourListening(onBack: () -> Unit, onOpen: (Page) -> Unit) {
-    val listening = rememberListening(shownPeriod)
+private fun InsightsPage(onBack: (() -> Unit)?, onOpen: (Page) -> Unit) {
+    val insights = rememberInsights(shownPeriod)
+    val recaps = rememberRecaps()
     val settings = rememberSettings()
     val sheets = rememberSongSheets()
     val periods = listOf(R.string.stats_week, R.string.stats_month, R.string.stats_year, R.string.stats_all_time).map { stringResource(it) }
+    val list = rememberLazyListState()
+    if (onBack == null) ReselectToTop(LocalNavigator.current.state.reselectsOf(DockTab.INSIGHTS)) { list.animateScrollToItem(0) }
     ListeningFrame(stringResource(R.string.stats_title), onBack) { padding ->
         val reduced = LocalReducedMotion.current
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
+        LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
             item(key = "period", contentType = "period") {
                 LyrifySegmented(periods, ListeningPeriod.entries.indexOf(shownPeriod), { shownPeriod = ListeningPeriod.entries[it] }, rowMotion(reduced).padding(horizontal = ScreenPadding))
             }
-            when {
-                listening == null -> Unit
-                listening.plays == 0 -> item(key = "empty", contentType = "empty") {
-                    EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), rowMotion(reduced), text = stringResource(R.string.stats_empty_text))
+            if (insights != null) {
+                val period = shownPeriod
+                insightsCards(insights, { period.versus?.let { stringResource(it) }.orEmpty() }, settings, onOpen, sheets::openSong, reduced, viewAll = true)
+                // The nudges look at all time, so they stay here, never on a month's recap.
+                if (insights.neverPlayed.isNotEmpty()) {
+                    item(key = "never", contentType = "card") { NeverPlayedCard(insights.neverPlayed, settings, { sheets.openSong(it.ref) }, rowMotion(reduced).padding(top = 12.dp)) }
                 }
-                else -> {
-                    item(key = "totals", contentType = "totals") { Box(rowMotion(reduced)) { Totals(listening) } }
-                    TopKind.entries.forEach { kind ->
-                        val tops = topsOf(listening, kind)
-                        val (shown, more) = topPreview(tops)
-                        if (shown.isEmpty()) return@forEach
-                        item(key = "head $kind", contentType = "head") { Box(rowMotion(reduced)) { TopHead(stringResource(kind.title), tops.size, if (more) ({ onOpen(Page.TopList(kind)) }) else null) } }
-                        itemsIndexed(shown, key = { _, top -> "$kind ${keyOf(top)}" }, contentType = { _, _ -> "top" }) { i, top ->
-                            Box(rowMotion(reduced)) { TopRow(top, i + 1, settings, onOpen, sheets::openSong) }
-                        }
-                    }
+                if (insights.digDeeper.isNotEmpty()) item(key = "dig", contentType = "card") { DigDeeperCard(insights.digDeeper, settings, onOpen, rowMotion(reduced).padding(top = 12.dp)) }
+                if (insights.forgotten.isNotEmpty()) {
+                    item(key = "forgotten", contentType = "card") { ForgottenCard(insights.forgotten, settings, { sheets.openSong(it.ref) }, rowMotion(reduced).padding(top = 12.dp)) }
                 }
+            }
+            if (!recaps.isNullOrEmpty()) {
+                item(key = "recaps head", contentType = "head") {
+                    Box(rowMotion(reduced)) { TopHead(stringResource(R.string.insights_recaps), recaps.size, if (recaps.size > RECAPS_SHOWN) ({ onOpen(Page.Recaps) }) else null) }
+                }
+                items(recaps.take(RECAPS_SHOWN), key = { "recap $it" }, contentType = { "recap" }) { month -> Box(rowMotion(reduced)) { RecapRow(month) { onOpen(Page.Recap(month.toString())) } } }
+            }
+            item(key = "private", contentType = "note") {
+                Text(
+                    stringResource(R.string.insights_private),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = rowMotion(reduced).padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 24.dp),
+                )
             }
         }
     }
     SongSheetsHost(sheets)
 }
 
-/** "View all" of one top list, for the period Your listening shows. */
+/**
+ * The period's own cards, as Insights and a month's recap show them: the totals (else the empty state), For you on
+ * Insights alone ([viewAll]), against the period before ([against]: its card's title), the top lists (with "View all"
+ * on Insights), when you listen, milestones, books and podcasts.
+ */
+private fun LazyListScope.insightsCards(
+    insights: Insights,
+    against: @Composable () -> String,
+    settings: Settings,
+    onOpen: (Page) -> Unit,
+    onSong: (SongRef) -> Unit,
+    reduced: Boolean,
+    viewAll: Boolean,
+) {
+    val totals = insights.totals
+    if (totals == null) {
+        item(key = "empty", contentType = "empty") {
+            EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), rowMotion(reduced), text = stringResource(R.string.stats_empty_text))
+        }
+        return
+    }
+    item(key = "totals", contentType = "totals") { TotalsCard(totals, rowMotion(reduced)) }
+    if (viewAll) item(key = "for you", contentType = "for you") { ForYouInsights(rowMotion(reduced)) }
+    insights.versus?.let { versus ->
+        item(key = "versus", contentType = "card") { VersusCard(versus, against(), rowMotion(reduced).padding(top = 12.dp)) }
+    }
+    TopKind.entries.forEach { kind ->
+        val tops = topsOf(insights, kind)
+        val (shown, more) = topPreview(tops)
+        if (shown.isEmpty()) return@forEach
+        item(key = "head $kind", contentType = "head") { Box(rowMotion(reduced)) { TopHead(stringResource(kind.title), tops.size, if (more && viewAll) ({ onOpen(Page.TopList(kind)) }) else null) } }
+        itemsIndexed(shown, key = { _, top -> "$kind ${keyOf(top)}" }, contentType = { _, _ -> "top" }) { i, top ->
+            Box(rowMotion(reduced)) { TopRow(top, i + 1, settings, onOpen, onSong) }
+        }
+    }
+    if (insights.clock != null || insights.streaks != null) item(key = "clock", contentType = "card") { ClockCard(insights.clock, insights.streaks, rowMotion(reduced).padding(top = 12.dp)) }
+    insights.milestones?.let { milestones -> item(key = "milestones", contentType = "card") { MilestonesCard(milestones, rowMotion(reduced).padding(top = 12.dp)) } }
+    insights.spoken?.let { spoken -> item(key = "spoken", contentType = "card") { SpokenCard(spoken, rowMotion(reduced).padding(top = 12.dp)) } }
+}
+
+/**
+ * A month's recap ([month]: none for a page kept from a damaged state): its picture with Share, then the month's own
+ * cards set against the month before. The nudges stay on Insights.
+ */
 @Composable
-private fun TopListPage(kind: TopKind, onBack: () -> Unit, onOpen: (Page) -> Unit) {
-    val listening = rememberListening(shownPeriod)
+private fun RecapPage(month: YearMonth?, onBack: () -> Unit, onOpen: (Page) -> Unit) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    val shown = month ?: recapMonthOf(System.currentTimeMillis(), ZoneId.systemDefault())
+    val recap = rememberRecap(shown)
     val settings = rememberSettings()
     val sheets = rememberSongSheets()
-    val tops = listening?.let { topsOf(it, kind) }.orEmpty()
+    val title = stringResource(R.string.insights_recap_title, monthText(shown))
+    val before = monthText(shown.minusMonths(1))
+    val picture = rememberGraphicsLayer()
+    val scope = rememberCoroutineScope()
+    val toasts = LocalToasts.current
+    ListeningFrame(title, onBack) { padding ->
+        val reduced = LocalReducedMotion.current
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
+            if (recap?.totals != null) {
+                item(key = "picture", contentType = "picture") {
+                    Column(rowMotion(reduced).padding(horizontal = ScreenPadding), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        // Drawn on the page as it is shared, so what the user sees is what goes.
+                        RecapPicture(title, recap, settings, Modifier.drawWithContent {
+                            picture.record { this@drawWithContent.drawContent() }
+                            drawLayer(picture)
+                        })
+                        LyrifyButton(
+                            stringResource(R.string.insights_share),
+                            onClick = { scope.launch { toasts.say(resources, shareRecapPicture(context, picture, shown, title)) } },
+                            modifier = Modifier.fillMaxWidth(),
+                            kind = ButtonKind.SECONDARY,
+                            icon = R.drawable.ic_share,
+                        )
+                    }
+                }
+            }
+            if (recap != null) insightsCards(recap, { stringResource(R.string.insights_versus_month_name, before) }, settings, onOpen, sheets::openSong, reduced, viewAll = false)
+        }
+    }
+    SongSheetsHost(sheets)
+}
+
+/** Every month with a recap, the latest first; each opens its recap. */
+@Composable
+private fun RecapsPage(onBack: () -> Unit, onOpen: (Page) -> Unit) {
+    val recaps = rememberRecaps()
+    ListeningFrame(stringResource(R.string.insights_recaps), onBack) { padding ->
+        val reduced = LocalReducedMotion.current
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
+            items(recaps.orEmpty(), key = { "recap $it" }, contentType = { "recap" }) { month -> Box(rowMotion(reduced)) { RecapRow(month) { onOpen(Page.Recap(month.toString())) } } }
+        }
+    }
+}
+
+/** A month's recap as a row: "October 2026", its tile, a chevron. */
+@Composable
+private fun RecapRow(month: YearMonth, onClick: () -> Unit) {
+    val brand = LocalBrandColors.current
+    NavRow(monthText(month), null, lead = { Tile(R.drawable.ic_bar_chart, brand.highlightContainer, brand.onHighlightContainer) }, onClick = onClick)
+}
+
+/** "View all" of one top list, for the period Insights shows. */
+@Composable
+private fun TopListPage(kind: TopKind, onBack: () -> Unit, onOpen: (Page) -> Unit) {
+    val insights = rememberInsights(shownPeriod)
+    val settings = rememberSettings()
+    val sheets = rememberSongSheets()
+    val tops = insights?.let { topsOf(it, kind) }.orEmpty()
     ListeningFrame(stringResource(kind.title), onBack) { padding ->
         val reduced = LocalReducedMotion.current
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
             item(key = "head", contentType = "head") { Box(rowMotion(reduced)) { TopHead(stringResource(shownPeriod.named), tops.size, onViewAll = null) } }
-            if (listening != null && tops.isEmpty()) {
+            if (insights != null && tops.isEmpty()) {
                 item(key = "empty", contentType = "empty") {
                     EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), rowMotion(reduced), text = stringResource(R.string.stats_empty_text))
                 }
@@ -147,41 +284,24 @@ private fun TopListPage(kind: TopKind, onBack: () -> Unit, onOpen: (Page) -> Uni
     SongSheetsHost(sheets)
 }
 
+/** A page's frame: its [title] with a back arrow, or Insights' own bar item's top bar without one ([onBack] null). */
 @Composable
-private fun ListeningFrame(title: String, onBack: () -> Unit, content: @Composable (PaddingValues) -> Unit) {
+private fun ListeningFrame(title: String, onBack: (() -> Unit)?, content: @Composable (PaddingValues) -> Unit) {
     PageFrame(
         topBar = { under, backdrop ->
-            LyrifyTopBar(
-                title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                under = under,
-                backdrop = backdrop,
-                navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack) },
-            )
+            if (onBack == null) {
+                MainTopBar(DockTab.INSIGHTS, under, backdrop)
+            } else {
+                LyrifyTopBar(
+                    title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    under = under,
+                    backdrop = backdrop,
+                    navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack) },
+                )
+            }
         },
         content = content,
     )
-}
-
-/** The period's listening time and plays, side by side. */
-@Composable
-private fun Totals(listening: Listening) {
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxWidth().padding(start = ScreenPadding, end = ScreenPadding, top = 16.dp, bottom = 4.dp),
-    ) {
-        Total(stringResource(R.string.stats_time), listenedText(listening.heardMs), Modifier.weight(1f))
-        Total(stringResource(R.string.stats_plays_label), formatCount(listening.plays), Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun Total(label: String, value: String, modifier: Modifier) {
-    LyrifyCard(modifier.semantics(mergeDescendants = true) {}) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(value, style = MaterialTheme.typography.titleLarge.tabular(), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
 }
 
 /** A top list's name and length, a heading for TalkBack, with "View all" when it has more than it shows. */
@@ -216,13 +336,23 @@ internal fun TopRow(top: Top<*>, rank: Int, settings: Settings, onOpen: (Page) -
         is Album -> TopRowView(rank, item.title, lineOf(item.artist, time), top.plays, item.songs.firstOrNull()?.let { SongArt(it.path) }, MaterialTheme.shapes.small, stringResource(R.string.stats_open_album)) {
             onOpen(Page.Album(item.key))
         }
+        is Genre -> TopRowView(rank, item.name, time, top.plays, item.songs.firstOrNull()?.let { SongArt(it.path) }, MaterialTheme.shapes.small, stringResource(R.string.insights_open_genre)) {
+            onOpen(Page.Genre(item.name))
+        }
     }
 }
 
-/** One TalkBack stop: "1. Name, 12 plays"; the cover is decorative. */
+/**
+ * One TalkBack stop: "1. Name, 12 plays", or without a [rank] (Insights' nudges) "Name, 12 plays", or "Name, its line"
+ * without [plays] either; the cover is decorative.
+ */
 @Composable
-private fun TopRowView(rank: Int, title: String, line: String, plays: Int, cover: Any?, shape: Shape, openLabel: String?, onClick: (() -> Unit)?) {
-    val description = stringResource(R.string.stats_row, rank, title, playsNote(plays))
+internal fun TopRowView(rank: Int?, title: String, line: String, plays: Int?, cover: Any?, shape: Shape, openLabel: String?, onClick: (() -> Unit)?) {
+    val description = if (rank != null) {
+        stringResource(R.string.stats_row, rank, title, playsNote(plays ?: 0))
+    } else {
+        stringResource(R.string.insights_row, title, plays?.let { playsNote(it) } ?: line)
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -241,7 +371,7 @@ private fun TopRowView(rank: Int, title: String, line: String, plays: Int, cover
             Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text(formatCount(plays), style = MaterialTheme.typography.labelLarge.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
+        if (plays != null) Text(formatCount(plays), style = MaterialTheme.typography.labelLarge.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
     }
 }
 
@@ -251,11 +381,11 @@ private fun lineOf(name: String?, time: String): String = name?.trim()?.takeIf(S
 
 // What the library's screens show of plays (L1 places these)
 
-/** The card at the top of Most played: Your listening this month, its time and plays; opens Your listening. */
+/** The card at the top of Most played: Insights' totals this month, its time and plays, as Insights shows them; opens Insights. */
 @Composable
 fun ListeningCard(modifier: Modifier = Modifier) {
     val nav = LocalNavigator.current
-    val listening = rememberListening(ListeningPeriod.MONTH)
+    val insights = rememberInsights(ListeningPeriod.MONTH)
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
     LyrifyCard(modifier, onClick = { nav.open(Page.Listening) }) {
@@ -264,13 +394,12 @@ fun ListeningCard(modifier: Modifier = Modifier) {
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.heightIn(min = 72.dp).padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
         ) {
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(brand.highlightContainer)) {
-                Icon(painterResource(R.drawable.ic_bar_chart), contentDescription = null, tint = brand.onHighlightContainer, modifier = Modifier.size(24.dp))
-            }
+            Tile(R.drawable.ic_bar_chart, brand.highlightContainer, brand.onHighlightContainer)
             Column(Modifier.weight(1f)) {
                 Text(stringResource(R.string.stats_title), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (listening != null) {
-                    val line = stringResource(R.string.stats_card_line, stringResource(R.string.stats_this_month), listenedText(listening.heardMs), playsNote(listening.plays))
+                if (insights != null) {
+                    val totals = insights.totals
+                    val line = stringResource(R.string.stats_card_line, stringResource(R.string.stats_this_month), listenedText(totals?.heardMs ?: 0), playsNote(totals?.plays ?: 0))
                     Text(line, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -332,24 +461,50 @@ fun listenedText(ms: Long): String {
 // The data behind them
 
 /**
- * [period]'s listening as of now, read again whenever a play is written, the library changes, or the day turns (a period
- * may end at midnight while the page is open); null until first read.
+ * [period]'s Insights as of now, read again whenever a play or a book's is written, the library or Favourites change,
+ * or the day turns (a period may end at midnight while the page is open); null until first read.
  */
 @Composable
-private fun rememberListening(period: ListeningPeriod): Listening? {
-    val context = LocalContext.current
-    val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
-    val library by remember(context) { LibraryGraph.repository(context).state }.collectAsState()
-    val today = rememberToday()
-    val listening by produceState<Listening?>(null, period, written, library, today) {
-        value = StatsGraph.stats(context).listening(period, System.currentTimeMillis(), ZoneId.systemDefault(), WeekFields.of(Locale.getDefault()).firstDayOfWeek)
-    }
-    return listening
+private fun rememberInsights(period: ListeningPeriod): Insights? = rememberStats(period) { context ->
+    StatsGraph.stats(context).insights(period, System.currentTimeMillis(), ZoneId.systemDefault(), WeekFields.of(Locale.getDefault()).firstDayOfWeek)
 }
 
-/** The phone's date, turning just after its midnight ([dayOf]). */
+/** [month]'s recap, read again as [rememberInsights] reads; null until first read. */
 @Composable
-private fun rememberToday(): LocalDate {
+private fun rememberRecap(month: YearMonth): Insights? = rememberStats(month) { context -> StatsGraph.stats(context).recap(month, System.currentTimeMillis(), ZoneId.systemDefault()) }
+
+/** The months with a recap, the latest first, read again as [rememberInsights] reads; null until first read. */
+@Composable
+private fun rememberRecaps(): List<YearMonth>? = rememberStats(Unit) { context -> StatsGraph.stats(context).recaps(System.currentTimeMillis(), ZoneId.systemDefault()) }
+
+/**
+ * What [read] gives for [key], read only while it shows (its layer on its way to the screen or on it, the app on
+ * screen): at once, then again at most every [REREAD_MS] as plays or a book's are written, and at once when the
+ * library or Favourites change or the day turns. PlayStats reads off the main thread, only what changed.
+ */
+@Composable
+private fun <T> rememberStats(key: Any, read: suspend (Context) -> T): T? {
+    val context = LocalContext.current
+    val library by remember(context) { LibraryGraph.repository(context).state }.collectAsState()
+    val playlists by remember(context) { LibraryGraph.playlists(context).state }.collectAsState(null)
+    val today = rememberToday()
+    val shown = LocalLayerHeaded.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val value by produceState<T?>(null, key, library, playlists?.favouriteSongs, today, shown) {
+        if (!shown) return@produceState
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            StatsGraph.writes(context).conflate().collect {
+                value = read(context)
+                delay(REREAD_MS)
+            }
+        }
+    }
+    return value
+}
+
+/** The phone's date, turning just after its midnight ([dayOf]): Insights' figures and the recap card's month. */
+@Composable
+internal fun rememberToday(): LocalDate {
     val today by produceState(dayOf(System.currentTimeMillis(), ZoneId.systemDefault()).date) {
         while (true) {
             val now = System.currentTimeMillis()
@@ -367,16 +522,18 @@ private fun rememberSettings(): Settings {
     return settings
 }
 
-private fun topsOf(listening: Listening, kind: TopKind): List<Top<*>> = when (kind) {
-    TopKind.SONGS -> listening.songs
-    TopKind.ARTISTS -> listening.artists
-    TopKind.ALBUMS -> listening.albums
+private fun topsOf(insights: Insights, kind: TopKind): List<Top<*>> = when (kind) {
+    TopKind.SONGS -> insights.songs
+    TopKind.ARTISTS -> insights.artists
+    TopKind.ALBUMS -> insights.albums
+    TopKind.GENRES -> insights.genres
 }
 
 private fun keyOf(top: Top<*>): String = when (val item = top.item) {
     is Song -> item.path
     is Artist -> item.name
     is Album -> item.key
+    is Genre -> item.name
     else -> item.toString()
 }
 
@@ -385,6 +542,16 @@ private val TopKind.title: Int
         TopKind.SONGS -> R.string.stats_top_songs
         TopKind.ARTISTS -> R.string.stats_top_artists
         TopKind.ALBUMS -> R.string.stats_top_albums
+        TopKind.GENRES -> R.string.insights_top_genres
+    }
+
+/** Insights' card against the period before: "Against last week, up to now"; none for all time. */
+private val ListeningPeriod.versus: Int?
+    get() = when (this) {
+        ListeningPeriod.WEEK -> R.string.insights_versus_week
+        ListeningPeriod.MONTH -> R.string.insights_versus_month
+        ListeningPeriod.YEAR -> R.string.insights_versus_year
+        ListeningPeriod.ALL_TIME -> null
     }
 
 /** "This week", "This month", "This year", "All time". */
@@ -405,7 +572,13 @@ fun listenedTime(ms: Long): ListenedTime {
     return ListenedTime((minutes / 60).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), (minutes % 60).toInt())
 }
 
-/** How many rows of a top list Your listening shows before "View all". */
+/** Insights read again at most this often while plays are written (one about every 15 s while music plays). */
+private const val REREAD_MS: Long = 3_000
+
+/** How many months Insights lists under Monthly recaps before "View all". */
+private const val RECAPS_SHOWN: Int = 3
+
+/** How many rows of a top list Insights shows before "View all". */
 const val TOP_SHOWN: Int = 5
 
 /** A top list's first [TOP_SHOWN] rows, and whether it has more ("View all"). */

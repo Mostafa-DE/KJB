@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Plays and Your listening (milestone S1). -->
+<!-- Plays and Your listening (milestone S1), which grew into Insights (KJB 3.2, strings_insights.xml). -->
 <resources>
-    <string name="stats_title">Your listening</string>
+    <string name="stats_title">Insights</string>
 
     <!-- The period switch, and the period as the View all pages and the card name it. -->
     <string name="stats_week">Week</string>

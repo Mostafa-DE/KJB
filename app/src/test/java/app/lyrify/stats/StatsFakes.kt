@@ -19,12 +19,12 @@ fun List<StoredPlay>.as310(): List<StoredPlay> = map { it.copy(play = it.play.as
  * `plays.db` made up, in memory, with its rules (PlaysDbDeviceTest checks the real one against the same, and
  * PlaysSqlTest its SQL on the laptop): a play written again is the one of the same song and start, and keeps the most
  * time heard, its count once counted, its id hint unless a newer one is given, how it began and its time zone as first
- * written (a part the first write lacked filled in by a later one), how it ended as last written, and its import mark
- * once marked; with an [OpenState] it is kept as still going,
+ * written (a part the first write lacked filled in by a later one), how it ended as last written, its import mark
+ * once marked, and the most real minutes written (none until a write has them); with an [OpenState] it is kept as still going,
  * without one it is let go. A song's totals count its plays that counted, the last of those, and the time heard in all
- * its plays, the short ones ([LoggedPlay.isShort]) left out; its id hint is its latest play's of those. An interaction
- * noted again (the same time and kind) replaces the one there, one restored leaves it as it is. [failing]: every write
- * and every read of the interactions fails.
+ * its plays, the short ones ([LoggedPlay.isShort]) left out; its id hint is its latest play's of those. The plays heard
+ * here leave out an import's and the short ones. An interaction noted again (the same time and kind) replaces the one
+ * there, one restored leaves it as it is. [failing]: every write and every read of the interactions fails.
  */
 class FakePlayLog(plays: List<LoggedPlay> = emptyList(), interactions: List<Interaction> = emptyList()) : PlayLogStore {
     val plays: MutableList<LoggedPlay> = plays.toMutableList()
@@ -48,6 +48,7 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList(), interactions: List<Inte
                 zoneOffsetMinutes = old.zoneOffsetMinutes ?: play.zoneOffsetMinutes,
                 end = play.end ?: old.end,
                 imported = old.imported || play.imported,
+                clockMs = listOfNotNull(old.clockMs, play.clockMs).maxOrNull(),
             )
         }
         plays.remove(old)
@@ -61,6 +62,10 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList(), interactions: List<Inte
         if (old == null || new == null) old ?: new else old.copy(source = old.source ?: new.source, songKey = old.songKey ?: new.songKey)
 
     override suspend fun all(): List<LoggedPlay>? = if (failing) null else plays.sortedBy { it.startedAt }
+
+    override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> =
+        plays.filter { !it.imported && !it.isShort && (from == null || it.startedAt >= from) && (until == null || it.startedAt < until) }
+            .sortedWith(compareBy({ it.startedAt }, { it.song.path }))
 
     /** Each as [put] writes it, and each interaction not there yet, or none when [failing]. */
     override suspend fun putAll(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean {
@@ -159,7 +164,7 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
             while (rows.next()) {
                 val row = ResultRow(rows)
                 storedPlayOf(
-                    rows.getString(1), row.at(2), row.at(3), row.at(4), row.at(5), row.at(6), row.at(7), rows.getString(8),
+                    rows.getString(1), row.at(2), row.at(3), row.at(4), row.at(5), row.at(6), row.at(7), rows.getString(8), row.number("clock_ms"),
                 )?.let(::add)
             }
         }
@@ -179,6 +184,12 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
         val row = ResultRow(rows)
         buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
     }
+
+    override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> =
+        query(PlaysSchema.LISTENED, (from ?: Long.MIN_VALUE).toString(), (until ?: Long.MAX_VALUE).toString()) { rows ->
+            val row = ResultRow(rows)
+            buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
+        }
 
     override suspend fun putAll(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean {
         transaction {

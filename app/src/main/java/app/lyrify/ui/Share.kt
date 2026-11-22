@@ -158,13 +158,23 @@ fun lyricsTextShare(title: String, text: String): ShareRequest =
 /** "Lyrics file" as a share: ACTION_SEND of the `.lrc` at [uri] as a file ([LRC_TYPE]), the title as the subject. */
 fun lyricsFileShare(uri: String, title: String): ShareRequest = ShareRequest(Intent.ACTION_SEND, LRC_TYPE, listOf(uri), subject = title)
 
+/** A recap's picture as a share: ACTION_SEND of the PNG at [uri] (a copy in KJB's cache, [shareCopy]), [title] as the subject. */
+fun recapImageShare(uri: String, title: String): ShareRequest = ShareRequest(Intent.ACTION_SEND, PNG_TYPE, listOf(uri), subject = title)
+
 /** A crash report as a share (Settings > About > Crash reports): ACTION_SEND text/plain with its text, KJB's subject. */
 fun crashReportShare(text: String): ShareRequest = ShareRequest(Intent.ACTION_SEND, TEXT_TYPE, subject = CRASH_SUBJECT, text = text)
 
 private const val CRASH_SUBJECT: String = "KJB crash report"
 
-/** The type KJB gives a file its FileProvider serves, by the file's [name]: [LRC_TYPE] for a `.lrc`, the one file it shares. */
-internal fun shareType(name: String): String? = if (name.endsWith(".lrc", ignoreCase = true)) LRC_TYPE else null
+/** The type KJB gives a file its FileProvider serves, by the file's [name]: [LRC_TYPE] for a `.lrc`, [PNG_TYPE] for a recap's picture. */
+internal fun shareType(name: String): String? = when {
+    name.endsWith(".lrc", ignoreCase = true) -> LRC_TYPE
+    name.endsWith(".png", ignoreCase = true) -> PNG_TYPE
+    else -> null
+}
+
+/** A recap's picture (ui/InsightsCards.kt), which KJB draws itself. */
+private const val PNG_TYPE: String = "image/png"
 
 /**
  * KJB's FileProvider for Share (AndroidManifest.xml, "share"): what it serves is typed by [shareType], not by the
@@ -226,6 +236,9 @@ sealed interface Shared {
 
     /** The share of [songs] songs (1 for lyrics) could not start: MediaStore gave no answer, or nothing opens a share sheet. */
     data class Failed(val songs: Int) : Shared
+
+    /** A recap's picture could not be made or kept for the share (Insights, KJB 3.2). */
+    data object NoPicture : Shared
 }
 
 suspend fun ToastState.say(resources: Resources, shared: Shared) {
@@ -235,6 +248,7 @@ suspend fun ToastState.say(resources: Resources, shared: Shared) {
         is Shared.NotFound -> resources.getQuantityString(R.plurals.share_not_found, shared.songs, shared.songs)
         Shared.NoLyrics -> resources.getString(R.string.share_no_lyrics)
         is Shared.Failed -> resources.getQuantityString(R.plurals.share_failed, shared.songs, shared.songs)
+        Shared.NoPicture -> resources.getString(R.string.insights_share_failed)
     }
     show(Toast(text, R.drawable.ic_error, Tone.ERROR))
 }
@@ -314,28 +328,33 @@ private fun audioFiles(resolver: ContentResolver, paths: List<String>): Map<Stri
     null
 }
 
-/**
- * A byte copy of the synced `.lrc` beside [songPath] in [cache]'s share folder, under the `.lrc`'s own name, in a folder
- * of its own so two songs' files of one name never meet; null without a synced `.lrc`. Copies older than a day go: an
- * app may read its copy a while after the share (a mail sent later).
- */
+/** A byte copy of the synced `.lrc` beside [songPath] in [cache]'s share folder ([shareCopy]), under the `.lrc`'s own name; null without a synced `.lrc`. */
 internal fun lrcCopy(cache: File, songPath: String, now: Long): File? = try {
     val sidecar = LrcFormat.sidecarPath(songPath)
     val bytes = sidecar?.let { readSidecar(File(it).toPath()) }?.takeIf { LrcFormat.timed(it.decodeToString()) }
     if (sidecar == null || bytes == null) {
         null
     } else {
-        val shares = File(cache, SHARE_FOLDER)
-        shares.listFiles()?.filter { now - it.lastModified() > COPY_KEPT_MS }?.forEach(File::deleteRecursively)
-        val folder = File(shares, now.toString()).apply { mkdirs() }
-        File(folder, sidecar.substringAfterLast('/')).apply { writeBytes(bytes) }
+        shareCopy(cache, sidecar.substringAfterLast('/'), bytes, now)
     }
 } catch (_: IOException) {
     null
 }
 
+/**
+ * [bytes] as a file named [name] in [cache]'s share folder, which KJB's FileProvider serves, in a folder of its own so
+ * two files of one name never meet. Copies older than a day go: an app may read its copy a while after the share (a mail
+ * sent later). Throws an IOException when the cache cannot be written.
+ */
+internal fun shareCopy(cache: File, name: String, bytes: ByteArray, now: Long): File {
+    val shares = File(cache, SHARE_FOLDER)
+    shares.listFiles()?.filter { now - it.lastModified() > COPY_KEPT_MS }?.forEach(File::deleteRecursively)
+    val folder = File(shares, now.toString()).apply { mkdirs() }
+    return File(folder, name).apply { writeBytes(bytes) }
+}
+
 /** The FileProvider's authority after the package name (AndroidManifest.xml, "share"). */
-private const val SHARE_AUTHORITY: String = ".share"
+internal const val SHARE_AUTHORITY: String = ".share"
 
 /** KJB's cache folder that FileProvider serves (res/xml/share_paths.xml). */
 private const val SHARE_FOLDER: String = "share"

@@ -36,7 +36,7 @@ class ToolsRowsTest {
 
     @Test
     fun `the rows come in the prototype's order, Trash after Duplicates, Settings last`() {
-        assertEquals(listOf(Tool.CHECK, Tool.DUPLICATES, Tool.TRASH, Tool.TONES, Tool.COVERS_TAGS, Tool.DOWNLOADS, Tool.AI, Tool.SETTINGS), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0).map { it.tool })
+        assertEquals(listOf(Tool.CHECK, Tool.DUPLICATES, Tool.TRASH, Tool.TONES, Tool.COVERS_TAGS, Tool.DOWNLOADS, Tool.AI, Tool.INSIGHTS, Tool.SETTINGS), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0).map { it.tool })
     }
 
     @Test
@@ -104,6 +104,12 @@ class ToolsRowsTest {
         assertTrue(failed.getValue(Tool.AI).dot)
         assertFalse(rows(ai = ai()).getValue(Tool.AI).dot)
         assertTrue(failed.values.filter { it.tool != Tool.AI }.none { it.dot })
+    }
+
+    @Test
+    fun `Insights says what it shows, with no badge, and opens Insights`() {
+        assertEquals(ToolRow(Tool.INSIGHTS, ToolLine.Text(R.string.insights_tool_line)), rows()[Tool.INSIGHTS])
+        assertEquals(Page.Listening, Tool.INSIGHTS.page)
     }
 
     @Test

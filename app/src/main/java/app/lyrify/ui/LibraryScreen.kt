@@ -134,12 +134,12 @@ fun LibraryPage() {
                 LibraryTab.SONGS -> SongsTab(ui, library, reselect, topBar)
                 else -> PageFrame(topBar = topBar) { padding ->
                     when (shown) {
-                        LibraryTab.PLAYLISTS -> PlaylistsTab(ui, library, padding, reselect, sheets)
+                        LibraryTab.PLAYLISTS -> PlaylistsTab(ui, library, padding, reselect, sheets, inLibrary = true)
                         LibraryTab.ALBUMS -> AlbumsTab(ui, library, padding, reselect)
                         LibraryTab.ARTISTS -> ArtistsTab(ui, library, padding, reselect)
                         LibraryTab.FOLDERS -> FoldersTab(library, padding, reselect)
                         LibraryTab.GENRES -> GenresTab(library, padding, reselect)
-                        LibraryTab.BOOKS -> BooksTab(library, padding, reselect)
+                        LibraryTab.BOOKS -> BooksTab(library, padding, reselect, inLibrary = true)
                         LibraryTab.SONGS -> Unit
                     }
                 }
@@ -188,7 +188,7 @@ fun PlaylistsPage() {
         },
     ) { padding ->
         FadeThrough(library, Modifier.fillMaxSize(), kind = { it == null }) { shown ->
-            if (shown == null) LibraryUnavailable(ui.state, Modifier.padding(padding)) else PlaylistsTab(ui, shown, padding, nav.state.reselectsOf(DockTab.PLAYLISTS), sheets)
+            if (shown == null) LibraryUnavailable(ui.state, Modifier.padding(padding)) else PlaylistsTab(ui, shown, padding, nav.state.reselectsOf(DockTab.PLAYLISTS), sheets, inLibrary = false)
         }
     }
     SongSheetsHost(sheets, ui)
@@ -297,6 +297,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     val source = SongsTabSource
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar, state, loaded = listed != null) { list ->
+        recapCard(LibraryTab.SONGS)
         item(key = "favourites", contentType = "favourites") { Box(rowMotion(reduced)) { FavouritesRowView(ui, library) } }
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, sort = songsOrder(settings), onSort = { sorting = true }) }
@@ -452,6 +453,7 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        recapCard(LibraryTab.ALBUMS)
         item(key = "header", span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
             Box(rowMotion(reduced)) {
                 ListHeader(
@@ -544,6 +546,7 @@ private fun ArtistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, 
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
     val reduced = LocalReducedMotion.current
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
+        recapCard(LibraryTab.ARTISTS)
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) {
                 ListHeader(
@@ -595,6 +598,7 @@ private fun FoldersTab(library: Library, padding: PaddingValues, reselect: Int) 
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
     val reduced = LocalReducedMotion.current
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
+        recapCard(LibraryTab.FOLDERS)
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) { ListHeader(rows.size, R.plurals.lib_noun_folders, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size) }
         }
@@ -625,7 +629,7 @@ internal fun LazyListScope.folderRows(rows: List<FolderRow>, reduced: Boolean) {
  * you (Favourites, Most played, Recently played, Recently added), then the user's playlists by name and New playlist.
  */
 @Composable
-private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, reselect: Int, sheets: SongSheets) {
+private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, reselect: Int, sheets: SongSheets, inLibrary: Boolean) {
     val nav = LocalNavigator.current
     val context = LocalContext.current
     val playback = rememberPlayback()
@@ -644,6 +648,7 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
     val reduced = LocalReducedMotion.current
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
+        if (inLibrary) recapCard(LibraryTab.PLAYLISTS)
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) { ListHeader(playlists.size + BuiltInList.entries.size, R.plurals.lib_noun_playlists, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size) }
         }
@@ -719,6 +724,7 @@ private fun GenresTab(library: Library, padding: PaddingValues, reselect: Int) {
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
     val reduced = LocalReducedMotion.current
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
+        recapCard(LibraryTab.GENRES)
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) { ListHeader(library.genres.size, R.plurals.lib_noun_genres, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size) }
         }

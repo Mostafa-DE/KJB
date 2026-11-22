@@ -12,7 +12,11 @@ import app.lyrify.settings.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
@@ -54,33 +58,69 @@ object StatsGraph {
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + logFailures)
     private var store: PlayLogStore? = null
     private var counter: PlayCounter? = null
+    @Volatile
     private var stats: PlayStats? = null
     private var interactions: InteractionLog? = null
+    private var share: StateFlow<Int?>? = null
+    private var bookLog: PlayLogStore? = null
+    private var bookCounter: PlayCounter? = null
 
-    /** `plays.db` in app-private `databases/`, an unreadable one moved aside there. */
+    /** `plays.db` in app-private `databases/`, an unreadable one moved aside there; what is written tells Insights. */
     @Synchronized
     private fun store(context: Context): PlayLogStore = store ?: run {
         val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
-        SqlPlayLog(PlaysDb(context.applicationContext, log = log), log = log)
+        WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, log = log), log = log)) { startedAt -> stats?.changed(startedAt) }
     }.also { store = it }
 
-    /** Counts KJB's own plays under "Count a play after", from the moment the settings are read and as they change. */
+    /** "Count a play after", from the moment the settings are read and as they change; null until then. */
+    @Synchronized
+    private fun share(context: Context): StateFlow<Int?> = share ?: run {
+        Lyrify.settings(context).settings.map<Settings, Int?> { it.playback.countPlayAfterPercent }.stateIn(scope, SharingStarted.Eagerly, null)
+    }.also { share = it }
+
+    /** Counts KJB's own plays under "Count a play after". */
     @Synchronized
     fun counter(context: Context): PlayCounter = counter ?: run {
-        val share = Lyrify.settings(context).settings.map<Settings, Int?> { it.playback.countPlayAfterPercent }.stateIn(scope, SharingStarted.Eagerly, null)
-        PlayCounter(store(context), share, scope = scope, log = { Log.w(LOG_TAG, it) })
+        PlayCounter(store(context), share(context), scope = scope, log = { Log.w(LOG_TAG, it) })
     }.also { counter = it }
 
-    /** Plays per song, joined with the library of the moment. */
+    /**
+     * The book log: `book-plays.db` beside `plays.db`, the same schema, so a book's plays are kept (for Insights' books)
+     * where no music list or count reads them; in backups as a section of its own (backup/, Section.BOOK_PLAYS).
+     */
+    @Synchronized
+    fun bookLog(context: Context): PlayLogStore = bookLog ?: run {
+        val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
+        WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, name = BOOK_PLAYS, log = log), log = log)) { startedAt -> stats?.booksChanged(startedAt) }
+    }.also { bookLog = it }
+
+    /** Counts the time heard in books into the book log, as the play counter counts music. */
+    @Synchronized
+    private fun bookCounter(context: Context): PlayCounter = bookCounter ?: run {
+        PlayCounter(bookLog(context), share(context), scope = scope, log = { Log.w(LOG_TAG, it) })
+    }.also { bookCounter = it }
+
+    /** Plays per song, joined with the library of the moment; Insights with the book log and Favourites. */
     @Synchronized
     fun stats(context: Context): PlayStats = stats ?: run {
         val library = LibraryGraph.repository(context).state
-        PlayStats(store(context), library = { (library.value as? LibraryState.Ready)?.library })
+        val playlists = LibraryGraph.playlists(context)
+        PlayStats(
+            store(context),
+            library = { (library.value as? LibraryState.Ready)?.library },
+            books = bookLog(context),
+            favourites = { playlists.state.first().favouriteSongs },
+        )
     }.also { stats = it }
 
     /** The interaction log, beside the plays in `plays.db`: the screens note into it, Suggestions reads it. */
     @Synchronized
     fun interactions(context: Context): InteractionLog = interactions ?: InteractionLog(store(context), scope, log = { Log.w(LOG_TAG, it) }).also { interactions = it }
+
+    /** Writes to the play log and the book log, counted ([PlayCounter.written]): Insights read again after them. */
+    fun writes(context: Context): Flow<Int> = combine(counter(context).written, bookCounter(context).written) { music, books -> music + books }
+
+    fun bookEvents(context: Context): PlayEvents = bookCounter(context)
 
     /** The play log itself, for a backup and a restore (backup/). */
     fun log(context: Context): PlayLogStore = store(context)
@@ -88,4 +128,6 @@ object StatsGraph {
     fun events(context: Context): PlayEvents = counter(context)
 
     fun plays(context: Context): PlaysQuery = stats(context)
+
+    private const val BOOK_PLAYS: String = "book-plays.db"
 }

@@ -10,6 +10,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import kotlin.io.path.createTempDirectory
 import javax.xml.parsers.DocumentBuilderFactory
 import org.w3c.dom.Element
 
@@ -181,6 +182,44 @@ class ShareTest {
         assertEquals("text/plain", shareType("02 TIDE BELL.LRC"))
         assertNull("KJB shares nothing else through its provider", shareType("cover.jpg"))
         assertNull(shareType("lrc"))
+        // And a recap's picture, which KJB drew itself.
+        assertEquals("image/png", shareType("kjb-recap-2026-10.png"))
+    }
+
+    // A recap's picture
+
+    @Test
+    fun `a recap goes as ACTION_SEND of its picture, a PNG with the read grant, the month as the subject`() {
+        val uri = "content://app.lyrify.share/lyrics/1800000000000/kjb-recap-2026-10.png"
+        val request = recapImageShare(uri, "Your October")
+        assertEquals(Intent.ACTION_SEND, request.action)
+        assertEquals("image/png", request.type)
+        assertEquals(listOf(uri), request.streams)
+        assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, request.flags)
+        assertEquals("Your October", request.subject)
+        assertNull(request.text)
+    }
+
+    @Test
+    fun `a recap's picture that could not be made says so in its own words`() {
+        assertTrue(File("src/main/res/values/strings_insights.xml").readText().contains("""<string name="insights_share_failed">Couldn\'t make the picture</string>"""))
+        assertTrue(File("src/main/java/app/lyrify/ui/Share.kt").readText().contains("Shared.NoPicture -> resources.getString(R.string.insights_share_failed)"))
+    }
+
+    @Test
+    fun `a file to share goes in a folder of its own in the cache's share folder, and copies older than a day go`() {
+        val cache = createTempDirectory("kjb-share").toFile()
+        val old = File(cache, "share/1000").apply { mkdirs() }
+        File(old, "kjb-recap-2026-09.png").writeBytes(byteArrayOf(1))
+        old.setLastModified(1_000)
+        val now = 1_000 + 24 * 3_600_000L + 1
+
+        val copy = shareCopy(cache, "kjb-recap-2026-10.png", byteArrayOf(7, 8, 9), now)
+
+        assertEquals(File(cache, "share/$now/kjb-recap-2026-10.png"), copy)
+        assertEquals(listOf<Byte>(7, 8, 9), copy.readBytes().toList())
+        assertFalse(old.exists())
+        cache.deleteRecursively()
     }
 
     // A crash report

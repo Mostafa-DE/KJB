@@ -156,6 +156,9 @@ object Lyrify {
     /** Where the player's play events go: the play counter (milestone S1). */
     fun playEvents(context: Context): PlayEvents = StatsGraph.events(context.applicationContext)
 
+    /** Where a book's play events go instead: the book log, Insights' books (KJB 3.2). */
+    fun bookEvents(context: Context): PlayEvents = StatsGraph.bookEvents(context.applicationContext)
+
     /** Plays per song, for Most played, Recently played and Song info (milestone S1). */
     fun plays(context: Context): PlaysQuery = StatsGraph.plays(context.applicationContext)
 

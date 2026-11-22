@@ -309,15 +309,19 @@ class ChromeTest {
     fun `only the bar's pages carry the logo, every inner page keeps Back and its own title`() {
         val ui = java.io.File("src/main/java/app/lyrify/ui").listFiles { f -> f.extension == "kt" }!!.associate { it.name to it.readText() }
         val uses = ui.mapValues { (_, text) -> Regex("MainTopBar\\(").findAll(text).count() }.filterValues { it > 0 } - "Chrome.kt"
-        // KJB 3.1: Queues, Favourites, Downloads and Books are roots too when the user puts them on the bar.
+        // KJB 3.1: Queues, Favourites, Downloads and Books are roots too when the user puts them on the bar; Insights in
+        // 3.2 (changed on purpose, IN1).
         assertEquals(
-            mapOf("LibraryScreen.kt" to 2, "SearchScreen.kt" to 1, "ToolsScreen.kt" to 1, "QueueScreens.kt" to 1, "CollectionScreens.kt" to 1, "DownloadsScreen.kt" to 1, "BooksScreen.kt" to 1),
+            mapOf(
+                "LibraryScreen.kt" to 2, "SearchScreen.kt" to 1, "ToolsScreen.kt" to 1, "QueueScreens.kt" to 1, "CollectionScreens.kt" to 1, "DownloadsScreen.kt" to 1, "BooksScreen.kt" to 1,
+                "ListeningScreen.kt" to 1,
+            ),
             uses,
         )
         // Each from its root: Library, Playlists, Search and Tools, then the new ones.
         listOf(
             "LibraryScreen.kt" to "DockTab.LIBRARY", "LibraryScreen.kt" to "DockTab.PLAYLISTS", "SearchScreen.kt" to "DockTab.SEARCH", "ToolsScreen.kt" to "DockTab.TOOLS",
-            "QueueScreens.kt" to "DockTab.QUEUES", "DownloadsScreen.kt" to "DockTab.DOWNLOADS", "BooksScreen.kt" to "DockTab.BOOKS",
+            "QueueScreens.kt" to "DockTab.QUEUES", "DownloadsScreen.kt" to "DockTab.DOWNLOADS", "BooksScreen.kt" to "DockTab.BOOKS", "ListeningScreen.kt" to "DockTab.INSIGHTS",
         ).forEach { (file, tab) -> assertTrue("$file $tab", "MainTopBar($tab" in ui.getValue(file)) }
         // The inner pages' bars keep their Back.
         assertTrue(Regex("LyrifyTopBar\\(").findAll(ui.getValue("CollectionScreens.kt") + ui.getValue("SettingsScreen.kt") + ui.getValue("CoversTagsScreen.kt")).count() >= 4)

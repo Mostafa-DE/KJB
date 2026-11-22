@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
+import java.time.YearMonth
 
 /**
  * Everything the user sets in the app from 3.0 on, one section per feature, every field with its default (from
@@ -275,6 +276,8 @@ data class NavSettings(
     val notificationDenials: Int = 0,
     /** Settings' sections the user opened (true) or closed (false) by tapping their titles; the others are as at first. */
     val settingsSections: Map<SettingsSection, Boolean> = emptyMap(),
+    /** The month whose recap card the user opened or closed (Insights, KJB 3.2): the start screen shows it no more. */
+    val recapSeen: YearMonth? = null,
 ) {
     /** Whether Settings shows [section]'s rows: as the user left it, else as [SettingsSection.openAtFirst] says. */
     fun opens(section: SettingsSection): Boolean = settingsSections[section] ?: section.openAtFirst
@@ -288,10 +291,10 @@ enum class SettingsSection(val openAtFirst: Boolean) { PLAYBACK(true), LIBRARY(t
 
 /**
  * What the bottom bar (the dock) can hold, each with its own page stack: Library, Playlists, Search and Tools by default,
- * and Queues, Favourites, Downloads (only with KJB Downloads installed) and Books (only while the library holds a book)
- * when the user puts them there (Settings > Display > Bottom bar).
+ * and Queues, Favourites, Downloads (only with KJB Downloads installed), Books (only while the library holds a book) and
+ * Insights (KJB 3.2) when the user puts them there (Settings > Display > Bottom bar).
  */
-enum class DockTab { LIBRARY, PLAYLISTS, QUEUES, FAVOURITES, DOWNLOADS, BOOKS, SEARCH, TOOLS }
+enum class DockTab { LIBRARY, PLAYLISTS, QUEUES, FAVOURITES, DOWNLOADS, BOOKS, INSIGHTS, SEARCH, TOOLS }
 
 /** Settings > Display. */
 data class DisplaySettings(
@@ -422,6 +425,7 @@ object SettingsJson {
                         "notificationsDenied" to it.notificationsDenied,
                         "notificationDenials" to it.notificationDenials,
                         "settingsSections" to JsonObject(it.settingsSections.entries.associate { (section, open) -> section.name to JsonPrimitive(open) }),
+                        "recapSeen" to it.recapSeen?.toString(),
                     )
                 },
                 "display" to settings.display.let {
@@ -522,6 +526,7 @@ object SettingsJson {
                     notificationsDenied = it.flag("notificationsDenied", d.nav.notificationsDenied),
                     notificationDenials = it.number("notificationDenials", d.nav.notificationDenials) { count -> count >= 0 },
                     settingsSections = (it["settingsSections"] as? JsonObject)?.let(::settingsSections) ?: d.nav.settingsSections,
+                    recapSeen = it["recapSeen"]?.text()?.let { month -> runCatching { YearMonth.parse(month) }.getOrNull() } ?: d.nav.recapSeen,
                 )
             } ?: d.nav,
             display = root.section("display")?.let {

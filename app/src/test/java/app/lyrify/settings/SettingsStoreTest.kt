@@ -15,6 +15,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.time.YearMonth
 import org.junit.rules.TemporaryFolder
 import java.io.File
 
@@ -90,6 +91,7 @@ class SettingsStoreTest {
             lastTab = DockTab.PLAYLISTS,
             favouritesTab = FavouritesTab.ARTISTS,
             settingsSections = mapOf(SettingsSection.LYRICS to true, SettingsSection.PLAYBACK to false),
+            recapSeen = YearMonth.of(2026, 10),
         ),
         display = DisplaySettings(
             theme = ThemeChoice.DARK,
@@ -102,6 +104,7 @@ class SettingsStoreTest {
                 DockItemSetting(DockTab.BOOKS, true),
                 DockItemSetting(DockTab.DOWNLOADS, false),
                 DockItemSetting(DockTab.TOOLS, false),
+                DockItemSetting(DockTab.INSIGHTS, true),
                 DockItemSetting(DockTab.SEARCH, true),
             ),
             dockStyle = DockStyle.SLIM,
@@ -336,6 +339,21 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun `the month whose recap card was opened or closed reads back, none from a file before Insights or a damaged one`() {
+        fun nav(json: String) = SettingsJson.decode("""{"nav":$json}""")?.nav
+
+        assertEquals(YearMonth.of(2026, 10), nav("""{"recapSeen":"2026-10"}""")?.recapSeen)
+        assertNull(nav("""{"lastTab":"TOOLS"}""")?.recapSeen)
+        assertNull(nav("""{"recapSeen":"October"}""")?.recapSeen)
+        assertNull(nav("""{"recapSeen":202610}""")?.recapSeen)
+        assertNull(Settings().nav.recapSeen)
+        assertTrue(""""recapSeen":"2026-10"""" in SettingsJson.encode(changed))
+        // A backup from before Insights, restored over the phone's settings, keeps the month the phone closed (Grok b-ui).
+        val phone = Settings(nav = NavSettings(recapSeen = YearMonth.of(2026, 10)))
+        assertEquals(YearMonth.of(2026, 10), SettingsJson.decode("""{"nav":{"lastTab":"TOOLS"}}""", phone)?.nav?.recapSeen)
+    }
+
+    @Test
     fun `folders to skip keep each folder once, and only folder names`() {
         val s = SettingsJson.decode("""{"library":{"foldersToSkip":["Recordings/Calls",5,"","  ","Recordings/Calls",null,"Music/Voice Notes"]}}""")
 
@@ -509,8 +527,8 @@ class SettingsStoreTest {
             read?.take(4),
         )
         // The items the file does not carry follow, in their default order, on or off as by default.
-        assertEquals(listOf(DockTab.PLAYLISTS, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS), read?.drop(4)?.map { it.tab })
-        assertEquals(listOf(true, false, false, false), read?.drop(4)?.map { it.shown })
+        assertEquals(listOf(DockTab.PLAYLISTS, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS, DockTab.INSIGHTS), read?.drop(4)?.map { it.tab })
+        assertEquals(listOf(true, false, false, false, false), read?.drop(4)?.map { it.shown })
         // Not a list, or nothing in it: the default bar.
         assertEquals(DisplaySettings.DEFAULT_DOCK, dock("""{"tab":"QUEUES"}"""))
         assertEquals(DisplaySettings.DEFAULT_DOCK, dock("[]"))

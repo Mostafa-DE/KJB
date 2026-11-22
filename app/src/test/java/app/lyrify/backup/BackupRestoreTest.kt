@@ -513,18 +513,23 @@ class BackupRestoreTest {
 
     @Test
     fun `a backup is read from every store, a store that cannot be read left out`() = runBlocking {
-        val stores = MemoryStores(BackupFixtures.playlists, BackupFixtures.queues, FakePlayLog(BackupFixtures.plays), BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings, books = BackupFixtures.books)
+        val stores = MemoryStores(
+            BackupFixtures.playlists, BackupFixtures.queues, FakePlayLog(BackupFixtures.plays), BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings,
+            books = BackupFixtures.books, bookLog = FakePlayLog(BackupFixtures.bookPlays),
+        )
 
         assertEquals(
             BackupSnapshot(
                 BackupFixtures.playlists, BackupFixtures.queues, BackupFixtures.plays, BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings,
                 repeat = Repeat.OFF, aiLyrics = false, tones = TonesState(), duplicates = DuplicateChoices(), coversTags = CoversTagsMemory(), keptApart = emptySet(), searches = emptyList(),
-                books = BackupFixtures.books, interactions = emptyList(),
+                books = BackupFixtures.books, interactions = emptyList(), bookPlays = BackupFixtures.bookPlays,
             ),
             stores.snapshot(),
         )
         stores.log.failing = true
         assertEquals(null, stores.snapshot().plays)
         assertEquals(null, stores.snapshot().interactions)
+        stores.bookLog.failing = true
+        assertEquals(null, stores.snapshot().bookPlays)
     }
 }

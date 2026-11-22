@@ -259,6 +259,10 @@ class AppBackupStores(context: Context) : BackupStores {
         if (store.readable) store.change(change)
         store.readable
     }
+
+    override suspend fun bookPlays(): List<LoggedPlay>? = StatsGraph.bookLog(app).all()
+
+    override suspend fun addBookPlays(plays: List<LoggedPlay>): Boolean = StatsGraph.bookLog(app).putAll(plays)
 }
 
 /** Making a backup of the app and reading one back. The log gets counts and section names only. */

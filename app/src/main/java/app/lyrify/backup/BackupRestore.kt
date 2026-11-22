@@ -127,13 +127,19 @@ interface BackupStores {
     suspend fun books(): BookState?
 
     suspend fun updateBooks(change: (BookState) -> BookState): Boolean
+
+    /** The book log's plays (Insights' books). */
+    suspend fun bookPlays(): List<LoggedPlay>?
+
+    /** The book log keeps one play per book file and start, as the play log does. */
+    suspend fun addBookPlays(plays: List<LoggedPlay>): Boolean
 }
 
 /** What every store holds now, for a backup; a store that cannot be read is left out. */
 suspend fun BackupStores.snapshot(): BackupSnapshot = BackupSnapshot(
     playlists(), queues(), plays(), songState(), equalizer(), ledger(), settings(),
     repeat = repeat(), aiLyrics = aiLyrics(), tones = tones(), duplicates = duplicates(), coversTags = coversTags(),
-    keptApart = keptApart(), searches = searches(), books = books(), interactions = interactions(),
+    keptApart = keptApart(), searches = searches(), books = books(), interactions = interactions(), bookPlays = bookPlays(),
 )
 
 
@@ -196,6 +202,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         Section.PLAYLISTS -> contents.playlists?.let { state -> state.playlists.flatMap { it.songs } + state.favouriteSongs }.orEmpty().map { it.path }
         Section.QUEUES -> contents.queues?.queues.orEmpty().flatMap { queue -> queue.items.map { it.song.path } }
         Section.PLAYS -> contents.plays.orEmpty().map { it.song.path }
+        Section.BOOK_PLAYS -> contents.bookPlays.orEmpty().map { it.song.path }
         Section.BOOKMARKS -> contents.bookmarks.orEmpty().map { it.path } + listOfNotNull(contents.part?.path)
         Section.LYRICS -> contents.lyrics?.entries?.keys.orEmpty().toList()
         Section.DUPLICATES -> contents.duplicates?.let { it.notDuplicates + it.reviewed }.orEmpty().flatten()
@@ -260,8 +267,8 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         /** The queues whose songs are here: the one playing, Recent and Saved, with the backup's counters; and Repeat. */
         data class Queues(val book: QueueBook, val repeat: Repeat?) : Prepared
 
-        /** The plays of the songs here, and the interactions ([interactionsHere]). */
-        data class Plays(val plays: List<LoggedPlay>, val interactions: List<Interaction>) : Prepared
+        /** The plays whose songs are here, on them: the play log's with the interactions ([interactionsHere]), or the book log's ([books]). */
+        data class Plays(val plays: List<LoggedPlay>, val interactions: List<Interaction> = emptyList(), val books: Boolean = false) : Prepared
 
         /** Each song's marks with the song they are for on this phone; the usual speed; the part repeating, on its song. */
         data class Bookmarks(val marks: List<Pair<Song, BackupMarks>>, val usual: Speed?, val part: Pair<Song, AbPart>?) : Prepared
@@ -309,7 +316,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             val ids = queues.map { it.id }.toSet()
             Prepared.Queues(book.copy(queues = queues, currentId = book.currentId?.takeIf { it in ids }, recent = book.recent.filter { it in ids }, saved = book.saved.filter { it in ids }), contents.repeat)
         }
-        Section.PLAYS -> Prepared.Plays(checkNotNull(contents.plays).mapNotNull { play -> ref(play.song)?.let { play.copy(song = it) } }, interactionsHere())
+        Section.PLAYS -> Prepared.Plays(here(checkNotNull(contents.plays)), interactionsHere())
         Section.BOOKMARKS -> Prepared.Bookmarks(
             checkNotNull(contents.bookmarks).mapNotNull { marks -> found[marks.path]?.let { it to marks } },
             contents.usualSpeed,
@@ -349,6 +356,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             val marks = state.marks.copy(songs = here(state.marks.songs), notSongs = here(state.marks.notSongs))
             Prepared.Books(BookState(state.books.values.mapNotNull(::matched).associateBy { it.id }, marks))
         }
+        Section.BOOK_PLAYS -> Prepared.Plays(here(checkNotNull(contents.bookPlays)), books = true)
     }
 
     /**
@@ -365,6 +373,9 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             else -> null
         }
     }
+
+    /** [plays] whose songs are on this phone, on them. */
+    private fun here(plays: List<LoggedPlay>): List<LoggedPlay> = plays.mapNotNull { play -> ref(play.song)?.let { play.copy(song = it) } }
 
     /** [queue] with its songs on this phone (each once), its place on the same song; null when none is here. */
     private fun matched(queue: Queue): Queue? {
@@ -413,7 +424,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             counted(written, prepared.book.queues.size)
         }
         // The plays as the summary counted them before the log kept skips: the skips come back, uncounted.
-        is Prepared.Plays -> counted(stores.addPlays(prepared.plays, prepared.interactions), prepared.plays.count { !it.isShort })
+        is Prepared.Plays -> counted(if (prepared.books) stores.addBookPlays(prepared.plays) else stores.addPlays(prepared.plays, prepared.interactions), prepared.plays.count { !it.isShort })
         is Prepared.Bookmarks -> {
             var merged: MergedMarks? = null
             val written = stores.updateSongState { now -> mergeMarks(now, prepared.marks, prepared.usual, prepared.part).also { merged = it }.state }

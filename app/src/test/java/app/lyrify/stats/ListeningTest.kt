@@ -117,19 +117,20 @@ class ListeningTest {
         assertEquals(Instant.parse("2026-11-02T08:00:00Z").toEpochMilli(), week(now, ZoneId.of("America/Los_Angeles"))?.from)
     }
 
+    // Changed on purpose (IN1): Your listening's figures are Insights' now (PlayStats.insights), each play told by its time heard.
     @Test
     fun `last week's figures leave out this week's plays, and so do last month's and last year's`() = runBlocking {
         val stats = stats(
-            play(alder, at("2025-12-31T23:59+01:00[Europe/Berlin]")),
-            play(birch, at("2026-10-31T23:59+01:00[Europe/Berlin]")),
-            play(ember, at("2026-11-08T23:59+01:00[Europe/Berlin]")),
-            play(salt, at("2026-11-09T00:00+01:00[Europe/Berlin]")),
+            play(alder, at("2025-12-31T23:59+01:00[Europe/Berlin]"), heardMs = 100_000),
+            play(birch, at("2026-10-31T23:59+01:00[Europe/Berlin]"), heardMs = 110_000),
+            play(ember, at("2026-11-08T23:59+01:00[Europe/Berlin]"), heardMs = 130_000),
+            play(salt, at("2026-11-09T00:00+01:00[Europe/Berlin]"), heardMs = 170_000),
         )
-        fun songs(period: ListeningPeriod, now: String) = runBlocking { stats.listening(period, at(now), berlin, DayOfWeek.MONDAY).songs.map { it.item } }
+        fun heard(period: ListeningPeriod, now: String) = runBlocking { stats.insights(period, at(now), berlin, DayOfWeek.MONDAY).totals?.heardMs }
 
-        assertEquals(listOf(ember), songs(ListeningPeriod.WEEK, "2026-11-05T15:00+01:00[Europe/Berlin]"))
-        assertEquals(listOf(birch), songs(ListeningPeriod.MONTH, "2026-10-15T15:00+02:00[Europe/Berlin]"))
-        assertEquals(listOf(alder), songs(ListeningPeriod.YEAR, "2025-06-15T15:00+02:00[Europe/Berlin]"))
+        assertEquals(130_000L, heard(ListeningPeriod.WEEK, "2026-11-05T15:00+01:00[Europe/Berlin]"))
+        assertEquals(110_000L, heard(ListeningPeriod.MONTH, "2026-10-15T15:00+02:00[Europe/Berlin]"))
+        assertEquals(100_000L, heard(ListeningPeriod.YEAR, "2025-06-15T15:00+02:00[Europe/Berlin]"))
     }
 
     @Test
@@ -143,14 +144,12 @@ class ListeningTest {
             play(ember, at("2025-12-31T23:30+01:00[Europe/Berlin]")),
         )
 
-        val week = stats.listening(ListeningPeriod.WEEK, now, berlin, DayOfWeek.MONDAY)
-        assertEquals(1, week.plays)
-        assertEquals(135_000, week.heardMs)
-        assertEquals(listOf(alder), week.songs.map { it.item })
+        // Alder's play, and Birch heard without counting: one song played.
+        assertEquals(Totals(heardMs = 135_000, plays = 1, songs = 1, artists = 1, albums = 1), stats.insights(ListeningPeriod.WEEK, now, berlin, DayOfWeek.MONDAY).totals)
 
-        assertEquals(2, stats.listening(ListeningPeriod.MONTH, now, berlin, DayOfWeek.MONDAY).plays)
-        assertEquals(3, stats.listening(ListeningPeriod.YEAR, now, berlin, DayOfWeek.MONDAY).plays)
-        assertEquals(4, stats.listening(ListeningPeriod.ALL_TIME, now, berlin, DayOfWeek.MONDAY).plays)
+        assertEquals(2, stats.insights(ListeningPeriod.MONTH, now, berlin, DayOfWeek.MONDAY).totals?.plays)
+        assertEquals(3, stats.insights(ListeningPeriod.YEAR, now, berlin, DayOfWeek.MONDAY).totals?.plays)
+        assertEquals(4, stats.insights(ListeningPeriod.ALL_TIME, now, berlin, DayOfWeek.MONDAY).totals?.plays)
     }
 
     // Top lists
@@ -227,10 +226,10 @@ class ListeningTest {
     @Test
     fun `with no plays the page is empty, and without a library only the totals are known`() = runBlocking {
         val now = at("2026-11-11T15:00+01:00[Europe/Berlin]")
-        assertEquals(Listening(0, 0, emptyList(), emptyList(), emptyList()), stats().listening(ListeningPeriod.ALL_TIME, now, berlin, DayOfWeek.MONDAY))
+        assertEquals(Insights(totals = null), stats().insights(ListeningPeriod.ALL_TIME, now, berlin, DayOfWeek.MONDAY))
 
-        val noLibrary = stats(play(alder, now - 1_000), library = null).listening(ListeningPeriod.ALL_TIME, now, berlin, DayOfWeek.MONDAY)
-        assertEquals(Listening(120_000, 1, emptyList(), emptyList(), emptyList()), noLibrary)
+        val noLibrary = stats(play(alder, now - 1_000), library = null).insights(ListeningPeriod.ALL_TIME, now, berlin, DayOfWeek.MONDAY)
+        assertEquals(Insights(Totals(120_000, 1, 0, 0, 0)), noLibrary)
     }
 
     // What the library asks
@@ -335,13 +334,14 @@ class ListeningTest {
     }
 
     @Test
-    fun `the short plays change nothing in Your listening, any period`() {
-        val periods = sameWithShort { stats -> ListeningPeriod.entries.map { stats.listening(it, today, berlin, DayOfWeek.MONDAY) } }
-        // All time: alder twice, ember once and once imported; birch only heard.
-        assertEquals(4, periods.last().plays)
-        assertEquals(3 * 120_000L + 40_000L, periods.last().heardMs)
+    fun `the short plays change nothing in Insights, any period`() {
+        val periods = sameWithShort { stats -> ListeningPeriod.entries.map { stats.insights(it, today, berlin, DayOfWeek.MONDAY).totals } }
+        // All time: alder twice, ember once; birch only heard. Changed on purpose (IN1): ember's imported play no longer
+        // counts, as Insights leave an import's plays out.
+        assertEquals(3, periods.last()?.plays)
+        assertEquals(3 * 120_000L + 40_000L, periods.last()?.heardMs)
         // This week: alder and birch on the 10th, ember on the 11th.
-        assertEquals(2, periods.first().plays)
+        assertEquals(2, periods.first()?.plays)
     }
 
     // Last played

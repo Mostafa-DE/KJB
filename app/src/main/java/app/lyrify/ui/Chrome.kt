@@ -240,6 +240,7 @@ val DockTab.label: Int
         DockTab.FAVOURITES -> R.string.nav_favourites
         DockTab.DOWNLOADS -> R.string.nav_downloads
         DockTab.BOOKS -> R.string.nav_books
+        DockTab.INSIGHTS -> R.string.nav_insights
         DockTab.SEARCH -> R.string.nav_search
         DockTab.TOOLS -> R.string.nav_tools
     }
@@ -253,6 +254,7 @@ val DockTab.icon: Int
         DockTab.FAVOURITES -> R.drawable.ic_favorite
         DockTab.DOWNLOADS -> R.drawable.ic_download
         DockTab.BOOKS -> R.drawable.ic_auto_stories
+        DockTab.INSIGHTS -> R.drawable.ic_bar_chart
         DockTab.SEARCH -> R.drawable.ic_search
         DockTab.TOOLS -> R.drawable.ic_handyman
     }

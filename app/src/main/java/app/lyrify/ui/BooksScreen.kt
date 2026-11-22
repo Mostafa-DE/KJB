@@ -156,7 +156,7 @@ fun BooksPage() {
     val nav = LocalNavigator.current
     val ui = rememberLibraryUi() ?: return
     PageFrame(topBar = { under, backdrop -> MainTopBar(DockTab.BOOKS, under, backdrop) }) { padding ->
-        ui.library?.let { BooksTab(it, padding, nav.state.reselectsOf(DockTab.BOOKS)) }
+        ui.library?.let { BooksTab(it, padding, nav.state.reselectsOf(DockTab.BOOKS), inLibrary = false) }
     }
 }
 
@@ -166,7 +166,7 @@ fun BooksPage() {
  * plays from the book's place; a long press offers Start over, Mark finished and Not a book.
  */
 @Composable
-internal fun BooksTab(library: Library, padding: PaddingValues, reselect: Int) {
+internal fun BooksTab(library: Library, padding: PaddingValues, reselect: Int, inLibrary: Boolean) {
     val context = LocalContext.current
     val nav = LocalNavigator.current
     val state = rememberBooks()
@@ -188,6 +188,7 @@ internal fun BooksTab(library: Library, padding: PaddingValues, reselect: Int) {
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        if (inLibrary) recapCard(LibraryTab.BOOKS)
         if (going != null) {
             item(key = "continue heading", span = { GridItemSpan(maxLineSpan) }, contentType = "heading") {
                 Box(rowMotion(reduced)) { BooksHeading(stringResource(R.string.books_continue)) }
