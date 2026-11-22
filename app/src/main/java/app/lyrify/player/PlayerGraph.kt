@@ -177,8 +177,9 @@ class PlayerCore(
     fun switch(move: Move = Move.PICK, change: (QueueBook) -> Switched?) {
         whenReady {
             val switched = change(folded()) ?: return@whenReady
-            _book.value = switched.book
+            // Before the book: the service follows it at once, so the song may start inside the assignment.
             switched.book.current?.current?.let { moved(it.uid, move) }
+            _book.value = switched.book
             if (switched.toRecent) _toRecent.tryEmit(Unit)
         }
     }

@@ -250,6 +250,7 @@ class PlayCounter(
     private suspend fun resume(play: Live, stored: StoredPlay, positionMs: Long) {
         play.resumable = null
         if (abs(positionMs - stored.state.positionMs) > RESUME_SLACK_MS) return stop(stored)
+        // How it began and the time zone then stay as the store first kept them (PlaysSchema.PUT keeps the first).
         play.startedAt = stored.play.startedAt
         play.heard = HeardTime(play.heard.durationMs, stored.play.heardMs, stored.state.spans)
         play.counted = stored.play.counted
