@@ -13,6 +13,7 @@ import java.text.Collator
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
@@ -108,9 +109,10 @@ private fun withoutBooks(totals: List<SongPlays>, library: Library?): List<SongP
     if (library == null || library.books.isEmpty()) totals else totals.filter { total -> library.bookOf(library.resolver.find(total.song)?.path ?: total.song.path) == null }
 
 /** The most plays first, then the latest played. */
-private fun <T> topOrder(): Comparator<Top<T>> = compareByDescending<Top<T>> { it.plays }.thenByDescending { it.lastPlayedAt ?: Long.MIN_VALUE }
+internal fun <T> topOrder(): Comparator<Top<T>> = compareByDescending<Top<T>> { it.plays }.thenByDescending { it.lastPlayedAt ?: Long.MIN_VALUE }
 
-private fun <T> sum(item: T, tops: List<Top<*>>): Top<T> =
+/** [item]'s row: the plays and time of [tops] added up, and the latest of their last plays. */
+internal fun <T> sum(item: T, tops: List<Top<*>>): Top<T> =
     Top(item, tops.sumOf { it.plays }, tops.sumOf { it.heardMs }, tops.mapNotNull { it.lastPlayedAt }.maxOrNull())
 
 /**
@@ -127,12 +129,14 @@ private fun bySong(totals: List<SongPlays>, library: Library, shownOnly: Boolean
 
 /**
  * Plays per song from [store], joined with the [library] of the moment: Most played, Recently played and Song info
- * ([PlaysQuery]), and Your listening. Sorting and joining run on [compute].
+ * ([PlaysQuery]), and Insights with the book log ([books]) and the [favourites]. Sorting and joining run on [compute].
  */
 class PlayStats(
     private val store: PlayLogStore,
     private val library: () -> Library?,
     private val compute: CoroutineDispatcher = Dispatchers.Default,
+    private val books: PlayLogStore? = null,
+    private val favourites: suspend () -> List<SongRef> = { emptyList() },
 ) : PlaysQuery {
     /** The library's songs played most, all time, under their paths now; ties as in [listeningOf]. */
     override suspend fun mostPlayed(limit: Int): List<SongPlays> {
@@ -181,6 +185,26 @@ class PlayStats(
         val bounds = periodOf(period, now, zone, firstDayOfWeek)
         val totals = store.totals(bounds?.from, bounds?.until)
         return withContext(compute) { listeningOf(totals, library()) }
+    }
+
+    /** Insights for [period] as of [now], in the phone's [zone] and with its [firstDayOfWeek], set against the period before. */
+    suspend fun insights(period: ListeningPeriod, now: Long, zone: ZoneId, firstDayOfWeek: DayOfWeek): Insights {
+        val bounds = periodOf(period, now, zone, firstDayOfWeek)
+        return insights(bounds, previousPeriod(period, bounds, zone, firstDayOfWeek), now, zone)
+    }
+
+    /** [month]'s recap: its insights, set against the month before. */
+    suspend fun recap(month: YearMonth, now: Long, zone: ZoneId): Insights = insights(monthPeriod(month, zone), monthPeriod(month.minusMonths(1), zone), now, zone)
+
+    /** The months with a recap ([recapMonths]), the latest first. */
+    suspend fun recaps(now: Long, zone: ZoneId): List<YearMonth> {
+        val plays = store.listened()
+        return withContext(compute) { recapMonths(plays, now, zone) }
+    }
+
+    private suspend fun insights(bounds: Period?, previous: Period?, now: Long, zone: ZoneId): Insights {
+        val data = InsightsData(store.listened(), books?.listened().orEmpty(), store.totals(), favourites())
+        return withContext(compute) { insightsOf(data, bounds, previous, now, zone, library()) }
     }
 
     private fun songPlays(top: Top<Song>): SongPlays = SongPlays(top.item.ref, top.plays, top.lastPlayedAt, top.heardMs)
