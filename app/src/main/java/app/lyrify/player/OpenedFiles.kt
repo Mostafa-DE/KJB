@@ -2,6 +2,7 @@ package app.lyrify.player
 
 import android.content.ContentResolver
 import android.content.Context
+import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
@@ -77,6 +78,30 @@ fun matchNamed(told: Openable, songs: List<Song>): Song? {
 fun openedSong(address: String, songs: List<Song>, told: () -> Openable): Song? {
     val id = mediaStoreAudioId(address) ?: return matchNamed(told(), songs)
     return matchOpened(id, songs)
+}
+
+/**
+ * What the file opened at [address] plays: the library's song ([openedSong]); else, for a `content:` address, its copy
+ * ([copy], under the name the opening app gives); else nothing. [tell] asks the opening app for the file's name and size
+ * once, and only for a `content:` address that needs them.
+ */
+fun openedRef(address: String, songs: List<Song>, tell: (String) -> Openable, copy: (String, String?) -> SongRef?): SongRef? {
+    val content = address.startsWith("content://", ignoreCase = true)
+    val told = lazy { if (content) tell(address) else Openable(null, null) }
+    openedSong(address, songs) { told.value }?.let { return it.ref }
+    return if (content) copy(address, told.value.name) else null
+}
+
+/** [column] of the first row of [row] as a number, found by its name; null without a row, or with the column missing or empty. */
+internal fun firstLong(row: Cursor, column: String): Long? {
+    val at = row.getColumnIndex(column)
+    return if (at >= 0 && row.moveToFirst() && !row.isNull(at)) row.getLong(at) else null
+}
+
+/** [column] of the first row of [row] as text, found by its name; null without a row, or with the column missing or empty. */
+internal fun firstString(row: Cursor, column: String): String? {
+    val at = row.getColumnIndex(column)
+    return if (at >= 0 && row.moveToFirst() && !row.isNull(at)) row.getString(at) else null
 }
 
 /**
@@ -434,14 +459,10 @@ object OpenedFiles {
         val batch = File(folder(context), System.currentTimeMillis().toString())
         var budget = MAX_COPIED_BYTES
         val refs = uris.mapIndexedNotNull { index, address ->
-            val content = address.startsWith("content://", ignoreCase = true)
-            // What the opening app tells of its file, asked once: its name and size find the library's, its name names a copy.
-            val told = lazy { if (content) openable(context.contentResolver, address.toUri()) else Openable(null, null) }
-            openedSong(address, library) { told.value }?.let { return@mapIndexedNotNull it.ref }
-            if (!content) return@mapIndexedNotNull null
-            val uri = address.toUri()
-            val copy = copy(context.contentResolver, uri, File(batch, index.toString()), told.value.name, budget)
-            copy?.also { budget -= it.length() }?.let { plainSong(it, readTags = true) }?.also { song -> held.update { it + (song.path to song) } }?.ref
+            openedRef(address, library, tell = { openable(context.contentResolver, it.toUri()) }) { at, name ->
+                val copy = copy(context.contentResolver, at.toUri(), File(batch, index.toString()), name, budget)
+                copy?.also { budget -= it.length() }?.let { plainSong(it, readTags = true) }?.also { song -> held.update { it + (song.path to song) } }?.ref
+            }
         }
         if (refs.isEmpty()) batch.deleteRecursively()
         if (refs.size < uris.size) Log.w(LOG_TAG, "open: ${uris.size - refs.size} of ${uris.size} files not readable")
@@ -453,9 +474,7 @@ object OpenedFiles {
 
     /** The file's size in bytes as the app that opened it gives it; null when it does not say. */
     private fun size(resolver: ContentResolver, uri: Uri): Long? = try {
-        resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { row ->
-            if (row.moveToFirst() && !row.isNull(0)) row.getLong(0) else null
-        }
+        resolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { firstLong(it, OpenableColumns.SIZE) }
     } catch (e: RuntimeException) {
         Log.w(LOG_TAG, "open: no size for a file (${e.javaClass.simpleName})")
         null
@@ -463,9 +482,7 @@ object OpenedFiles {
 
     /** The file's name as the app that opened it gives it, for the copy's name and the player's title. */
     private fun displayName(resolver: ContentResolver, uri: Uri): String? = try {
-        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { row ->
-            if (row.moveToFirst() && !row.isNull(0)) row.getString(0)?.substringAfterLast('/') else null
-        }
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { firstString(it, OpenableColumns.DISPLAY_NAME) }?.substringAfterLast('/')
     } catch (e: RuntimeException) {
         Log.w(LOG_TAG, "open: no name for a file (${e.javaClass.simpleName})")
         null
