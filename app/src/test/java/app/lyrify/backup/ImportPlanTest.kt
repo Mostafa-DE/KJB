@@ -168,8 +168,9 @@ class ImportPlanTest {
 
         val added = ImportPlan.raised(log, listOf(water to ImportPlays(line(water), 3, lastPlayedAt = LAST)), NOW)
 
-        // KJB counted 1 of them; LAST is taken by its own play, so the new ones go just before it.
-        assertEquals(listOf(LoggedPlay(water.ref, LAST - 1, 0, counted = true), LoggedPlay(water.ref, LAST - 2, 0, counted = true)), added)
+        // KJB counted 1 of them; LAST is taken by its own play, so the new ones go just before it. Each is marked as an
+        // import's (LG1: changed on purpose), so nothing takes it for a play heard on this phone.
+        assertEquals(listOf(LoggedPlay(water.ref, LAST - 1, 0, counted = true, imported = true), LoggedPlay(water.ref, LAST - 2, 0, counted = true, imported = true)), added)
     }
 
     @Test
@@ -179,7 +180,7 @@ class ImportPlanTest {
         val added = ImportPlan.raised(log, listOf(road to ImportPlays(line(road), 2), lantern to ImportPlays(line(lantern), 1), lantern to ImportPlays(gone, 2, lastPlayedAt = NOW + 999_999)), NOW)
 
         // Road has 5 here against 2 there: nothing. A last play in the future is not believed.
-        assertEquals(listOf(LoggedPlay(lantern.ref, NOW, 0, counted = true), LoggedPlay(lantern.ref, NOW - 1, 0, counted = true)), added)
+        assertEquals(listOf(LoggedPlay(lantern.ref, NOW, 0, counted = true, imported = true), LoggedPlay(lantern.ref, NOW - 1, 0, counted = true, imported = true)), added)
     }
 
     @Test
@@ -205,7 +206,7 @@ class ImportPlanTest {
         assertEquals(1, stores.writes)
         assertEquals(listOf(Playlist("mine", "Evening", listOf(water.ref, bell.ref), 1), Playlist("p1", UNTITLED, listOf(lantern.ref), NOW)), stores.state.playlists)
         assertEquals(listOf(road.ref), stores.state.favouriteSongs)
-        assertEquals(listOf(LoggedPlay(road.ref, LAST - 1, 0, true), LoggedPlay(road.ref, LAST, 0, true)), stores.log.plays.sortedBy { it.startedAt })
+        assertEquals(listOf(LoggedPlay(road.ref, LAST - 1, 0, true, imported = true), LoggedPlay(road.ref, LAST, 0, true, imported = true)), stores.log.plays.sortedBy { it.startedAt })
         assertEquals(ImportOutcome(created = 1, extended = 1, songsAdded = 1, favouritesAdded = 1, countsRaised = 1, undo = outcome.undo), outcome)
         assertEquals(2, outcome.playlists)
     }

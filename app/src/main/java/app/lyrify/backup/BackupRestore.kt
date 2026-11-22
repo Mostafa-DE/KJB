@@ -382,7 +382,8 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             if (queued && !written) before?.let { book -> stores.updateQueues { book } }
             counted(written, prepared.book.queues.size)
         }
-        is Prepared.Plays -> counted(stores.addPlays(prepared.plays), prepared.plays.size)
+        // The plays as the summary counted them before the log kept skips: the skips come back, uncounted.
+        is Prepared.Plays -> counted(stores.addPlays(prepared.plays), prepared.plays.count { !it.isShort })
         is Prepared.Bookmarks -> {
             var merged: MergedMarks? = null
             val written = stores.updateSongState { now -> mergeMarks(now, prepared.marks, prepared.usual, prepared.part).also { merged = it }.state }

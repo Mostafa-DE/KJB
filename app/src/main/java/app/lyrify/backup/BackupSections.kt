@@ -5,6 +5,10 @@ import app.lyrify.player.AbPart
 import app.lyrify.player.SongState
 import app.lyrify.player.Speed
 import app.lyrify.stats.LoggedPlay
+import app.lyrify.stats.codeOf
+import app.lyrify.stats.playEndedOf
+import app.lyrify.stats.playStartOf
+import app.lyrify.stats.zoneOffsetOf
 import app.lyrify.tags.CoversTagsMemory
 import app.lyrify.tags.NameKind
 import app.lyrify.tags.NamePair
@@ -74,24 +78,59 @@ data class BackupCovers(val albums: List<BackupAlbum>, val checkedOnce: Boolean,
 internal object SectionJson {
     // Plays
 
+    /**
+     * Every play with what it keeps, a key for each part it has; the skips ([LoggedPlay.isShort]) apart, under a key of
+     * their own that 3.1.0 does not read, so it restores the plays it knew and none it never kept. No key marks an
+     * import's play: its shape does (nothing heard, counted), as `plays.db`'s own upgrade finds them.
+     */
     fun plays(plays: List<LoggedPlay>): String = JsonObject(
-        mapOf(
-            PLAYS_KEY to JsonArray(
-                plays.map { play ->
-                    JsonObject(mapOf(PATH_KEY to JsonPrimitive(play.song.path), STARTED_AT_KEY to JsonPrimitive(play.startedAt), HEARD_KEY to JsonPrimitive(play.heardMs), COUNTED_KEY to JsonPrimitive(play.counted)))
-                },
-            ),
-        ),
+        mapOf(PLAYS_KEY to JsonArray(plays.filterNot { it.isShort }.map(::play)), SKIPS_KEY to JsonArray(plays.filter { it.isShort }.map(::play))),
     ).toString()
 
-    /** The plays, each read on its own: one without a path or a start is left out. */
-    fun plays(text: String): List<LoggedPlay>? = (jsonObject(text)?.get(PLAYS_KEY) as? JsonArray)?.mapNotNull { element ->
-        val play = element as? JsonObject ?: return@mapNotNull null
-        LoggedPlay(
-            song = SongRef(play.text(PATH_KEY)?.takeIf(String::isNotEmpty) ?: return@mapNotNull null),
-            startedAt = play.long(STARTED_AT_KEY)?.takeIf { it > 0 } ?: return@mapNotNull null,
-            heardMs = play.long(HEARD_KEY)?.coerceAtLeast(0) ?: 0,
-            counted = play.flag(COUNTED_KEY) ?: false,
+    private fun play(play: LoggedPlay): JsonObject = JsonObject(
+        buildMap {
+            put(PATH_KEY, JsonPrimitive(play.song.path))
+            put(STARTED_AT_KEY, JsonPrimitive(play.startedAt))
+            put(HEARD_KEY, JsonPrimitive(play.heardMs))
+            put(COUNTED_KEY, JsonPrimitive(play.counted))
+            play.start?.let { start ->
+                put(STARTED_BY_KEY, JsonPrimitive(codeOf(start.by)))
+                start.source?.let { put(SOURCE_KEY, JsonPrimitive(codeOf(it))) }
+                put(SHUFFLED_KEY, JsonPrimitive(start.shuffled))
+                start.songKey?.let { put(SONG_KEY_KEY, JsonPrimitive(it)) }
+            }
+            play.zoneOffsetMinutes?.let { put(ZONE_KEY, JsonPrimitive(it)) }
+            play.end?.let { end ->
+                put(ENDED_KEY, JsonPrimitive(codeOf(end.how)))
+                put(ENDED_AT_KEY, JsonPrimitive(end.atMs))
+            }
+        },
+    )
+
+    /**
+     * The plays, then the skips (none in a backup from before), each read on its own: one without a path or a start is
+     * left out, and so is a skip that is none. What a play keeps is read as `plays.db` reads it ([playStartOf],
+     * [playEndedOf], [zoneOffsetOf]); one with nothing heard that counted is an import's.
+     */
+    fun plays(text: String): List<LoggedPlay>? {
+        val root = jsonObject(text) ?: return null
+        val plays = (root[PLAYS_KEY] as? JsonArray ?: return null).mapNotNull(::play)
+        return plays + (root[SKIPS_KEY] as? JsonArray).orEmpty().mapNotNull(::play).filter { it.isShort }
+    }
+
+    private fun play(element: JsonElement): LoggedPlay? {
+        val play = element as? JsonObject ?: return null
+        val heardMs = play.long(HEARD_KEY)?.coerceAtLeast(0) ?: 0
+        val counted = play.flag(COUNTED_KEY) ?: false
+        return LoggedPlay(
+            song = SongRef(play.text(PATH_KEY)?.takeIf(String::isNotEmpty) ?: return null),
+            startedAt = play.long(STARTED_AT_KEY)?.takeIf { it > 0 } ?: return null,
+            heardMs = heardMs,
+            counted = counted,
+            start = playStartOf(play.text(STARTED_BY_KEY), play.text(SOURCE_KEY), play.flag(SHUFFLED_KEY), play.text(SONG_KEY_KEY)),
+            zoneOffsetMinutes = zoneOffsetOf(play.long(ZONE_KEY)),
+            end = playEndedOf(play.text(ENDED_KEY), play.long(ENDED_AT_KEY)),
+            imported = counted && heardMs == 0L,
         )
     }
 
@@ -313,6 +352,14 @@ internal object SectionJson {
     private const val STARTED_AT_KEY: String = "startedAt"
     private const val HEARD_KEY: String = "heardMs"
     private const val COUNTED_KEY: String = "counted"
+    private const val SKIPS_KEY: String = "skips"
+    private const val STARTED_BY_KEY: String = "startedBy"
+    private const val SOURCE_KEY: String = "source"
+    private const val SHUFFLED_KEY: String = "shuffled"
+    private const val SONG_KEY_KEY: String = "songKey"
+    private const val ZONE_KEY: String = "zoneOffset"
+    private const val ENDED_KEY: String = "ended"
+    private const val ENDED_AT_KEY: String = "endedAtMs"
     private const val PLACE_KEY: String = "placeMs"
     private const val BOOKMARKS_KEY: String = "bookmarks"
     private const val POSITION_KEY: String = "positionMs"
