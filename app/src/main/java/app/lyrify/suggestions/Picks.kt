@@ -467,7 +467,8 @@ fun autoplay(taste: Taste, library: Library, mix: Mix, queue: List<Song>, avoid:
     return listOfNotNull(first) + picks
 }
 
-const val AUTOPLAY_SONGS: Int = 5
+/** Autoplay's batch: this many songs once the queue's own end, the next batch only when its last song plays (user 2026-11-22). */
+const val AUTOPLAY_SONGS: Int = 20
 
 /** A song of the queue after the one playing, and whether a suggestion put it there. */
 data class Upcoming(val song: Song, val suggested: Boolean)
@@ -494,7 +495,8 @@ fun smartInserts(taste: Taste, library: Library, mix: Mix, playing: Song?, upcom
             return@forEachIndexed
         }
         run++
-        val waiting = window.subList(i + 1, min(window.size, i + 1 + gap)).any { it.suggested }
+        // A suggestion waiting just past the window counts too: the window moves on a song at a time.
+        val waiting = upcoming.subList(i + 1, min(upcoming.size, i + 1 + gap)).any { it.suggested }
         if (run >= gap && !waiting) {
             slots += i
             run = 0

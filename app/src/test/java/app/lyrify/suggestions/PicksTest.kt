@@ -231,7 +231,8 @@ class PicksTest {
         val withFollows = Taste.of(plays, library, emptyMap(), now, amman)
         val queue = (0 until 5).map { of(2, 0, it) }
         val picks = autoplay(withFollows, library, startOf(Adventure.MIX), queue, queue.map { it.path }.toSet(), Random(3), amman)
-        assertEquals(5, picks.size)
+        // A whole batch (user 2026-11-22: 20, was 5).
+        assertEquals(AUTOPLAY_SONGS, picks.size)
         assertEquals(Pick(next, Bucket.FAMILIAR, Reason.Follows(last)), picks.firstOrNull())
         assertTrue(picks.none { it.song in queue })
         assertFresh(picks, before = queue)

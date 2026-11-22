@@ -216,6 +216,52 @@ class SuggestionsTest {
     }
 
     @Test
+    fun `Autoplay adds one batch of 20 when the queue's own songs end, nothing while it plays, and a fresh 20 only when its last song plays`() = runBlocking {
+        // A library with room for two batches; songs 0 to 59 are the ones the log has plays of.
+        val big = Library.of(
+            (0 until 150).map { n -> song("Music/Artist ${n % 12}/Song $n.mp3", title = "Song $n", artist = "Artist ${n % 12}", album = "Album ${n % 12}", genre = "Genre ${n % 3}", id = n + 1L, addedAt = 1L) },
+            Settings(),
+        )
+        val service = Suggestions(log, { big }, { emptyMap() }, settings, null, clock = { now }, zone = { amman }, compute = Dispatchers.Unconfined, random = Random(7))
+        var book = queueOf(1, 2, 3, start = 2)
+        val first = service.feed(book.current!!, Repeat.OFF, autoplay = true).single()
+        assertEquals(Suggested.AUTOPLAY, first.by)
+        assertEquals(20, AUTOPLAY_SONGS)
+        assertEquals(AUTOPLAY_SONGS, first.songs.size)
+        book = book.suggest(first.queueId, first.songs, first.by)
+        // While the batch plays, nothing more: Up next holds at most what is left of it.
+        (3 until 3 + AUTOPLAY_SONGS - 1).forEach { at ->
+            book = book.jump(book.current!!.id, at, now).book
+            assertEquals("at $at", emptyList<Feed>(), service.feed(book.current!!, Repeat.OFF, autoplay = true))
+        }
+        // Its last song playing: the next batch of 20, none of them queued before (the queue's own or the first batch).
+        book = book.jump(book.current!!.id, 3 + AUTOPLAY_SONGS - 1, now).book
+        val next = service.feed(book.current!!, Repeat.OFF, autoplay = true).single()
+        assertEquals(AUTOPLAY_SONGS, next.songs.size)
+        assertTrue(next.songs.all { it.first == book.current!!.items.last().uid })
+        assertTrue(next.songs.none { (_, song) -> book.current!!.items.any { it.song.path == song.path } })
+        assertEquals(AUTOPLAY_SONGS, book.suggest(next.queueId, next.songs, next.by).current!!.items.drop(3 + AUTOPLAY_SONGS).size)
+    }
+
+    @Test
+    fun `Smart shuffle mixes about 1 in 3 into the queue's own songs however often it runs, and never into Autoplay's batch`() = runBlocking {
+        val service = suggestions(file = null)
+        var book = queueOf(*IntArray(12) { it }).cycleShuffle(Random(1)).cycleShuffle(Random(1))
+        // As the playback service runs it: after every change, at every song, through the queue's own songs into Autoplay.
+        repeat(40) {
+            repeat(2) { service.feed(book.current!!, Repeat.OFF, autoplay = true).forEach { book = book.suggest(it.queueId, it.songs, it.by) } }
+            if (book.current!!.index < book.current!!.items.lastIndex) book = book.jump(book.current!!.id, book.current!!.index + 1, now).book
+        }
+        val items = book.current!!.items
+        // About 1 in 3 of the queue's own songs, never two suggestions in a row, none among Autoplay's songs.
+        assertTrue(items.joinToString { "${it.suggested}" }, items.count { it.suggested == Suggested.SMART_SHUFFLE } <= 12 / (service.mix().oneIn - 1))
+        assertTrue(items.joinToString { "${it.suggested}" }, items.zipWithNext().none { (before, after) -> before.suggested != null && after.suggested == Suggested.SMART_SHUFFLE })
+        // Up next holds at most one batch of Autoplay.
+        assertTrue(items.drop(book.current!!.index + 1).count { it.suggested == Suggested.AUTOPLAY } <= AUTOPLAY_SONGS)
+        assertTrue(items.any { it.suggested == Suggested.AUTOPLAY })
+    }
+
+    @Test
     fun `a book's queue never gets Autoplay`() = runBlocking {
         val book = QueueBook().play(listOf(songs[1].ref), 0, QueueSource(SourceKind.BOOK, "book", "A book"), now).book
         assertTrue(suggestions(file = null).feed(book.current!!, Repeat.OFF, autoplay = true).isEmpty())
