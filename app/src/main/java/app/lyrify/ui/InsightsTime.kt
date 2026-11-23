@@ -100,8 +100,7 @@ import kotlinx.coroutines.flow.first
 @Composable
 internal fun YourTime(time: TimeCard, period: PagePeriod, onShare: () -> Unit) {
     val nav = LocalNavigator.current
-    val moves = huddleMoves()
-    val drift = if (moves) rememberInfiniteTransition(label = "glows") else null
+    val drift = if (huddleMoves()) rememberInfiniteTransition(label = "glows") else null
     val g1 = drift?.animateFloat(0f, 1f, infiniteRepeatable(tween(GLOW_1_MS, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "g1")
     val g2 = drift?.animateFloat(0f, 1f, infiniteRepeatable(tween(GLOW_2_MS, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "g2")
     val g3 = drift?.animateFloat(1f, 0f, infiniteRepeatable(tween(GLOW_3_MS, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "g3")

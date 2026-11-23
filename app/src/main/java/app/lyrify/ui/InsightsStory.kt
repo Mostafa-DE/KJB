@@ -136,8 +136,8 @@ class StoryState(val slides: List<StorySlide>) {
         at = (at - 1).coerceAtLeast(0)
     }
 
-    /** Whether the bar runs: not paused or held, and not waiting for the quiz's answer. */
-    fun runs(): Boolean = !paused && !held && storyMs(slide, at == slides.lastIndex, answer != null) != null
+    /** Whether the bar runs: animations on ([reduced] false), not paused or held, and not waiting for the quiz's answer. */
+    fun runs(reduced: Boolean = false): Boolean = !reduced && !paused && !held && storyMs(slide, at == slides.lastIndex, answer != null) != null
 }
 
 /**
@@ -154,10 +154,10 @@ internal fun StoryFrame(title: String, state: StoryState, onClose: () -> Unit, c
     val answered = state.answer != null
     // A new slide, or the quiz answered: its bar starts again, then runs while nothing holds it.
     LaunchedEffect(state.at, answered) { fill.snapTo(if (reduced) 1f else 0f) }
-    val runs = state.runs()
-    LaunchedEffect(state.at, answered, runs, reduced) {
+    val runs = state.runs(reduced)
+    LaunchedEffect(state.at, answered, runs) {
         val ms = storyMs(state.slide, state.at == state.slides.lastIndex, answered) ?: return@LaunchedEffect
-        if (reduced || !runs) return@LaunchedEffect
+        if (!runs) return@LaunchedEffect
         fill.animateTo(1f, tween(((1f - fill.value) * ms).toInt(), easing = LinearEasing))
         if (!state.next()) onClose()
     }
@@ -281,12 +281,21 @@ fun StoryView(view: FullScreen.Story) {
     Box(Modifier.fillMaxSize().background(HuddleCardShade)) {
         val shown = state ?: return@Box
         page ?: return@Box
+        // Nothing heard in it: there is no story, so it closes.
+        if (shown.slides.isEmpty()) {
+            LaunchedEffect(Unit) { close() }
+            return@Box
+        }
         StoryFrame(storyName(page.period), shown, close) { slide -> Slide(slide, page, settings, shown) }
     }
 }
 
-/** The slides a page has enough for, in the mockup's order: the intro, then each that has its card, then the picture. */
+/**
+ * The slides a page has enough for, in the mockup's order: the intro, then each that has its card, then the picture;
+ * none at all without any time heard.
+ */
 fun storySlides(cards: InsightsCards): List<StorySlide> = buildList {
+    if (cards.time == null) return@buildList
     add(StorySlide.INTRO)
     if (cards.time != null) add(StorySlide.TIME)
     val songs = cards.songs?.rows.orEmpty()

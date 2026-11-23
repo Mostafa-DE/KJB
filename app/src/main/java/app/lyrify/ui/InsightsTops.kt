@@ -461,7 +461,9 @@ data class Bubble(val index: Int, val x: Float, val y: Float, val radius: Float)
 /**
  * Bubbles for [shares] (percent, the largest first) in a [width] by [height] box: each sized by the square root of its
  * share of the first (from [smallest] to [largest] across), placed at the free spot nearest the middle (the box's width
- * counting less), [gap] apart; one with no room left out.
+ * counting less), [gap] apart. When one finds no room, all of them are drawn a little smaller and placed again, so
+ * every genre shows (the mockup's packing left some out at a phone's width); at the smallest, one with no room is left
+ * out (TalkBack still reads it).
  */
 fun packBubbles(shares: List<Int>, width: Float, height: Float, smallest: Float, largest: Float, gap: Float): List<Bubble> {
     if (shares.isEmpty() || width <= 0f || height <= 0f) return emptyList()
@@ -478,14 +480,21 @@ fun packBubbles(shares: List<Int>, width: Float, height: Float, smallest: Float,
         }
     }.sortedBy { it.third }
     val top = shares.first().coerceAtLeast(1)
-    val placed = mutableListOf<Bubble>()
-    shares.forEachIndexed { i, share ->
-        val r = max(smallest, sqrt(share.toFloat() / top) * largest)
-        spots.firstOrNull { (x, y) -> x - r >= 0 && x + r <= width && y - r >= 0 && y + r <= height && placed.all { hypot(it.x - x, it.y - y) >= it.radius + r + gap } }
-            ?.let { (x, y) -> placed += Bubble(i, x, y, r) }
+    fun place(scale: Float): List<Bubble> {
+        val placed = mutableListOf<Bubble>()
+        shares.forEachIndexed { i, share ->
+            val r = max(smallest, sqrt(share.toFloat() / top) * largest) * scale
+            spots.firstOrNull { (x, y) -> x - r >= 0 && x + r <= width && y - r >= 0 && y + r <= height && placed.all { hypot(it.x - x, it.y - y) >= it.radius + r + gap } }
+                ?.let { (x, y) -> placed += Bubble(i, x, y, r) }
+        }
+        return placed
     }
-    return placed
+    return generateSequence(1f) { it - BUBBLE_SHRINK }.takeWhile { it >= BUBBLE_SMALLEST_SCALE - 0.001f }.map(::place).firstOrNull { it.size == shares.size } ?: place(BUBBLE_SMALLEST_SCALE)
 }
+
+/** Bubbles that do not all fit shrink by a tenth at a time, to 60% at the least. */
+private const val BUBBLE_SHRINK = 0.1f
+private const val BUBBLE_SMALLEST_SCALE = 0.6f
 
 // How you listen
 
