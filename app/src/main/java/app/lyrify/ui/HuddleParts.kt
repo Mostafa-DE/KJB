@@ -492,10 +492,10 @@ internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlon
 
 /**
  * A card a friend sent, as a postcard (Sent to you): their note in big type, the song's cover as the stamp (yours, else
- * their colour's pattern), then [from]'s face and who sent it ([line]: "From Wren", "From you"), the song (and its
- * length, [lengthMs], on a song's card), whether you have it ([have], or [some] of a list; a card you sent that never got
- * there, [undelivered], says so there instead) and a play button. Tilted a little, [tilt] degrees. A tap opens the card;
- * the play button plays it (or opens it, when it is not here).
+ * their colour's pattern), then [from]'s face and who sent it ([line]: "From Wren", "From you"), the song (and under it
+ * its length, [lengthMs], on a song's card), whether you have it ([have], or [some] of a list; a card you sent that
+ * never got there, [undelivered], says so there instead) and a play button. Tilted a little, [tilt] degrees. A tap
+ * opens the card; the play button plays it (or opens it, when it is not here).
  */
 @Composable
 internal fun Postcard(
@@ -569,10 +569,8 @@ internal fun Postcard(
                     Text(line, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), color = lerp(color, colors.onSurface, 0.38f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     if (fresh) NewMark()
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(title, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                    SongLength(lengthMs)
-                }
+                Text(title, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                SongLength(lengthMs)
                 if (undelivered) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
                         Icon(painterResource(R.drawable.ic_error), contentDescription = null, tint = colors.error, modifier = Modifier.size(14.dp))

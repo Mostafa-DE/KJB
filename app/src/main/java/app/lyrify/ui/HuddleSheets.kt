@@ -137,7 +137,7 @@ internal fun SendToFriendSheet(songs: List<Song>, kind: CardKind, name: String?,
     val friends = sendOrder(state.friends).filter { to == null || it.id == to }
     LyrifySheet(onDismiss = onDismiss, spacing = 12.dp) {
         Text(friends.singleOrNull()?.takeIf { to != null }?.let { stringResource(R.string.huddle_send_to, it.shownName) } ?: stringResource(R.string.huddle_send), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column {
             Text(
                 when (kind) {
                     CardKind.SONG -> listOfNotNull(first.title, first.artist).joinToString(" · ")
@@ -148,7 +148,6 @@ internal fun SendToFriendSheet(songs: List<Song>, kind: CardKind, name: String?,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
             )
             if (kind == CardKind.SONG) SongLength(first.durationMs)
         }
@@ -441,8 +440,8 @@ internal fun localSong(song: Song): String = listOfNotNull(song.title, song.arti
 
 /**
  * A song of an album or playlist a friend sent: how it was found here (an icon, read by TalkBack with the song), its title
- * and artist, its length at the end, and what to do: "Is this it?" for a loose match not answered yet, Get it for one not
- * here.
+ * and artist, its length under them, and what to do: "Is this it?" for a loose match not answered yet, Get it for one
+ * not here.
  */
 @Composable
 private fun CardSongRow(song: CardSong, match: Match?, said: Boolean?, onAsk: () -> Unit, onGetIt: () -> Unit) {
@@ -464,8 +463,10 @@ private fun CardSongRow(song: CardSong, match: Match?, said: Boolean?, onAsk: ()
             modifier = Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = description },
         ) {
             icon?.let { Icon(painterResource(it), contentDescription = null, tint = if (here) LocalBrandColors.current.suggestion else colors.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
-            Text(line, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            SongLength(song.durationMs)
+            Column {
+                Text(line, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                SongLength(song.durationMs)
+            }
         }
         when {
             unsure -> LyrifyButton(stringResource(R.string.huddle_maybe_title), onClick = onAsk, kind = ButtonKind.GHOST, compact = true)

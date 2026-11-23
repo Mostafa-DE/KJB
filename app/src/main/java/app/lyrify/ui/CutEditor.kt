@@ -296,7 +296,7 @@ private fun CutEditor(song: Song, files: CutFiles, player: TonePlayer, onSaved: 
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(vertical = 8.dp),
             ) {
-                EditorSongHeader(song.path, song.title, song.artist?.takeIf { TrackNames.cleanArtist(it) != null } ?: stringResource(R.string.check_no_artist))
+                EditorSongHeader(song.path, song.title, song.artist?.takeIf { TrackNames.cleanArtist(it) != null } ?: stringResource(R.string.check_no_artist), song.durationMs)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = ScreenPadding)) {
                     CutWaveform(
                         peaks = peaks,
