@@ -29,9 +29,10 @@ import java.security.SecureRandom
  * blocks.
  *
  * What the player does now goes to [now] ([Huddle.listening]) as it changes: a play or a resume, a pause, another song,
- * a seek, a stop (KJB closed, or the queue emptied), and every [HEARTBEAT_MS] while it plays, from the place the player
- * reports every few seconds. An end that is no stop tells nothing: the next song's start follows in the same instant,
- * and at the queue's end friends let the song go once it is over.
+ * a seek, the end of the play friends see, and every [HEARTBEAT_MS] while it plays, from the place the player reports
+ * every few seconds. An end tells friends it stopped: after a skip the next song's state follows in the same instant and
+ * replaces it, after a switch to a book (whose plays never come here) or the queue's end it stands. A pause friends did
+ * not see playing (a song KJB opened with, the queue's first waiting after it ended) tells nothing.
  */
 class SharedPlays(private val share: (path: String, at: Long) -> Unit, private val now: (path: String, state: NowState, positionMs: Long, at: Long) -> Unit) : PlayEvents {
     private class Waiting(val path: String, val at: Long, val afterMs: Long, val heard: HeardTime)
@@ -54,8 +55,10 @@ class SharedPlays(private val share: (path: String, at: Long) -> Unit, private v
             is PlayEvent.Position -> {
                 val state = if (event.playing) NowState.PLAYING else NowState.PAUSED
                 val last = told
-                // Another song, a play or a pause, or a minute playing since friends were told.
-                if (last == null || last.playId != event.playId || last.state != state || (event.playing && event.at - last.at >= HEARTBEAT_MS)) {
+                // Another song, a play or a pause, or a minute playing since friends were told; paused, only while friends see you.
+                if ((event.playing || (last != null && last.state != NowState.STOPPED)) &&
+                    (last == null || last.playId != event.playId || last.state != state || (event.playing && event.at - last.at >= HEARTBEAT_MS))
+                ) {
                     tell(event.playId, event.song.path, state, event.positionMs, event.at)
                 }
                 val play = waiting[event.playId] ?: return
@@ -71,7 +74,15 @@ class SharedPlays(private val share: (path: String, at: Long) -> Unit, private v
             }
             is PlayEvent.Ended -> {
                 waiting.remove(event.playId)
-                if (event.how == PlayEnd.STOPPED && told.let { it != null && it.state != NowState.STOPPED }) tell(event.playId, event.song.path, NowState.STOPPED, event.positionMs, event.at)
+                val last = told
+                if (last != null && last.playId == event.playId && last.state != NowState.STOPPED) {
+                    // After a skip friends still see you: a pause shows on the next song. After the queue's end or a stop, nothing does.
+                    if (event.how == PlayEnd.FINISHED || event.how == PlayEnd.STOPPED) {
+                        tell(event.playId, event.song.path, NowState.STOPPED, event.positionMs, event.at)
+                    } else {
+                        now(event.song.path, NowState.STOPPED, event.positionMs, event.at)
+                    }
+                }
             }
         }
     }
@@ -125,11 +136,12 @@ object HuddleGraph {
 
     /**
      * The song at [path] as friends get it, and whether it is a favourite: music only (no audiobook, podcast or book), its
-     * tags as the library reads them. Null for no song, and when no friend gets your plays (nothing is read then).
+     * tags as the library reads them, once it is read (the player can start first). Null for no song, and when no friend
+     * gets your plays (nothing is read then).
      */
     private suspend fun shared(context: Context, path: String): Pair<CardSong, Boolean>? {
         if (huddle(context).state.first().friends.none { it.sharePlays }) return null
-        val library = (LibraryGraph.repository(context).state.value as? LibraryState.Ready)?.library ?: return null
+        val library = (LibraryGraph.repository(context).state.first { it !is LibraryState.Loading } as? LibraryState.Ready)?.library ?: return null
         val song = library.song(path) ?: return null
         // A book's part the user marked can start before the player had the library: its play is no song's.
         if (song.isAudiobook || song.isPodcast || library.bookOf(path) != null) return null
