@@ -7,6 +7,7 @@ import app.lyrify.library.VOLUME
 import app.lyrify.library.song
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.Settings
+import app.lyrify.suggestions.FriendPlay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -70,13 +71,29 @@ class InsightsPageTest {
         library: Library? = this.library,
         calendar: PhoneCalendar = ammanCalendar,
         now: Long = this.now,
-    ): InsightsPage = runBlocking { stats(plays, books, library).page(period, now, calendar) }
+        interactions: List<Interaction> = emptyList(),
+        sources: PageSources = PageSources(),
+        favourites: List<SongRef> = emptyList(),
+    ): InsightsPage = runBlocking { stats(plays, books, library, interactions, sources, favourites).page(period, now, calendar) }
 
-    private fun recap(plays: List<LoggedPlay>, month: YearMonth, calendar: PhoneCalendar = ammanCalendar): InsightsPage =
-        runBlocking { stats(plays, emptyList(), library).page(month, now, calendar) }
+    private fun recap(plays: List<LoggedPlay>, month: YearMonth, calendar: PhoneCalendar = ammanCalendar, sources: PageSources = PageSources()): InsightsPage =
+        runBlocking { stats(plays, emptyList(), library, sources = sources).page(month, now, calendar) }
 
-    private fun stats(plays: List<LoggedPlay>, books: List<LoggedPlay>, library: Library?) =
-        PlayStats(FakePlayLog(plays.sortedBy { it.startedAt }), { library }, Dispatchers.Unconfined, books = FakePlayLog(books))
+    private fun stats(
+        plays: List<LoggedPlay>,
+        books: List<LoggedPlay>,
+        library: Library?,
+        interactions: List<Interaction> = emptyList(),
+        sources: PageSources = PageSources(),
+        favourites: List<SongRef> = emptyList(),
+    ) = PlayStats(
+        FakePlayLog(plays.sortedBy { it.startedAt }, interactions),
+        { library },
+        Dispatchers.Unconfined,
+        books = FakePlayLog(books),
+        favourites = { favourites },
+        sources = { from -> sources.copy(friendPlays = sources.friendPlays.filter { from == null || it.at >= from }) },
+    )
 
     /** [card], which must show. */
     private fun <T : Any> shown(card: T?): T {
@@ -577,6 +594,104 @@ class InsightsPageTest {
             page(night + day + album, ListeningPeriod.ALL_TIME).cards.traits,
         )
         assertEquals(emptyList<Trait>(), page(night.take(9)).cards.traits)
+    }
+
+    // Read along, new favourites, your searches
+
+    private fun lyrics(song: Song, at: Long) = Interaction(at, InteractionKind.LYRICS, 180, Target(TargetKind.SONG, song.path))
+
+    private fun search(words: String?, at: Long, target: Target? = null) = Interaction(at, InteractionKind.SEARCH, 180, target, words)
+
+    @Test
+    fun `read along counts the times you turned to lyrics, the song read most, and the plays of songs with synced lyrics`() {
+        val plays = plays(copper, 5, nov(3)) + plays(harbour, 5, nov(4))
+        val opened = listOf(lyrics(harbour, nov(4, "08:00")), lyrics(harbour, nov(5)), lyrics(copper, nov(6)), lyrics(harbour, nov(7)), lyrics(copper, oct(3)), lyrics(copper, oct(4)))
+
+        val card = page(plays, interactions = opened, sources = PageSources(synced = setOf(harbour.path))).cards.lyrics
+
+        assertEquals(LyricsCard(opened = 4, most = harbour, mostTimes = 3, syncedPlays = 5, plays = 10), card)
+        assertNull(page(plays, interactions = opened.drop(4)).cards.lyrics)
+    }
+
+    @Test
+    fun `your searches count the searches, the taps, the plays within a minute, the words and what was opened`() {
+        val searches = listOf(
+            search("Kestrel", nov(10, "10:00"), Target(TargetKind.ARTIST, "Kestrel")),
+            search("harbour lights", nov(10, "11:00"), Target(TargetKind.SONG, harbour.path)),
+            search("HARBOUR", nov(10, "12:00")),
+            // Words removed from Recent searches: the search stays, its words are gone.
+            search(null, nov(10, "13:00"), Target(TargetKind.ALBUM, "Low Sun")),
+            search("kite", oct(3)),
+        )
+        val plays = listOf(play(copper, nov(10, "10:00") + 30_000), play(harbour, nov(10, "11:02")))
+
+        val card = shown(page(plays, interactions = searches).cards.searches)
+
+        assertEquals(
+            SearchesCard(4, tapped = 3, played = 1, words = listOf(WordCount("harbour", 2), WordCount("kestrel", 1), WordCount("lights", 1)), songs = 1, artists = 1, albums = 1, others = 0),
+            card,
+        )
+        assertNull(page(plays).cards.searches)
+    }
+
+    @Test
+    fun `new favourites are the songs hearted in the period and the one played most, all time every favourite`() {
+        val dates = mapOf(harbour.path to nov(5), copper.path to nov(6), tide.path to oct(3))
+        val favourites = listOf(harbour.ref, copper.ref, tide.ref, kite.ref)
+        val plays = plays(copper, 3, nov(7)) + plays(harbour, 2, nov(8)) + plays(tide, 9, oct(4))
+
+        assertEquals(FavouritesCard(added = 2, mostPlayed = copper), page(plays, sources = PageSources(favouriteAdded = dates), favourites = favourites).cards.favourites)
+        assertEquals(FavouritesCard(added = 4, mostPlayed = tide), page(plays, ListeningPeriod.ALL_TIME, sources = PageSources(favouriteAdded = dates), favourites = favourites).cards.favourites)
+        assertNull(page(plays, ListeningPeriod.WEEK, sources = PageSources(favouriteAdded = dates), favourites = favourites).cards.favourites)
+    }
+
+    // Books and podcasts
+
+    @Test
+    fun `books and podcasts count real minutes, the time faster speeds saved, bookmarks made and books finished`() {
+        val podcast = play(talk, nov(5), heardMs = 20 * MINUTE, clockMs = 10 * MINUTE)
+        val book = bookPlay(nov(6), heardMs = 90 * MINUTE, clockMs = 60 * MINUTE)
+        val sources = PageSources(bookmarks = listOf(nov(3), nov(4), oct(1)), finishedBooks = listOf(nov(10), oct(20)))
+
+        val page = page(listOf(podcast), books = listOf(book), sources = sources)
+
+        assertEquals(SpokenCard(booksMs = 60 * MINUTE, podcastsMs = 10 * MINUTE, savedMs = 40 * MINUTE, bookmarks = 2, finished = 1), page.cards.spoken)
+        assertEquals(2, shown(page(plays(copper, 10, oct(5)) + plays(copper, 2, nov(3)), sources = sources).cards.milestones).booksFinished)
+        assertNull(page(plays(copper, 3, nov(3)), sources = sources).cards.spoken)
+    }
+
+    // You and your friends
+
+    private fun heard(friend: String, song: Song, at: Long) = FriendPlay(friend, song.title, song.artist, song.album, song.durationMs, at)
+
+    private fun shared(card: String, friend: String, at: Long, sent: Boolean, song: Song) = SharedSong(card, friend, at, sent, song.title, song.artist, song.durationMs)
+
+    @Test
+    fun `you and your friends have the taste match by artists, past friends too, cards both ways, songs kept, in sync and the song sent you played most`() {
+        val mine = plays(copper, 5, nov(3)) + play(copper, nov(10, "20:00")) + plays(harbour, 3, nov(4)) + play(harbour, nov(11, "10:00")) +
+            play(north, nov(7)) + play(north, nov(8)) + play(glass, nov(9))
+        val wren = List(5) { heard("f-wren", copper, nov(12) + it * HOUR) } + heard("f-wren", copper, nov(10, "20:30")) +
+            List(3) { heard("f-wren", harbour, nov(13) + it * HOUR) } + heard("f-wren", harbour, nov(11, "12:00"))
+        val omar = List(10) { heard("f-omar", north, nov(14) + it * HOUR) }
+        val sources = PageSources(
+            friends = listOf(FriendName("f-wren", "Wren", past = false), FriendName("f-omar", "Omar", past = true)),
+            friendPlays = wren + omar,
+            shared = listOf(
+                shared("c1", "f-wren", nov(3), sent = true, kite),
+                shared("c2", "f-omar", oct(20), sent = true, kite),
+                shared("c3", "f-wren", nov(4), sent = false, north),
+                shared("c4", "f-omar", nov(6), sent = false, glass),
+            ),
+        )
+
+        val card = shown(page(mine, sources = sources).cards.friends)
+
+        assertEquals(listOf(FriendMatch("f-wren", "Wren", past = false, percent = 85), FriendMatch("f-omar", "Omar", past = true, percent = 15)), card.matches)
+        assertEquals(listOf("Kestrel", "Mira Solen"), card.both.map { it.name })
+        assertEquals(Triple(1, 2, 1), Triple(card.sent, card.got, card.kept))
+        assertEquals(InSync("f-wren", "Wren", copper, 1), card.inSync)
+        assertEquals(SentKept("f-wren", "Wren", north, 2), card.favourite)
+        assertNull(page(mine).cards.friends)
     }
 
     // Nothing to show

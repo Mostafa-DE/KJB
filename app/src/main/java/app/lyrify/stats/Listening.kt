@@ -156,6 +156,7 @@ class PlayStats(
     private val compute: CoroutineDispatcher = Dispatchers.Default,
     private val books: PlayLogStore? = null,
     private val favourites: suspend () -> List<SongRef> = { emptyList() },
+    private val sources: suspend (from: Long?) -> PageSources = { PageSources() },
 ) : PlaysQuery {
     /** The library's songs played most since [since] ([totals]), under their paths now; ties as in [listeningOf]. */
     override suspend fun mostPlayed(limit: Int, since: Long?): List<SongPlays> {
@@ -229,9 +230,10 @@ class PlayStats(
         page(ListeningPeriod.MONTH, monthPeriod(month, calendar.zone), monthPeriod(month.minusMonths(1), calendar.zone), now, calendar)
 
     private suspend fun page(kind: ListeningPeriod, bounds: Period?, before: Period?, now: Long, calendar: PhoneCalendar): InsightsPage {
-        val logs = logs()
+        val logs = (logs() ?: InsightsData(emptyList())).copy(favourites = favourites())
         val library = library()
-        return withContext(compute) { insightsPageOf(logs ?: InsightsData(emptyList()), kind, bounds, before, now, calendar, library) }
+        val read = sources(bounds?.from).copy(interactions = store.interactions(bounds?.from, bounds?.until).orEmpty())
+        return withContext(compute) { insightsPageOf(logs, read, kind, bounds, before, now, calendar, library) }
     }
 
     /** The months with a recap ([recapMonths]), the latest first. */

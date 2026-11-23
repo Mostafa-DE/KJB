@@ -4,11 +4,18 @@ import android.content.Context
 import android.util.Log
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
+import app.lyrify.books.BooksGraph
+import app.lyrify.data.LedgerRepository
+import app.lyrify.data.LyricsStatus
+import app.lyrify.huddle.HuddleGraph
+import app.lyrify.huddle.Sent
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.SongRef
 import app.lyrify.logFailures
+import app.lyrify.player.PlayerExtras
 import app.lyrify.settings.Settings
+import app.lyrify.suggestions.FriendPlay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -108,16 +115,34 @@ object StatsGraph {
         PlayCounter(bookLog(context), share(context), scope = scope, log = { Log.w(LOG_TAG, it) })
     }.also { bookCounter = it }
 
-    /** Plays per song, joined with the library of the moment; Insights with the book log and Favourites. */
+    /** Plays per song, joined with the library of the moment; Insights with the book log, Favourites and the page's other sources. */
     @Synchronized
     fun stats(context: Context): PlayStats = stats ?: run {
-        val library = LibraryGraph.repository(context).state
-        val playlists = LibraryGraph.playlists(context)
+        val app = context.applicationContext
+        val library = LibraryGraph.repository(app).state
+        val playlists = LibraryGraph.playlists(app)
+        val ledger = LedgerRepository(app)
         PlayStats(
-            store(context),
+            store(app),
             library = { (library.value as? LibraryState.Ready)?.library },
-            books = bookLog(context),
+            books = bookLog(app),
             favourites = { playlists.state.first().favouriteSongs },
+            sources = { from ->
+                // Huddle's history (past friends too), Favourites' dates, the lyrics written or found, bookmarks and books.
+                val huddle = HuddleGraph.huddle(app)
+                val friends = huddle.state.first()
+                PageSources(
+                    favouriteAdded = playlists.state.first().favouriteAdded,
+                    synced = ledger.ledger.first().entries.filterValues { it.status.written || it.status == LyricsStatus.EXISTING }.keys,
+                    bookmarks = PlayerExtras.of(app).state.value.bookmarks.values.flatten().map { it.addedAt }.filter { it > 0 },
+                    finishedBooks = BooksGraph.store(app).state.value.books.values.filter { it.finished }.mapNotNull { it.lastPlayedAt },
+                    friends = friends.friends.map { FriendName(it.id, it.shownName, past = false) } + friends.past.map { FriendName(it.id, it.name, past = true) },
+                    friendPlays = huddle.historySince(from ?: 0).map { FriendPlay(it.friend, it.song.title, it.song.artist, it.song.album, it.song.durationMs, it.at, it.favourite) },
+                    shared = huddle.everyCard().filter { (it as? Sent)?.delivered != false }.flatMap { kept ->
+                        kept.card.songs.map { SharedSong(kept.id, kept.friend, kept.at, kept is Sent, it.title, it.artist, it.durationMs) }
+                    },
+                )
+            },
         )
     }.also { stats = it }
 

@@ -581,6 +581,12 @@ class Huddle(
         return plays.filter { it.friend in here }
     }
 
+    /** Every friend's plays from [from] on, past friends' too, the oldest first: Insights' You and your friends (stats/). */
+    suspend fun historySince(from: Long): List<FriendPlay> = moved().playsSince(from).orEmpty()
+
+    /** Every card both ways, the newest first: Insights' You and your friends (stats/). */
+    suspend fun everyCard(): List<KeptCard> = moved().cards(0, Int.MAX_VALUE).orEmpty()
+
     private suspend fun now(): HuddleState = storage.state.first()
 
     /**

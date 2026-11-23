@@ -6,8 +6,14 @@ import app.lyrify.library.Genre
 import app.lyrify.library.Library
 import app.lyrify.library.Song
 import app.lyrify.library.albumKey
+import app.lyrify.library.search.fold
+import app.lyrify.lyrics.TrackNames
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.ListPeriod
+import app.lyrify.suggestions.FriendPlay
+import app.lyrify.suggestions.nameKey
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -60,11 +66,44 @@ data class PagePeriod(
 data class InsightsPage(val period: PagePeriod, val cards: InsightsCards)
 
 /**
+ * What the Insights page reads besides the logs, for one page: the interaction log's rows in the period ([interactions]),
+ * the date each favourite was added ([favouriteAdded], by path), the songs with synced lyrics ([synced], by path), when
+ * each bookmark was made ([bookmarks]) and each finished book last played ([finishedBooks]), and Huddle's history, past
+ * friends too: the [friends]' names, their plays from the period's start ([friendPlays]) and the songs of every card
+ * between you ([shared]). None of it leaves the phone.
+ */
+data class PageSources(
+    val interactions: List<Interaction> = emptyList(),
+    val favouriteAdded: Map<String, Long> = emptyMap(),
+    val synced: Set<String> = emptySet(),
+    val bookmarks: List<Long> = emptyList(),
+    val finishedBooks: List<Long> = emptyList(),
+    val friends: List<FriendName> = emptyList(),
+    val friendPlays: List<FriendPlay> = emptyList(),
+    val shared: List<SharedSong> = emptyList(),
+)
+
+/** A friend ([id]) by the [name] you see them by, [past] once they left. */
+data class FriendName(val id: String, val name: String, val past: Boolean)
+
+/** One song of the card [card] between you and [friend], [sent] by you or to you, [at] when. */
+data class SharedSong(val card: String, val friend: String, val at: Long, val sent: Boolean, val title: String, val artist: String?, val durationMs: Long)
+
+/**
  * The page of [kind] with [bounds] (null: all time), set against the period [before] it, as of [now] in the phone's
- * [calendar], from [data] joined with [library] now (null while it is read: only the time is known).
+ * [calendar], from [data] and [sources] joined with [library] now (null while it is read: only the time is known).
  */
 @Suppress("LongParameterList")
-fun insightsPageOf(data: InsightsData, kind: ListeningPeriod, bounds: Period?, before: Period?, now: Long, calendar: PhoneCalendar, library: Library?): InsightsPage {
+fun insightsPageOf(
+    data: InsightsData,
+    sources: PageSources,
+    kind: ListeningPeriod,
+    bounds: Period?,
+    before: Period?,
+    now: Long,
+    calendar: PhoneCalendar,
+    library: Library?,
+): InsightsPage {
     val zone = calendar.zone
     val going = bounds == null || now < bounds.until
     val today = dayOf(now, zone).date
@@ -78,7 +117,7 @@ fun insightsPageOf(data: InsightsData, kind: ListeningPeriod, bounds: Period?, b
         before = before,
         beforeUntil = before?.let { if (going && bounds != null) minOf(it.until, it.from + (now - bounds.from)) else it.until },
     )
-    return InsightsPage(period, PageWork(data, period, now, calendar, library).cards())
+    return InsightsPage(period, PageWork(data, sources, period, now, calendar, library).cards())
 }
 
 /**
@@ -409,6 +448,16 @@ private const val EXPLORER_BAR = 15
 private const val LOYAL_BAR = 10
 private const val PERCENT = 100
 
+/** Your searches: a play this soon after a search followed it; words are split at spaces. */
+private const val PLAYED_AFTER_MS: Long = 60_000
+private val WHITESPACE = Regex("\\s+")
+
+/** You and your friends: a friend's plays in the period to match tastes; a song sent you played this often is kept; in sync within an hour. */
+private const val MIN_FRIEND_PLAYS = 10
+private const val KEPT_PLAYS = 2
+private const val IN_SYNC_MS: Long = 3_600_000
+private const val BOTH_SHOWN = 3
+
 /** Milestones: the next one's month is given up to this many days ahead. */
 private const val MAX_AROUND_DAYS = 3_650.0
 private const val DAY_MS: Long = 86_400_000
@@ -417,7 +466,15 @@ private const val DAY_MS: Long = 86_400_000
  * One page's working out, each part once for the cards that share it: [heard], the play log's plays in the period (an
  * import's and the short ones left out), and [books], the book log's.
  */
-private class PageWork(private val data: InsightsData, private val period: PagePeriod, private val now: Long, private val calendar: PhoneCalendar, private val library: Library?) {
+@Suppress("LargeClass")
+private class PageWork(
+    private val data: InsightsData,
+    private val sources: PageSources,
+    private val period: PagePeriod,
+    private val now: Long,
+    private val calendar: PhoneCalendar,
+    private val library: Library?,
+) {
     private val zone = calendar.zone
     private val kinds = Kinds(library)
     private val heard = data.plays.within(period.bounds)
@@ -452,10 +509,133 @@ private class PageWork(private val data: InsightsData, private val period: PageP
             found = found,
             comebacks = comebacksOf(),
             forgotten = if (period.going) forgottenOf(data, now, library, kinds) else emptyList(),
+            friends = friendsOf(library),
+            lyrics = lyricsOf(),
+            favourites = favouritesOf(library),
+            searches = searchesOf(),
+            spoken = spokenOf(),
             library = if (period.going) libraryOf(library) else null,
             traits = traitsOf(found),
             milestones = milestonesCardOf(library),
         )
+    }
+
+    /** Read along: from one time you turned to lyrics in the period. */
+    private fun lyricsOf(): LyricsCard? {
+        val opened = sources.interactions.filter { it.kind == InteractionKind.LYRICS }
+        if (opened.isEmpty()) return null
+        val most = opened.mapNotNull { it.target?.takeIf { target -> target.kind == TargetKind.SONG }?.key }.groupingBy { it }.eachCount()
+            .mapNotNull { (path, times) -> library?.song(path)?.let { it to times } }
+            .maxWithOrNull(compareBy<Pair<Song, Int>> { it.second }.thenBy { it.first.path })
+        val counted = musicSongs.filter { it.first.counted }
+        return LyricsCard(opened.size, most?.first, most?.second ?: 0, counted.count { it.second.path in sources.synced }, counted.size)
+    }
+
+    /** New favourites: from one added in the period (all time: one favourite), the one of them played most in it. */
+    private fun favouritesOf(library: Library): FavouritesCard? {
+        val favourites = data.favourites.mapNotNullTo(LinkedHashSet()) { library.resolver.find(it)?.path }
+        val added = if (period.bounds == null) favourites else favourites.filterTo(HashSet()) { path -> sources.favouriteAdded[path]?.let { it in period.bounds } == true }
+        if (added.isEmpty()) return null
+        return FavouritesCard(added.size, tops.songs.firstOrNull { it.item.path in added }?.item)
+    }
+
+    /**
+     * Your searches, from one in the period: those that ended in a tap, those a play followed within [PLAYED_AFTER_MS],
+     * the words (folded, each once a search, words forgotten gone), and what the taps opened.
+     */
+    private fun searchesOf(): SearchesCard? {
+        val searches = sources.interactions.filter { it.kind == InteractionKind.SEARCH }
+        if (searches.isEmpty()) return null
+        val starts = heard.map { it.startedAt }
+        val words = searches.flatMap { search -> search.words?.let(::fold)?.split(WHITESPACE)?.filter(String::isNotEmpty)?.distinct().orEmpty() }
+            .groupingBy { it }.eachCount()
+            .map { (word, times) -> WordCount(word, times) }
+            .sortedWith(compareByDescending<WordCount> { it.times }.thenBy { it.word })
+        val targets = searches.mapNotNull { it.target?.kind }
+        return SearchesCard(
+            searches = searches.size,
+            tapped = targets.size,
+            played = searches.count { search -> starts.any { it >= search.at && it - search.at <= PLAYED_AFTER_MS } },
+            words = words,
+            songs = targets.count { it == TargetKind.SONG },
+            artists = targets.count { it == TargetKind.ARTIST },
+            albums = targets.count { it == TargetKind.ALBUM },
+            others = targets.count { it == TargetKind.FOLDER || it == TargetKind.PLAYLIST },
+        )
+    }
+
+    /** Books and podcasts, from a minute of either: real minutes, the time faster speeds saved, bookmarks and books finished. */
+    private fun spokenOf(): SpokenCard? {
+        val bookPlays = books + heard.filter { kinds.of(it) == Kind.BOOK }
+        val podcasts = heard.filter { kinds.of(it) == Kind.PODCAST }
+        val booksMs = bookPlays.sumOf { it.realMs }
+        val podcastsMs = podcasts.sumOf { it.realMs }
+        if (booksMs + podcastsMs < MIN_HEARD_MS) return null
+        fun inPeriod(at: Long): Boolean = period.bounds == null || at in period.bounds
+        return SpokenCard(
+            booksMs = booksMs,
+            podcastsMs = podcastsMs,
+            savedMs = (bookPlays + podcasts).sumOf { play -> play.clockMs?.let { (play.heardMs - it).coerceAtLeast(0) } ?: 0 },
+            bookmarks = sources.bookmarks.count(::inPeriod),
+            finished = sources.finishedBooks.count(::inPeriod),
+        )
+    }
+
+    /**
+     * You and your friends (past friends too): the taste match with each friend with [MIN_FRIEND_PLAYS] plays in the
+     * period (the share of plays you both gave the same artists), the cards both ways, the songs sent you that you went
+     * on playing ([KEPT_PLAYS] times), the times you both played a song within [IN_SYNC_MS], and the song sent you that you
+     * played most since. Friends' songs are found in the library as Suggestions find them ([nameKey], the length within 2 s).
+     */
+    private fun friendsOf(library: Library): FriendsCard? {
+        val names = sources.friends.associateBy { it.id }
+        val until = period.bounds?.until ?: Long.MAX_VALUE
+        val theirs = sources.friendPlays.filter { it.at < until && it.friend in names }
+        val byName = HashMap<String, MutableList<Song>>()
+        library.songs.filter { !it.isPodcast }.forEach { byName.getOrPut(nameKey(it.title, it.artist)) { ArrayList() } += it }
+        fun found(title: String, artist: String?, durationMs: Long?): Song? =
+            byName[nameKey(title, artist)]?.firstOrNull { durationMs == null || durationMs <= 0 || abs(it.durationMs - durationMs) <= SONG_KEY_LENGTH_STEP_MS }
+        // Each side's plays by artist, as a share of all the artists they played.
+        fun shares(artists: List<String>): Map<String, Double> = artists.groupingBy { TrackNames.normalize(it) }.eachCount().let { counts ->
+            val all = counts.values.sum().toDouble()
+            counts.mapValues { it.value / all }
+        }
+        val counted = musicSongs.filter { it.first.counted }
+        val mine = shares(counted.flatMap { (_, song) -> library.artistsOf(song).map { it.name } })
+        val matches = theirs.groupBy { it.friend }.filterValues { it.size >= MIN_FRIEND_PLAYS && enough }.map { (friend, plays) ->
+            val shares = shares(plays.flatMap { library.artistNames(it.artist) })
+            friend to shares.entries.associate { (artist, share) -> artist to minOf(share, mine[artist] ?: 0.0) }
+        }
+        val closest = matches.maxByOrNull { it.second.values.sum() }
+        val artists = library.artists.associateBy { TrackNames.normalize(it.name) }
+        val inPeriod = sources.shared.filter { period.bounds == null || it.at in period.bounds }
+        val got = inPeriod.filter { !it.sent }.groupBy { it.card }
+        // A song sent to you, and your plays of it after it came (up to the period's end).
+        val sentToYou = sources.shared.filter { !it.sent && it.at < until }.mapNotNull { shared -> found(shared.title, shared.artist, shared.durationMs)?.let { shared to it } }
+        fun playsAfter(song: Song, at: Long): Int = data.plays.count { it.counted && it.startedAt in at until until && songOf(it) == song }
+        val keptCards = got.count { (_, songs) -> songs.any { shared -> found(shared.title, shared.artist, shared.durationMs)?.let { playsAfter(it, shared.at) >= KEPT_PLAYS } == true } }
+        val favourite = sentToYou.map { (shared, song) -> Triple(shared, song, playsAfter(song, shared.at)) }
+            .filter { it.third >= KEPT_PLAYS }
+            .maxWithOrNull(compareBy<Triple<SharedSong, Song, Int>> { it.third }.thenBy { it.first.at })
+        val theirSongs = theirs.groupBy { nameKey(it.title, it.artist) }
+        val inSync = counted.mapNotNull { (play, song) ->
+            theirSongs[nameKey(song.title, song.artist)]?.filter { abs(it.at - play.startedAt) <= IN_SYNC_MS && found(it.title, it.artist, it.durationMs) == song }
+                ?.maxByOrNull { it.at }?.let { play to it }
+        }
+        val card = FriendsCard(
+            matches = matches.map { (friend, both) -> checkNotNull(names[friend]).let { FriendMatch(it.id, it.name, it.past, (both.values.sum() * PERCENT).roundToInt()) } }
+                .sortedWith(compareByDescending<FriendMatch> { it.percent }.thenBy { it.name }),
+            both = closest?.second.orEmpty().entries.filter { it.value > 0 }.sortedByDescending { it.value }.mapNotNull { artists[it.key] }.take(BOTH_SHOWN),
+            sent = inPeriod.filter { it.sent }.distinctBy { it.card }.size,
+            got = got.size,
+            kept = keptCards,
+            inSync = inSync.maxByOrNull { it.first.startedAt }?.let { (play, their) ->
+                val friend = checkNotNull(names[their.friend])
+                InSync(friend.id, friend.name, checkNotNull(songOf(play)), inSync.size)
+            },
+            favourite = favourite?.let { (shared, song, plays) -> checkNotNull(names[shared.friend]).let { SentKept(it.id, it.name, song, plays) } },
+        )
+        return card.takeIf { it.matches.isNotEmpty() || it.sent + it.got > 0 }
     }
 
     /**
@@ -532,9 +712,9 @@ private class PageWork(private val data: InsightsData, private val period: PageP
             plays = ever.filter { it.kind == MilestoneKind.PLAYS }.maxByOrNull { it.count },
             hours = ever.filter { it.kind == MilestoneKind.HOURS }.maxByOrNull { it.count },
             artistsMonth = artistsMonth,
-            booksFinished = 0,
+            booksFinished = sources.finishedBooks.size,
         )
-        return card.takeIf { own != null || longest != null || artistsMonth != null }
+        return card.takeIf { own != null || longest != null || card.booksFinished > 0 }
     }
 
     /** The month [next] is reached at this month's pace so far: plays that counted, or real minutes; none without a pace, or past [MAX_AROUND_DAYS]. */

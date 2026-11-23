@@ -490,7 +490,8 @@ private fun friendLove(plays: List<FriendPlay>, library: Library, now: Long): Ma
     }.filterValues { it.friends > 0 || it.playsThisWeek > 0 }
 }
 
-private fun nameKey(title: String, artist: String?): String = TrackNames.normalize(title) + "|" + TrackNames.normalize(artist.orEmpty())
+/** A song's title and artist as friends' plays are matched by (Insights' friends too, stats/InsightsPage.kt). */
+internal fun nameKey(title: String, artist: String?): String = TrackNames.normalize(title) + "|" + TrackNames.normalize(artist.orEmpty())
 
 internal const val FRIENDS_MS: Long = 30 * 86_400_000L
 private const val WEEK_MS: Long = 7 * 86_400_000L
