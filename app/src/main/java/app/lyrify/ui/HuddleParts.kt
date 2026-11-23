@@ -328,7 +328,8 @@ internal fun HaveChip(match: Match?, modifier: Modifier = Modifier, some: Pair<I
 /**
  * A friend playing now, as a big card (Listening now): their song glowing behind, their face with its live ring, "Playing
  * now" with the bars, the song's cover ([song]: yours, else their colour's pattern), title and artist, then Play along
- * and Send. The card's ground is dark in either theme.
+ * and Send. Paused, the face is still with a quiet ring, "Paused" without the bars, and Play it in place of Play along.
+ * The card's ground is dark in either theme.
  */
 @Composable
 internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlong: () -> Unit, onSend: () -> Unit, onMore: () -> Unit) {
@@ -340,13 +341,13 @@ internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlon
         Box(Modifier.matchParentSize().background(Brush.verticalGradient(0f to HuddleCardShade.copy(alpha = 0.3f), 0.7f to HuddleCardShade.copy(alpha = 0.66f))))
         DarkGround {
             Column(Modifier.padding(start = 14.dp, top = 12.dp, end = 8.dp, bottom = 14.dp)) {
-                val playing = stringResource(R.string.huddle_playing_now)
+                val playing = stringResource(if (friend.paused) R.string.huddle_paused else R.string.huddle_playing_now)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FriendFace(name, color, 44.dp, ring = FaceRing.LIVE, gap = HuddleCardGround)
+                    FriendFace(name, color, 44.dp, ring = if (friend.paused) FaceRing.IDLE else FaceRing.LIVE, gap = HuddleCardGround)
                     Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = listOf(name, playing, songBy(resources, play.song)).joinToString(", ") }) {
                         Text(name, style = CardName, color = BrandLilac, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Equaliser(BrandLilac.copy(alpha = 0.85f), Modifier.size(15.dp, 12.dp))
+                            if (!friend.paused) Equaliser(BrandLilac.copy(alpha = 0.85f), Modifier.size(15.dp, 12.dp))
                             Text(playing, style = MaterialTheme.typography.bodyMedium, color = BrandLilac.copy(alpha = 0.85f), maxLines = 1)
                         }
                     }
@@ -360,7 +361,13 @@ internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlon
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp, end = 6.dp)) {
-                    LyrifyButton(stringResource(R.string.huddle_play_along), onClick = onPlayAlong, modifier = Modifier.weight(1f), icon = R.drawable.ic_headphones, compact = true)
+                    LyrifyButton(
+                        stringResource(if (friend.paused) R.string.huddle_play_it else R.string.huddle_play_along),
+                        onClick = onPlayAlong,
+                        modifier = Modifier.weight(1f),
+                        icon = if (friend.paused) R.drawable.ic_replay else R.drawable.ic_headphones,
+                        compact = true,
+                    )
                     ChromeIconButton(R.drawable.ic_send, stringResource(R.string.huddle_send_song_to, name), onSend, tint = BrandLilac)
                 }
             }

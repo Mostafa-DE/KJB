@@ -146,8 +146,8 @@ private fun HuddleFriends(tab: LibraryTab, modifier: Modifier, bleed: Dp = 0.dp)
 
 /**
  * The friends row: a lock first while you listen privately (until when), Invite, then every friend ([friendsNow]):
- * playing now with the live ring, the bars and their song's title, else a quiet ring and when they last played; a card
- * not opened yet wiggles a badge on its sender's face.
+ * playing now with the live ring, the bars and their song's title, paused with a quiet ring and "Paused", else a quiet
+ * ring and when they last played; a card not opened yet wiggles a badge on its sender's face.
  */
 @Composable
 internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFriend: (String) -> Unit, onInvite: () -> Unit, onPrivately: () -> Unit) {
@@ -177,11 +177,17 @@ internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFri
             val said = when {
                 play == null -> name
                 friend.playing -> stringResource(R.string.huddle_row_playing, name, songBy(resources, play.song))
+                friend.paused -> stringResource(R.string.huddle_row_paused, name, songBy(resources, play.song))
                 else -> stringResource(R.string.huddle_row_played, name, songBy(resources, play.song), ago(play.at, now))
             }
             RowFace(
                 name,
-                play?.let { if (friend.playing) it.song.title else DateUtils.getRelativeTimeSpanString(it.at, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString() },
+                when {
+                    play == null -> null
+                    friend.playing -> play.song.title
+                    friend.paused -> stringResource(R.string.huddle_paused)
+                    else -> DateUtils.getRelativeTimeSpanString(play.at, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString()
+                },
                 strong = friend.playing,
                 description = if (sent) listOf(said, stringResource(R.string.huddle_sent_you)).joinToString(", ") else said,
                 onClick = { onFriend(friend.friend.id) },

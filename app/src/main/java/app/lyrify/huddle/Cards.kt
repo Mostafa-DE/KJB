@@ -25,6 +25,9 @@ enum class CardKind { SONG, ALBUM, PLAYLIST }
 @Serializable
 data class Card(val kind: CardKind, val songs: List<CardSong>, val name: String? = null, val note: String? = null)
 
+/** What a friend's player does now: plays, is paused, or stopped (KJB closed, or the queue emptied). */
+enum class NowState { PLAYING, PAUSED, STOPPED }
+
 /** One message between two friends, sealed in its mailbox: [id] is random (a copy the server sends again is dropped), [at] when it was made. */
 sealed interface Message {
     val id: String
@@ -44,13 +47,20 @@ sealed interface Message {
      * ([taken]: pick another, so they can tell you apart). The server keeps only the newest one waiting.
      */
     data class Profile(override val id: String, override val at: Long, val name: String, val taken: Boolean = false) : Message
+
+    /**
+     * What the friend's player does now ([state]), at [positionMs] in [song], told [at]: at each play, pause, resume, skip,
+     * seek and stop, and every [SharedPlays.HEARTBEAT_MS] while it plays. The server keeps only the newest one waiting,
+     * and the phone only in memory.
+     */
+    data class Now(override val id: String, override val at: Long, val song: CardSong, val state: NowState, val positionMs: Long, val favourite: Boolean = false) : Message
 }
 
 /**
  * Messages as their sealed boxes hold them: JSON, then 0x80 and zero bytes up to one of a few sizes ([SIZES]), so the
  * server learns little from a box's length. Keys are short to fit long playlists: "v" format, "i" id, "t" time, "k" kind,
- * "c" card, "s" song or songs, "n" name, "m" note, "f" a favourite, "x" your name taken; a song is "t" title, "a" artist,
- * "l" album, "d" length in millis.
+ * "c" card, "s" song or songs, "n" name, "m" note, "f" a favourite, "x" your name taken, "e" a now's state, "p" its place
+ * in millis; a song is "t" title, "a" artist, "l" album, "d" length in millis.
  * A message of an unknown kind or format (a newer KJB's) reads as null and is dropped.
  */
 object Messages {
@@ -71,16 +81,21 @@ object Messages {
     fun song(song: Song): CardSong = CardSong(clip(song.title, TEXT_MAX).orEmpty(), clip(song.artist, TEXT_MAX), clip(song.album, TEXT_MAX), song.durationMs)
 
     /**
-     * [message] padded to its size; a share too long for the largest keeps its first songs, as many as fit. A play has the
-     * smallest size only (the server keeps plays of 2 KB at most): long tags in a script of several bytes a character are
-     * cut, each half as long again, until it fits.
+     * [message] padded to its size; a share too long for the largest keeps its first songs, as many as fit. A play and a now
+     * have the smallest size only (the server keeps them of 2 KB at most): long tags in a script of several bytes a
+     * character are cut, each half as long again, until it fits.
      */
     fun encode(message: Message): ByteArray {
         var plain = json(message)
         var keep = TEXT_MAX
-        while (message is Message.Play && plain.size >= SIZES.first() && keep > 1) {
+        while ((message is Message.Play || message is Message.Now) && plain.size >= SIZES.first() && keep > 1) {
             keep /= 2
-            plain = json(message.copy(song = message.song.let { CardSong(clip(it.title, keep).orEmpty(), clip(it.artist, keep), clip(it.album, keep), it.durationMs) }))
+            plain = json(
+                when (message) {
+                    is Message.Play -> message.copy(song = message.song.clipped(keep))
+                    is Message.Now -> message.copy(song = message.song.clipped(keep))
+                },
+            )
         }
         if (plain.size > MAX_PLAIN && message is Message.Share) {
             // The most songs that fit: a few tries, as each try writes the whole card.
@@ -112,6 +127,12 @@ object Messages {
             PLAY -> (root[SONG_KEY] as? JsonObject)?.let(::songOf)?.let { Message.Play(id, at, it, favourite = root.flag(FAVOURITE_KEY) == true) }
             BYE -> Message.Bye(id, at)
             PROFILE -> root.text(NAME_KEY)?.let(Invites::cleanName)?.let { Message.Profile(id, at, it, taken = root.flag(TAKEN_KEY) == true) }
+            NOW -> {
+                val song = (root[SONG_KEY] as? JsonObject)?.let(::songOf) ?: return null
+                // A state a newer KJB tells, or no place: not this version's.
+                val state = NowState.entries.firstOrNull { it.name.lowercase() == root.text(STATE_KEY) } ?: return null
+                Message.Now(id, at, song, state, root.long(POSITION_KEY)?.takeIf { it >= 0 } ?: return null, favourite = root.flag(FAVOURITE_KEY) == true)
+            }
             else -> null
         }
     }
@@ -154,11 +175,21 @@ object Messages {
                     put(NAME_KEY, JsonPrimitive(message.name))
                     if (message.taken) put(TAKEN_KEY, JsonPrimitive(true))
                 }
+                is Message.Now -> {
+                    put(KIND_KEY, JsonPrimitive(NOW))
+                    put(SONG_KEY, songJson(message.song))
+                    put(STATE_KEY, JsonPrimitive(message.state.name.lowercase()))
+                    put(POSITION_KEY, JsonPrimitive(message.positionMs))
+                    if (message.favourite) put(FAVOURITE_KEY, JsonPrimitive(true))
+                }
             }
         },
     ).toString().encodeToByteArray()
 
     private fun Message.Share.withSongs(count: Int): Message.Share = copy(card = card.copy(songs = card.songs.take(count)))
+
+    /** This song with its title, artist and album at most [max] characters each. */
+    private fun CardSong.clipped(max: Int): CardSong = CardSong(clip(title, max).orEmpty(), clip(artist, max), clip(album, max), durationMs)
 
     private fun songJson(song: CardSong): JsonElement = JsonObject(
         buildMap {
@@ -200,6 +231,8 @@ object Messages {
     private const val NOTE_KEY = "m"
     private const val FAVOURITE_KEY = "f"
     private const val TAKEN_KEY = "x"
+    private const val STATE_KEY = "e"
+    private const val POSITION_KEY = "p"
     private const val TITLE_KEY = "t"
     private const val ARTIST_KEY = "a"
     private const val ALBUM_KEY = "l"
@@ -209,6 +242,7 @@ object Messages {
     private const val PLAY = "play"
     private const val BYE = "bye"
     private const val PROFILE = "profile"
+    private const val NOW = "now"
 }
 
 /** [text] trimmed and at most [max] characters, never cutting a character of two halves; null when blank. */

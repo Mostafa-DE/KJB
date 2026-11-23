@@ -596,9 +596,9 @@ internal fun playAlong(context: Context, song: Song, play: FriendPlay, name: Str
 
 /**
  * A friend's song (the mockup's 1.2), from their face or their card: their song big, its cover glowing behind (yours,
- * else their colour), where they are in it while they play, and tiles: Play along (from where they are), Play it (from
- * the top) and Send back; for a song you do not have, Ask <name> and Search on YouTube in place of the first two. Their
- * "⋯" sits at the top. Nothing shared yet: only Send a song.
+ * else their colour), where they are in it while they play ("Paused" while paused), and tiles: Play along (from where
+ * they are, while they play), Play it (from the top) and Send back; for a song you do not have, Ask <name> and Search on
+ * YouTube in place of the first two. Their "⋯" sits at the top. Nothing shared yet: only Send a song.
  */
 @Composable
 private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, onSheet: (HuddleSheet?) -> Unit, onYouTube: (String) -> Unit) {
@@ -635,6 +635,7 @@ private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, 
                             Text(
                                 when {
                                     playing -> stringResource(R.string.huddle_playing_now)
+                                    current?.paused == true -> stringResource(R.string.huddle_paused)
                                     play != null -> ago(play.at, now)
                                     else -> stringResource(R.string.huddle_nothing_yet)
                                 },

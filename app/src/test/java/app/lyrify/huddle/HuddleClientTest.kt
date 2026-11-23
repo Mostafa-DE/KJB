@@ -1,6 +1,7 @@
 package app.lyrify.huddle
 
 import app.lyrify.backup.SectionJson.jsonObject
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -21,6 +22,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 
 /** Huddle's HTTP calls as huddle-server/API.md has them: what each sends, how each answer reads, retries and limits. */
+@OptIn(ExperimentalCoroutinesApi::class)
 class HuddleClientTest {
     private val host = "kjb-huddle.up.railway.app"
     private val box = "b".repeat(43)
@@ -168,6 +170,36 @@ class HuddleClientTest {
         now += 24 * 60 * 60_000L
         assertEquals("a wait longer than a day is a day", PostAnswer.POSTED, huddle.send(box, Kind.CARD, "ZGF0YQ"))
         assertEquals(5, opened.size)
+    }
+
+    @Test
+    fun `a 429 on a now holds back nows only, never a card or a play`() = runTest {
+        val huddle = client(Answer(429, """{"error":"rate_limited"}""", retryAfter = "600"), Answer(201, """{"id":"1"}"""), Answer(201, """{"id":"2"}"""))
+        assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.NOW, "ZGF0YQ"))
+        assertEquals("now", opened[0].json().string("kind"))
+        assertEquals(PostAnswer.POSTED, huddle.send(box, Kind.CARD, "ZGF0YQ"))
+        assertEquals(PostAnswer.POSTED, huddle.send(box, Kind.PLAY, "ZGF0YQ"))
+        assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.NOW, "ZGF0YQ"))
+        assertEquals("a now while it waits: no call", 3, opened.size)
+    }
+
+    @Test
+    fun `a held read asks the server to wait, gives it that and 15 s more, and waits out here a server that answers at once with nothing`() = runTest {
+        val huddle = client(
+            Answer(200, """{"now":1,"mailboxes":[{"mailbox":"$box","messages":[],"more":false}]}"""),
+            Answer(200, """{"now":1,"mailboxes":[{"mailbox":"$box","messages":[{"id":"3","kind":"now","data":"YQ","sentAt":1}],"more":false}]}"""),
+            Answer(200, """{"now":1,"mailboxes":[{"mailbox":"$box","messages":[],"more":false}]}"""),
+        )
+        assertEquals(emptyMap<String, List<Posted>>(), huddle.inbox(listOf(box), waitMs = 25_000))
+        assertEquals("25000", opened[0].json().string("wait"))
+        assertEquals(40_000, opened[0].readTimeout)
+        assertEquals("an old server answered at once: the wait is waited out here", 25_000L, testScheduler.currentTime)
+        assertEquals(mapOf(box to listOf(Posted(3, "YQ"))), huddle.inbox(listOf(box), waitMs = 25_000))
+        assertEquals("something came: at once", 25_000L, testScheduler.currentTime)
+        assertEquals(emptyMap<String, List<Posted>>(), huddle.inbox(listOf(box)))
+        assertNull("no wait asked", opened[2].json()["wait"])
+        assertEquals(15_000, opened[2].readTimeout)
+        assertEquals(25_000L, testScheduler.currentTime)
     }
 
     @Test

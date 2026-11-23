@@ -71,6 +71,24 @@ class CardsTest {
     }
 
     @Test
+    fun `a now comes back with its state and place, padded to a kilobyte, its long tags cut, and a state of a newer KJB is dropped`() {
+        listOf(
+            Message.Now("m1", 1_700_000_000_000, lantern, NowState.PLAYING, 72_000, favourite = true),
+            Message.Now("m2", 1_700_000_000_001, bell, NowState.PAUSED, 0),
+            Message.Now("m3", 1_700_000_000_002, bell, NowState.STOPPED, 187_000),
+        ).forEach { now ->
+            assertEquals(1024, Messages.encode(now).size)
+            assertEquals(now, Messages.decode(Messages.encode(now)))
+        }
+        val long = "ن".repeat(Messages.TEXT_MAX)
+        val back = Messages.decode(Messages.encode(Message.Now("m4", 1, CardSong(long, long, long, 200_000), NowState.PLAYING, 5_000))) as Message.Now
+        assertTrue(long.startsWith(back.song.title))
+        assertEquals(5_000L, back.positionMs)
+        assertNull(Messages.decode("""{"v":1,"i":"m1","t":1,"k":"now","s":{"t":"Paper Lantern","d":1},"e":"rewinding","p":0}""".toByteArray() + byteArrayOf(0x80.toByte())))
+        assertNull("no place", Messages.decode("""{"v":1,"i":"m1","t":1,"k":"now","s":{"t":"Paper Lantern","d":1},"e":"paused"}""".toByteArray() + byteArrayOf(0x80.toByte())))
+    }
+
+    @Test
     fun `a title, artist, album, list name or note loses the controls that reorder or hide text`() {
         val tricky = "Paper\u202E Lantern\u0007\u2066"
         val share = Message.Share("m1", 1, Card(CardKind.PLAYLIST, listOf(CardSong(tricky, tricky, tricky, 1_000)), name = tricky, note = tricky))
