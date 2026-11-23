@@ -116,15 +116,6 @@ class CardsTest {
     }
 
     @Test
-    fun `a cover is made at the best JPEG quality within 6 KiB, stepping down, and none when even the lowest is over`() {
-        val tried = ArrayList<Int>()
-        val sizes = mapOf(85 to 9_000, 70 to 7_000, 55 to Messages.COVER_MAX_BYTES, 40 to 4_000)
-        assertEquals(Messages.COVER_MAX_BYTES, Messages.cover { quality -> ByteArray(sizes.getValue(quality)).also { tried += quality } }?.size)
-        assertEquals(listOf(85, 70, 55), tried)
-        assertNull(Messages.cover { ByteArray(Messages.COVER_MAX_BYTES + 1) })
-    }
-
-    @Test
     fun `a now's state is written the same in any phone language, so a Turkish phone's playing reads on every other`() {
         val now = Message.Now("m1", 1_700_000_000_000, lantern, NowState.PLAYING, 72_000)
         val before = Locale.getDefault()

@@ -2,8 +2,8 @@ package app.lyrify.huddle
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.media.ThumbnailUtils
 import android.util.Log
+import androidx.core.graphics.scale
 import app.lyrify.BuildConfig
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
@@ -20,6 +20,7 @@ import app.lyrify.stats.PlayEvent
 import app.lyrify.stats.PlayEvents
 import app.lyrify.stats.StatsGraph
 import app.lyrify.suggestions.FriendsSource
+import app.lyrify.widget.centerCrop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -143,19 +144,25 @@ object HuddleGraph {
         val app = context.applicationContext
         return SharedPlays({ path, at -> scope.launch { shared(app, path)?.let { (song, favourite) -> huddle(app).played(song, at, favourite) } } }) { path, state, positionMs, at ->
             huddle(app).listening(state, positionMs, at, coverOf = {
-                // Read as the notification reads it, cut square: NoArt for a song without a cover of its own, null for one not read now.
+                // Read as the notification reads it, square from its middle as the widget's (sharpCover), at the best of
+                // COVER_QUALITIES within Messages.COVER_MAX_BYTES: NoArt for a song without a cover of its own, or one no
+                // quality fits; null for one not read now.
                 (LibraryGraph.repository(app).state.value as? LibraryState.Ready)?.library?.song(path)?.let { song ->
                     withContext(Dispatchers.IO) {
                         CarCovers.read<CoverFound<ByteArray>>(app, coverUri(CarCovers.uris(app), song), { own ->
-                            val square = ThumbnailUtils.extractThumbnail(own, Messages.COVER_PX, Messages.COVER_PX)
-                            Messages.cover { quality -> ByteArrayOutputStream().also { out -> square.compress(Bitmap.CompressFormat.JPEG, quality, out) }.toByteArray() }
-                                ?.let { jpeg -> CoverFound.Own(jpeg) } ?: CoverFound.NoArt
+                            val crop = centerCrop(own.width, own.height, 1f)
+                            val square = Bitmap.createBitmap(own, crop.x, crop.y, crop.width, crop.height).let { if (it.width > Messages.COVER_PX) it.scale(Messages.COVER_PX, Messages.COVER_PX) else it }
+                            COVER_QUALITIES.asSequence().map { quality -> ByteArrayOutputStream().also { out -> square.compress(Bitmap.CompressFormat.JPEG, quality, out) }.toByteArray() }
+                                .firstOrNull { it.size in 1..Messages.COVER_MAX_BYTES }?.let { jpeg -> CoverFound.Own(jpeg) } ?: CoverFound.NoArt
                         }) { CoverFound.NoArt }
                     }
                 }
             }) { shared(app, path) }
         }
     }
+
+    /** The JPEG qualities a now's cover is tried at ([plays]), the best first. */
+    private val COVER_QUALITIES = listOf(85, 70, 55, 40)
 
     /**
      * The song at [path] as friends get it, and whether it is a favourite: music only (no audiobook, podcast or book), its

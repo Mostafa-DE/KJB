@@ -101,9 +101,6 @@ object Messages {
     /** The largest cover a now carries, in bytes: a larger one from a friend reads as none. */
     const val COVER_MAX_BYTES: Int = 6 * 1024
 
-    /** The cover a now carries ([Message.Now.cover]): the first of [COVER_QUALITIES] that [jpeg] makes within [COVER_MAX_BYTES]; null when none does. */
-    fun cover(jpeg: (quality: Int) -> ByteArray): ByteArray? = COVER_QUALITIES.asSequence().map(jpeg).firstOrNull { it.size <= COVER_MAX_BYTES }
-
     /** A card of [songs] from the library, their tags as they are (a friend's KJB matches by tags, not by KJB's renames), trimmed to the limits. */
     fun card(kind: CardKind, songs: List<Song>, name: String? = null, note: String? = null): Card =
         Card(kind = kind, songs = songs.take(SONGS_MAX).map(::song), name = clip(name, TEXT_MAX), note = clip(note, NOTE_MAX))
@@ -122,7 +119,7 @@ object Messages {
         require(cover == null || cover.jpeg.size <= COVER_MAX_BYTES) { "a cover of ${cover?.jpeg?.size} bytes" }
         var plain = json(message)
         // The tags' room: the smallest size, and a now's cover on top of it.
-        val room = SIZES.first() + if (cover == null) 0 else plain.size - json((message as Message.Now).copy(cover = null)).size
+        val room = SIZES.first() + if (cover == null) 0 else plain.size - json(message.copy(cover = null)).size
         var keep = TEXT_MAX
         while ((message is Message.Play || message is Message.Now) && plain.size >= room && keep > 1) {
             keep /= 2
@@ -253,9 +250,6 @@ object Messages {
 
     /** The sizes a message is padded to: most are one song (1 KB); a long playlist takes the largest. */
     private val SIZES: IntArray = intArrayOf(1024, 4 * 1024, 16 * 1024, 48 * 1024)
-
-    /** The JPEG qualities a cover is tried at, the best first ([cover]). */
-    private val COVER_QUALITIES: List<Int> = listOf(85, 70, 55, 40)
 
     /** The one size of a now with a cover: the smallest size for its tags, and the largest cover in base64url beside them. */
     private const val COVER_SIZE: Int = 10 * 1024
