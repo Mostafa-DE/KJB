@@ -41,7 +41,7 @@ private const val DAYS_IN_WEEK = 7
  * The period a page shows: its [kind] (a month's recap is a [ListeningPeriod.MONTH]) and [bounds] (null for all time);
  * the days it covers so far, [firstDay] (all time: the first play's day) to [lastDay] (today while it is [going], else its
  * last day); and the period before ([before], null for all time), whose figures go up to [beforeUntil]: as far into it as
- * now is into this one while this one goes on, its end once this one is over.
+ * now is into this one by the phone's clock ([samePointIn]) while this one goes on, its end once this one is over.
  */
 data class PagePeriod(
     val kind: ListeningPeriod,
@@ -77,8 +77,8 @@ data class PageSources(
 /** A friend ([id]) by the [name] you see them by, [past] once they left. */
 data class FriendName(val id: String, val name: String, val past: Boolean)
 
-/** One song of the card [card] between you and [friend], [sent] by you or to you, [at] when. */
-data class SharedSong(val card: String, val friend: String, val at: Long, val sent: Boolean, val title: String, val artist: String?, val durationMs: Long)
+/** One song of the card [card] between you and [friend], [sent] by you or to you, [at] when; its length null when not known. */
+data class SharedSong(val card: String, val friend: String, val at: Long, val sent: Boolean, val title: String, val artist: String?, val durationMs: Long?)
 
 /**
  * The page of [kind] with [bounds] (null: all time), set against the period [before] it, as of [now] in the phone's
@@ -106,14 +106,15 @@ fun insightsPageOf(
         lastDay = bounds?.takeIf { !going }?.let { dayOf(it.until - 1, zone).date } ?: today,
         going = going,
         before = before,
-        beforeUntil = before?.let { if (going && bounds != null) minOf(it.until, it.from + (now - bounds.from)) else it.until },
+        beforeUntil = before?.let { previous -> bounds?.let { samePointIn(previous, it, now, zone) } },
     )
     return InsightsPage(period, PageWork(data, sources, period, now, calendar, library).cards())
 }
 
 /**
- * A page's cards in the page's order, each null (or empty) below its minimum: the stories row ([recaps]; on the period
- * pages only), Your time, Every day you listened, Your day on a record, the top artists, songs and albums, Your taste,
+ * A page's cards in the page's order, each null (or empty) below its minimum: the stories row ([recaps], and the rings of
+ * this month and this year so far, [monthSoFar] and [yearSoFar], whatever the page's period; on the period pages only,
+ * each shown when its own page's Your time shows), Your time, Every day you listened, Your day on a record, the top artists, songs and albums, Your taste,
  * How you listen, [moments], New to you ([found]), Back again ([comebacks]) and the favourites still quiet ([forgotten]),
  * You and your friends, Read along, New favourites, Your searches, Where you listen ([outputs]), Top playlists, Books
  * and podcasts, Your library, your listening type ([traits]) and Milestones and badges. Where you listen and Top
@@ -121,6 +122,8 @@ fun insightsPageOf(
  */
 data class InsightsCards(
     val recaps: List<RecapMonth> = emptyList(),
+    val monthSoFar: Totals? = null,
+    val yearSoFar: Totals? = null,
     val time: TimeCard? = null,
     val days: DaysCard? = null,
     val clock: ClockCard? = null,

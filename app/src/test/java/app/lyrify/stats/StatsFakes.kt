@@ -290,6 +290,8 @@ fun fakeInsightsPage(): InsightsPage {
     )
     val cards = InsightsCards(
         recaps = listOf(RecapMonth(YearMonth.of(2026, 10), listOf(copper, harbour, drive))),
+        monthSoFar = Totals(heardMs = 2_140 * 60_000, plays = 702, songs = 311, artists = 96, albums = 140),
+        yearSoFar = Totals(heardMs = 24_610 * 60_000, plays = 8_066, songs = 1_904, artists = 402, albums = 655),
         time = TimeCard(
             totals = Totals(heardMs = 588 * 60_000, plays = 193, songs = 128, artists = 47, albums = 61),
             before = Totals(heardMs = 493 * 60_000, plays = 162, songs = 117, artists = 44, albums = 58),

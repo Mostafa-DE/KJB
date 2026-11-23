@@ -122,7 +122,7 @@ fun insightsOf(data: InsightsData, period: Period?, previous: Period?, now: Long
         artists = tops.artists.takeIf { enough && it.size >= MIN_TOP_OTHERS }.orEmpty(),
         albums = tops.albums.takeIf { enough && it.size >= MIN_TOP_OTHERS }.orEmpty(),
         genres = genresOf(tops.songs, library).takeIf { enough && it.size >= MIN_TOP_OTHERS }.orEmpty(),
-        versus = versusOf(ledger, data, period, previous, now, kinds),
+        versus = versusOf(ledger, data, period, previous, now, zone, kinds),
         clock = clockOf(heard, zone),
         streaks = streaksOf(heard, data.plays, going, now, zone, kinds),
         milestones = milestonesOf(data, period, going, kinds),
@@ -256,12 +256,24 @@ internal fun genresOf(songs: List<Top<Song>>, library: Library): List<Top<Genre>
 }
 
 /** The period so far against the one before up to the same point (all of it once the period is over). */
-private fun versusOf(ledger: Ledger, data: InsightsData, period: Period?, previous: Period?, now: Long, kinds: Kinds): Versus? {
+private fun versusOf(ledger: Ledger, data: InsightsData, period: Period?, previous: Period?, now: Long, zone: ZoneId, kinds: Kinds): Versus? {
     if (period == null || previous == null) return null
-    val window = if (now in period) Period(previous.from, minOf(previous.until, previous.from + (now - period.from))) else previous
+    val window = Period(previous.from, samePointIn(previous, period, now, zone))
     val before = ledgerOf(data.plays.within(window), data.books.within(window), kinds)
     if (before.plays < MIN_VERSUS_PLAYS && before.heardMs < MIN_VERSUS_HEARD_MS) return null
     return Versus(ledger.heardMs, ledger.plays, before.heardMs, before.plays)
+}
+
+/**
+ * As far into [previous] as [now] is into [period] by the phone's calendar: the same date and time a week, a month or a
+ * year earlier (a day of 23 or 25 hours is still a day; a date the shorter month lacks, 31 March or 29 February, at its
+ * last day), and no further than its end; all of it once [period] is over.
+ */
+internal fun samePointIn(previous: Period, period: Period, now: Long, zone: ZoneId): Long {
+    if (now !in period) return previous.until
+    fun local(at: Long): LocalDateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(at), zone)
+    val back = local(previous.from).toLocalDate().until(local(period.from).toLocalDate())
+    return minOf(previous.until, local(now).minus(back).atZone(zone).toInstant().toEpochMilli())
 }
 
 private fun clockOf(heard: List<LoggedPlay>, zone: ZoneId): ListeningClock? {
@@ -281,18 +293,22 @@ private const val SECONDS_PER_MINUTE = 60
 
 /** The longest run of days with a play that counted in the period ([heard]), and while it [going] the run up to today from [all]. */
 private fun streaksOf(heard: List<LoggedPlay>, all: List<LoggedPlay>, going: Boolean, now: Long, zone: ZoneId, kinds: Kinds): Streaks? {
-    fun days(plays: List<LoggedPlay>): Set<LocalDate> = plays.filter { it.counted && kinds.of(it) != Kind.BOOK }.mapTo(HashSet()) { localTimeOf(it, zone).toLocalDate() }
-    val longest = days(heard).let { days -> days.maxOfOrNull { day -> if (day.minusDays(1) in days) 0 else runFrom(day, days, step = 1) } ?: 0 }
-    val current = if (going) {
-        val ever = days(all)
-        val today = dayOf(now, zone).date
-        // From today or yesterday; or from tomorrow, a day a play heard in a time zone ahead of the phone's is on already.
-        listOf(today.plusDays(1), today, today.minusDays(1)).filter { it in ever }.maxOfOrNull { runFrom(it, ever, step = -1) } ?: 0
-    } else {
-        null
-    }
+    val longest = longestRunOf(countedDays(heard, zone, kinds))?.days ?: 0
+    val current = if (going) runUpTo(dayOf(now, zone).date, countedDays(all, zone, kinds)) else null
     return Streaks(longest, current).takeIf { longest >= MIN_STREAK_DAYS || (current ?: 0) >= MIN_STREAK_DAYS }
 }
+
+/** The days of [plays] that counted (a book's never does), each where it was heard. */
+internal fun countedDays(plays: List<LoggedPlay>, zone: ZoneId, kinds: Kinds): Set<LocalDate> =
+    plays.filter { it.counted && kinds.of(it) != Kind.BOOK }.mapTo(HashSet()) { localTimeOf(it, zone).toLocalDate() }
+
+/** The longest run of [days] in a row, the earliest of equals; null for no days. */
+internal fun longestRunOf(days: Set<LocalDate>): Run? = days.filter { it.minusDays(1) !in days }.map { Run(runFrom(it, days, step = 1), it) }
+    .maxWithOrNull(compareBy<Run> { it.days }.thenByDescending { it.from })
+
+/** The run of [days] up to [today]: from today or yesterday; or from tomorrow, a day a play heard in a time zone ahead of the phone's is on already. */
+internal fun runUpTo(today: LocalDate, days: Set<LocalDate>): Int =
+    listOf(today.plusDays(1), today, today.minusDays(1)).filter { it in days }.maxOfOrNull { runFrom(it, days, step = -1) } ?: 0
 
 /** How many days of [days] follow one another from [start], [step] days at a time. */
 internal fun runFrom(start: LocalDate, days: Set<LocalDate>, step: Long): Int = generateSequence(start) { it.plusDays(step) }.takeWhile { it in days }.count()
@@ -328,7 +344,7 @@ private fun nextMilestone(plays: Int, heardMs: Long): NextMilestone? {
 }
 
 /** Books (the book log, and plays logged before their file became a book) and podcasts, from a minute heard. */
-private fun spokenOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Kinds): Spoken? {
+internal fun spokenOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Kinds): Spoken? {
     val booksMs = books.sumOf { it.realMs } + heard.filter { kinds.of(it) == Kind.BOOK }.sumOf { it.realMs }
     val podcastsMs = heard.filter { kinds.of(it) == Kind.PODCAST }.sumOf { it.realMs }
     return Spoken(booksMs, podcastsMs).takeIf { booksMs + podcastsMs >= MIN_SPOKEN_MS }
