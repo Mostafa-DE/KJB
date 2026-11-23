@@ -218,7 +218,7 @@ internal fun ReceivedHost(id: String?, onPlayer: () -> Unit, onSendBack: (String
 
 /**
  * The card, opened (the mockup's 4.2 and 4.3): who sent it and when (to whom, for one you sent: then with neither Send
- * back nor Ask), the cover tilted like a gift (yours, else their
+ * back nor Ask, as for a past friend's), the cover tilted like a gift (yours, else their
  * colour's pattern) with their note stuck on it, what it is, and whether you have it ([match]): a song found plays (Play,
  * Send back); one found only loosely asks "Is this the song?" first; one not here says so, with Ask <name> (your phone's
  * share sheet, any chat) and Search on YouTube. An album or a playlist lists each song with how it was found, plays the
@@ -248,20 +248,24 @@ private fun ReceivedSheet(
     // A card you sent ("You and <name>"): yours to play again, with nothing to send back or ask for.
     val mine = kept is Sent
     val friend = kept?.let { card -> state.friends.firstOrNull { it.id == card.friend } }
+    // A past friend's (they left, or you removed them): still yours to play, under the name you saw them by.
+    val past = kept?.let { card -> state.past.firstOrNull { it.id == card.friend } }
+    // Send back and Ask: a card from a friend still here.
+    val answerable = !mine && friend != null
     val matcher = rememberSongMatcher()
     val found = remember(matcher, kept?.card) { kept?.card?.let { card -> matcher?.let { card.songs.map(it::match) } } }
     var asking by rememberSaveable { mutableStateOf<Int?>(null) }
     LaunchedEffect(id) { if (!mine) huddle.opened(id) }
-    if (kept == null || friend == null) {
-        // Gone meanwhile: the friend removed you, and their cards went with them.
+    if (kept == null || (friend == null && past == null)) {
+        // Gone meanwhile: Delete history let it go with the rest of theirs.
         LaunchedEffect(id) { onDismiss() }
         return
     }
     val card = kept.card
-    val from = friend.shownName
+    val from = friend?.shownName ?: past?.name.orEmpty()
     // Who it is from, on its face and as the queue it plays as: the friend, or you.
     val sender = if (mine) state.name ?: from else from
-    val color = if (mine) OwnFaceColor else friendColor(friend.id)
+    val color = if (mine) OwnFaceColor else friendColor(kept.friend)
     val have = found?.mapIndexedNotNull { at, match ->
         when (match) {
             is Match.Found -> match.song
@@ -284,7 +288,7 @@ private fun ReceivedSheet(
     }
     val sendBack = {
         onDismiss()
-        onSendBack(friend.id)
+        onSendBack(kept.friend)
     }
     if (playNow && card.kind == CardKind.SONG) {
         LaunchedEffect(found) { (found?.singleOrNull() as? Match.Found)?.let { play(listOf(it.song)) } }
@@ -300,14 +304,14 @@ private fun ReceivedSheet(
                 when {
                     match is Match.Found -> {
                         LyrifyButton(stringResource(R.string.huddle_play), onClick = { play(listOf(match.song)) }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_play_arrow_fill)
-                        if (!mine) LyrifyButton(stringResource(R.string.huddle_send_back), onClick = sendBack, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_send)
+                        if (answerable) LyrifyButton(stringResource(R.string.huddle_send_back), onClick = sendBack, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_send)
                     }
                     match is Match.Maybe && unsure -> {
                         LyrifyButton(stringResource(R.string.huddle_maybe_yes), onClick = { play(listOf(match.song)) }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_play_arrow_fill)
                         LyrifyButton(stringResource(R.string.huddle_maybe_no), onClick = { onSaid(0 to false) }, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY)
                     }
                     match != null -> {
-                        if (!mine) LyrifyButton(stringResource(R.string.huddle_ask, from), onClick = askAll, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_send)
+                        if (answerable) LyrifyButton(stringResource(R.string.huddle_ask, from), onClick = askAll, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_send)
                         LyrifyButton(stringResource(R.string.huddle_youtube), onClick = { onYouTube(youTubeQuery(song)) }, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_search)
                     }
                     else -> LyrifyButton(stringResource(R.string.huddle_play), onClick = {}, modifier = Modifier.fillMaxWidth(), enabled = false)
@@ -351,7 +355,7 @@ private fun ReceivedSheet(
                         Text(localSong(match.song), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                match != null && match !is Match.Found && !mine -> Text(stringResource(R.string.huddle_missing, from), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                match != null && match !is Match.Found && answerable -> Text(stringResource(R.string.huddle_missing, from), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             }
         }
         return
@@ -363,8 +367,8 @@ private fun ReceivedSheet(
             if (have.isNotEmpty()) {
                 LyrifyButton(pluralStringResource(R.plurals.huddle_play_found, have.size, have.size), onClick = { play(have) }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_play_arrow_fill)
             }
-            if (!mine && missing.isNotEmpty()) LyrifyButton(stringResource(R.string.huddle_ask, from), onClick = askAll, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY)
-            if (!mine) LyrifyButton(stringResource(R.string.huddle_send_back), onClick = sendBack, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_send)
+            if (answerable && missing.isNotEmpty()) LyrifyButton(stringResource(R.string.huddle_ask, from), onClick = askAll, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY)
+            if (answerable) LyrifyButton(stringResource(R.string.huddle_send_back), onClick = sendBack, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_send)
         },
     ) {
         SentBy(card.kind, sender, color, kept.at, to = from.takeIf { mine })

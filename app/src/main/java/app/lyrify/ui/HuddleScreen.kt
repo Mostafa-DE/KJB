@@ -390,9 +390,10 @@ private fun NewNameDialog(state: HuddleState, onDone: () -> Unit) {
 /**
  * Huddle's page (Mix 2 of the approved mockup): your name first of all, the first time ([NameGate]); then Listen
  * privately, Listening now (each friend playing as a big card, then Invite), Sent to you (what friends sent as postcards,
- * the newest first), the friends not playing, and the invites waiting. Its "⋯" holds Paste invite, Your name, Keep friends
- * in backups and What leaves your phone. With no friend yet, an empty card invites, and an example postcard shows what
- * a song from a friend looks like. On the bar ([onBack] null) it is a root; from Tools it has Back.
+ * the newest first), the friends not playing, Past friends (once one left), and the invites waiting. Its "⋯" holds Paste
+ * invite, Your name, Keep friends in backups and What leaves your phone. With no friend yet, an empty card invites, and
+ * an example postcard shows what a song from a friend looks like. On the bar ([onBack] null) it is a root; from Tools it
+ * has Back.
  */
 @Composable
 fun HuddlePage(onBack: (() -> Unit)?) {
@@ -644,6 +645,16 @@ fun HuddlePage(onBack: (() -> Unit)?) {
                         lead = { FriendFace(name, friendColor(friend.friend.id), 44.dp, ring = FaceRing.IDLE) },
                         trailing = { ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.huddle_friend_more, name), { sheet = HuddleSheet.Menu(friend.friend.id) }, glass = false) },
                     ) { sheet = HuddleSheet.Menu(friend.friend.id) }
+                }
+            }
+            // The friends list's end: friends who left, their history kept on the phone (HY2).
+            if (shown.past.isNotEmpty()) {
+                item(key = "past", contentType = "past") {
+                    NavRow(
+                        title = stringResource(R.string.huddle_past_title),
+                        sub = shown.past.sortedByDescending { it.leftAt }.joinToString(", ") { it.name },
+                        lead = { Tile(R.drawable.ic_person_off, size = 44.dp) },
+                    ) { nav.open(Page.HuddlePast) }
                 }
             }
             if (shown.invites.isNotEmpty()) {

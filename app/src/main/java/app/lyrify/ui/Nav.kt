@@ -186,6 +186,10 @@ sealed interface Page {
     @Serializable @SerialName("huddlePlays")
     data class HuddlePlays(val friend: String) : HuddlePages
 
+    /** Past friends: friends who left, each opening "You and <name>", their history kept (HY2). */
+    @Serializable @SerialName("huddlePast")
+    data object HuddlePast : HuddlePages
+
     /** Covers & tags (CoversTagsScreen.kt, T2). */
     @Serializable @SerialName("coversTags")
     data object CoversTags : Page

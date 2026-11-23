@@ -119,6 +119,8 @@ sealed interface Accepted {
  *   after each of [RETRY_MS]'s waits, then hourly. Nothing while KJB is not in front.
  * - The history stays on the phone (user 2026-11-23, the server keeps nothing once delivered): every card both ways, for
  *   good, and friends' plays of [PLAYS_KEPT_MS], in plays.db ([HuddleLog]); huddle.json keeps each friend's latest play.
+ *   A friend who leaves (their goodbye, or removed) is a past friend ([HuddleState.past]): their keys and mailboxes go,
+ *   nothing of theirs is read again, their plays reach no Suggestions, and the history stays until [deleteHistory].
  *
  * Nothing here logs a name, a title, a note, a key or a mailbox: a step that did not go logs a reason code. One sync or
  * send at a time.
@@ -372,22 +374,16 @@ class Huddle(
 
     /**
      * Removes the friend [friendId]: they are told (and their KJB removes you too), your mailbox from them is dropped,
-     * and their cards and plays go from this phone.
+     * and they are a past friend ([parted]), your history with them kept.
      */
     suspend fun remove(friendId: String): Boolean {
         val friend = now().friends.firstOrNull { it.id == friendId } ?: return false
         val bye = outgoing(friend, Message.Bye(newId(MESSAGE_ID_BYTES), clock()), Kind.CARD, notBefore = clock())
-        // Their cards and plays go first, after a sync under way (which may still keep what they sent last): a removal whose
-        // history cannot be let go does not happen, so it can be asked again.
+        // After a sync under way, which may still keep what they sent last, or read their goodbye (then they left already).
         val kept = one.withLock {
-            forgetHistory(friendId) && storage.change { state ->
-                state.copy(
-                    friends = state.friends.filterNot { it.id == friendId },
-                    inbox = state.inbox.filterNot { it.friend == friendId },
-                    plays = state.plays.filterNot { it.friend == friendId },
-                    outbox = state.outbox.filterNot { it.box == friend.outBox } + listOfNotNull(bye),
-                    joined = state.joined - friendId,
-                )
+            storage.change { state ->
+                val here = state.friends.firstOrNull { it.id == friendId } ?: return@change state
+                state.parted(here, clock()).let { it.copy(outbox = it.outbox + listOfNotNull(bye)) }
             }
         }
         if (!kept) return false
@@ -395,6 +391,14 @@ class Huddle(
         server.dropBoxes(listOf(friend.inBox))
         return true
     }
+
+    /**
+     * Delete history, on the past friend [friendId]'s page: every card and play between you goes from this phone, then
+     * they leave Past friends. False for anyone else, or when the history could not be let go (nothing changes, so it can
+     * be asked again).
+     */
+    suspend fun deleteHistory(friendId: String): Boolean =
+        now().past.any { it.id == friendId } && forgetHistory(friendId) && storage.change { state -> state.copy(past = state.past.filterNot { it.id == friendId }) }
 
     /** Cancels your invite with [token] (base64url): it goes from the phone and the server, so the link no longer works. */
     suspend fun cancel(token: String): Boolean = one.withLock {
@@ -470,8 +474,11 @@ class Huddle(
     /** The friend [friendId]'s plays of the last year, the newest first: [limit] from the [from]th ("What <name> played"). */
     suspend fun friendPlays(friendId: String, from: Int, limit: Int): List<FriendPlay> = moved().plays(friendId, from, limit).orEmpty()
 
-    /** Every friend's plays from [from] on, the oldest first: Suggestions' friends source ([HuddleFriends]). */
-    suspend fun playsSince(from: Long): List<FriendPlay> = moved().playsSince(from).orEmpty()
+    /** Every friend's plays from [from] on, the oldest first, a past friend's left out: Suggestions' friends source ([HuddleFriends]). */
+    suspend fun playsSince(from: Long): List<FriendPlay> {
+        val past = now().past.mapTo(HashSet()) { it.id }
+        return moved().playsSince(from).orEmpty().filterNot { it.friend in past }
+    }
 
     private suspend fun now(): HuddleState = storage.state.first()
 
@@ -503,8 +510,8 @@ class Huddle(
         }
 
     /**
-     * The friend [friendId]'s cards and plays let go from the history (you removed them, or they removed you); false when
-     * they could not be.
+     * The friend [friendId]'s cards and plays let go from the history (Delete history, or a friend who could not be
+     * written); false when they could not be.
      */
     private suspend fun forgetHistory(friendId: String): Boolean = moved().forget(friendId).also { forgot ->
         if (forgot) {
@@ -651,9 +658,10 @@ class Huddle(
     }
 
     /**
-     * Friends' mailboxes: each message opened with its friend's key, kept once, then acknowledged; a goodbye removes the
-     * friend. One that does not open is read again at [NOT_OPENED_RETRIES] syncs, unacknowledged with what came after it,
-     * then acknowledged too. False when the server did not answer, the acknowledgement included.
+     * Friends' mailboxes: each message opened with its friend's key, kept once, then acknowledged; a goodbye makes the
+     * friend a past friend, and what came after it is not read. One that does not open is read again at
+     * [NOT_OPENED_RETRIES] syncs, unacknowledged with what came after it, then acknowledged too. False when the server did
+     * not answer, the acknowledgement included.
      */
     private suspend fun fetch(): Boolean {
         val friends = now().friends
@@ -683,6 +691,8 @@ class Huddle(
             for (one in box) {
                 val message = HuddleCrypto.decode(one.data)?.let { HuddleCrypto.open(key, it, friend.inBox.encodeToByteArray()) }?.let(Messages::decode)
                 if (message == null) closed += one.seq else read += friend.id to message
+                // Their last word: what came after it is never read, so a past friend's history takes nothing new.
+                if (message is Message.Bye) break
             }
             val reads = if (closed.isEmpty()) 0 else friend.notOpenedReads + 1
             val again = reads in 1..NOT_OPENED_RETRIES
@@ -701,13 +711,7 @@ class Huddle(
             log("huddle: inbox not kept (not_written)")
             return false
         }
-        // A goodbye's friend: their cards and plays go before huddle.json lets them go, so one that cannot be let go reads
-        // the goodbye again at the next sync.
         val byes = read.filter { it.second is Message.Bye }.mapTo(HashSet()) { it.first }
-        if (!byes.all { forgetHistory(it) }) {
-            log("huddle: inbox not kept (not_written)")
-            return false
-        }
         // Whether what came asks for an answer (a name taken in your list, or free again): it goes in this sync.
         var answers = false
         val written = storage.change { state ->
@@ -753,17 +757,24 @@ class Huddle(
                 is Message.Share -> state
                 is Message.Play -> state
                 is Message.Profile -> state.profiled(seen, message, now)
-                is Message.Bye -> state.copy(
-                    friends = state.friends.filterNot { it.id == friendId },
-                    inbox = state.inbox.filterNot { it.friend == friendId },
-                    plays = state.plays.filterNot { it.friend == friendId },
-                    outbox = state.outbox.filterNot { it.box == friend.outBox },
-                    joined = state.joined - friendId,
-                )
+                is Message.Bye -> state.parted(seen, now)
             }
         }
         return state.copy(plays = state.plays.filter { now - it.at <= PLAYS_KEPT_MS })
     }
+
+    /**
+     * This state with [friend] gone [at] (their goodbye, or removed): a past friend under the name you saw them by, their
+     * keys and mailboxes, their latest play (it is in the history) and what waits to go to them let go. A card of theirs
+     * not in the history yet stays to move there ([moved]), as the history is kept.
+     */
+    private fun HuddleState.parted(friend: Friend, at: Long): HuddleState = copy(
+        friends = friends.filterNot { it.id == friend.id },
+        past = past + PastFriend(friend.id, friend.shownName, at),
+        plays = plays.filterNot { it.friend == friend.id },
+        outbox = outbox.filterNot { it.box == friend.outBox },
+        joined = joined - friend.id,
+    )
 
     /**
      * This state with [friend]'s [profile]: their new name, under a stand-in while another friend goes by it, and asked for

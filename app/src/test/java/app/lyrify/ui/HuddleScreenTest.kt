@@ -343,9 +343,45 @@ class HuddleScreenTest {
     fun `a card you sent opens as yours, to whom it went, with Play and neither Send back nor Ask`() {
         val sheet = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText().substringAfter("private fun ReceivedSheet(").substringBefore("private fun SentBy(")
         assertTrue(sheet.contains("val mine = kept is Sent"))
-        assertTrue(sheet.contains("if (!mine) LyrifyButton(stringResource(R.string.huddle_send_back)"))
-        assertTrue(sheet.contains("!mine && missing.isNotEmpty()"))
+        // Changed on purpose (HY2): neither shows for a past friend's card either ([answerable]).
+        assertTrue(sheet.contains("val answerable = !mine && friend != null"))
+        assertTrue(sheet.contains("if (answerable) LyrifyButton(stringResource(R.string.huddle_send_back)"))
+        assertTrue(sheet.contains("answerable && missing.isNotEmpty()"))
         // Only a friend's card is opened: one you sent writes nothing.
         assertTrue(sheet.contains("LaunchedEffect(id) { if (!mine) huddle.opened(id) }"))
+    }
+
+    @Test
+    fun `past friends end the Huddle page's friends list when there are any, and open a page of them, each their history`() {
+        val page = File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText().substringAfter("fun HuddlePage(")
+        assertTrue(page.contains("if (shown.past.isNotEmpty()) {"))
+        // After the friends not playing, before the invites.
+        assertTrue(page.indexOf("item(key = \"past\"") in page.indexOf("item(key = \"idle\"")..page.indexOf("item(key = \"invites\""))
+        assertTrue(page.substringAfter("item(key = \"past\"").substringBefore("item(key = \"invites\"").contains("nav.open(Page.HuddlePast)"))
+        val history = File("src/main/java/app/lyrify/ui/HuddleHistory.kt").readText()
+        assertTrue(history.contains("Page.HuddlePast -> PastPage { nav.back() }"))
+        val list = history.substringAfter("private fun PastPage(").substringBefore("\n}\n")
+        assertTrue(list.contains("stringResource(R.string.huddle_past_title)"))
+        assertTrue(list.contains("nav.open(Page.HuddleThread(past.id))"))
+    }
+
+    @Test
+    fun `a past friend's pages keep the history under the name you saw them by, say they left, and the thread offers Delete history, asked first`() {
+        val history = File("src/main/java/app/lyrify/ui/HuddleHistory.kt").readText()
+        listOf("private fun ThreadPage(", "private fun PlaysPage(").forEach { name ->
+            val page = history.substringAfter(name).substringBefore("\n}\n")
+            assertTrue(name, page.contains("val past = state?.past?.firstOrNull { it.id == friendId }"))
+            assertTrue(name, page.contains("val name = friend?.shownName ?: past?.name.orEmpty()"))
+            assertTrue(name, page.contains("stringResource(R.string.huddle_past_note)"))
+        }
+        val thread = history.substringAfter("private fun ThreadPage(").substringBefore("\n}\n")
+        assertTrue(thread.contains("MenuRow(stringResource(R.string.huddle_delete_history), R.drawable.ic_delete, destructive = true"))
+        assertTrue(thread.contains("ConfirmDialog("))
+        assertTrue(thread.contains("huddle.deleteHistory(friendId)"))
+        assertTrue("nothing to send to a past friend", thread.contains("action = stringResource(R.string.huddle_send_song_to, name).takeIf { past == null }"))
+        // View all keeps a past friend's cards, under the name you saw them by.
+        assertTrue(history.substringAfter("private fun CardsPage(").contains("state?.past.orEmpty().associate { it.id to it.name }"))
+        val strings = File("src/main/res/values/strings_huddle.xml").readText()
+        assertTrue(strings.substringAfter("<string name=\"huddle_remove_text\">").substringBefore("</string>").contains("stays on this phone"))
     }
 }

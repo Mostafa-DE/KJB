@@ -34,7 +34,7 @@
     <string name="huddle_share_plays_off">%1$s doesn\'t see what you play</string>
     <string name="huddle_remove">Remove from Huddle</string>
     <string name="huddle_remove_title">Remove %1$s?</string>
-    <string name="huddle_remove_text">You stop sending each other songs. What they sent leaves this phone, and their KJB removes you too.</string>
+    <string name="huddle_remove_text">You stop sending each other songs, and their KJB removes you too. What you shared stays on this phone, under Past friends.</string>
     <string name="huddle_removed">Removed %1$s</string>
 
     <!-- Listen privately: no play is shared for a while. -->
@@ -260,4 +260,14 @@
     <string name="huddle_played_empty_text">What %1$s plays shows here for a year.</string>
     <string name="huddle_gone_title">No longer friends</string>
     <string name="huddle_gone">Their songs, notes and plays went with them.</string>
+    <!-- Past friends (HY2): friends who left Huddle or whom you removed, their history kept on the phone. -->
+    <string name="huddle_past_title">Past friends</string>
+    <string name="huddle_past_empty">No past friends</string>
+    <string name="huddle_past_note">No longer friends. Nothing new comes from them.</string>
+    <!-- "Friends until 4 Nov 2026". -->
+    <string name="huddle_friends_until">Friends until %1$s</string>
+    <string name="huddle_delete_history">Delete history</string>
+    <string name="huddle_delete_history_title">Delete your history with %1$s?</string>
+    <string name="huddle_delete_history_text">Every song and note between you, and what they played, goes from this phone. You can\'t undo this.</string>
+    <string name="huddle_history_deleted">Deleted your history with %1$s</string>
 </resources>
