@@ -345,9 +345,10 @@ class ChromeTest {
         val huddle = title.indexOf("if (tab != DockTab.HUDDLE)")
         assertTrue(title, huddle > title.indexOf("Text(title") && "HuddleButton {" in title.substring(huddle))
         assertTrue(header, "actions = actions," in header)
-        // Only there: an inner page's bar (Back and its own title, Settings among them) and the player have none.
+        // Only there: an inner page's bar (Back and its own title, Settings among them) and the player have none. Huddle's
+        // history pages (Page.HuddleCards and the others) are other pages, opened from Huddle's own.
         val ui = java.io.File("src/main/java/app/lyrify/ui").listFiles { f -> f.extension == "kt" }!!.associate { it.name to it.readText() }
-        assertEquals(setOf("Chrome.kt"), ui.filterValues { Regex("(?<!fun )HuddleButton[ ({]").containsMatchIn(it) || "nav.open(Page.Huddle" in it }.keys)
+        assertEquals(setOf("Chrome.kt"), ui.filterValues { Regex("(?<!fun )HuddleButton[ ({]|nav\\.open\\(Page\\.Huddle\\b").containsMatchIn(it) }.keys)
         assertFalse("MainTopBar(" in ui.getValue("PlayerScreen.kt") || "MainTopBar(" in ui.getValue("SettingsScreen.kt"))
     }
 
