@@ -279,32 +279,41 @@ class HuddleScreenTest {
     }
 
     @Test
-    fun `the friends row is compact, 40 dp faces over one line of name, and TalkBack still hears what each friend played and when`() {
+    fun `the friends row keeps its full size, 56 dp faces over the name and a short line, room round it and a divider under it`() {
         val everywhere = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText()
         val row = everywhere.substringAfter("internal fun FriendsRow(").substringBefore("\n}\n")
-        // The lock, Invite and every friend at 40 dp (was 56), the live ring and the bars on a playing friend's face.
+        // The lock, Invite and every friend at 56 dp: the user put the compact row's 40 dp back to this (2026-11-23).
         listOf(
-            "Modifier.size(40.dp).background(chrome.action, CircleShape)",
-            "RowFace(stringResource(R.string.huddle_row_invite), description = stringResource(R.string.huddle_invite), onClick = onInvite) { SeatFace(40.dp) }",
-            "FriendFace(name, friendColor(friend.friend.id), 40.dp, ring = if (friend.playing) FaceRing.LIVE else FaceRing.AWAY, playing = friend.playing, paused = friend.paused, mail = sent, cover = friend.cover?.takeIf { friend.playing }?.picture)",
-            // Less room above and below the faces.
-            "contentPadding = PaddingValues(horizontal = 10.dp)",
+            "Modifier.size(56.dp).background(chrome.action, CircleShape)",
+            "Icon(painterResource(R.drawable.ic_lock), contentDescription = null, tint = chrome.onAction, modifier = Modifier.size(24.dp))",
+            "RowFace(stringResource(R.string.huddle_row_invite), stringResource(R.string.huddle_row_invite_line), strong = false, description = stringResource(R.string.huddle_invite), onClick = onInvite) { SeatFace(56.dp) }",
+            "FriendFace(name, friendColor(friend.friend.id), 56.dp, ring = if (friend.playing) FaceRing.LIVE else FaceRing.AWAY, playing = friend.playing, paused = friend.paused, mail = sent, cover = friend.cover?.takeIf { friend.playing }?.picture)",
+            "contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 6.dp)",
+            // Under each name: their song while they play, Paused, or "15 min ago"; under Private, until when.
+            "friend.playing -> play.song.title",
+            "friend.paused -> stringResource(R.string.huddle_paused)",
+            "else -> DateUtils.getRelativeTimeSpanString(play.at, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString()",
+            "description = stringResource(R.string.huddle_private_desc, line)",
         ).forEach { assertTrue(it, row.contains(it)) }
-        // No line under the name ("15 min ago", Paused, their song): TalkBack still says it, the time in words.
-        assertFalse(row.contains("FORMAT_ABBREV_RELATIVE"))
-        assertTrue(row.contains("stringResource(R.string.huddle_row_played, name, ago(play.at, now))"))
+        // "Invite" over "a friend".
+        assertTrue("""<string name="huddle_row_invite_line">a friend</string>""" in File("src/main/res/values/strings_huddle.xml").readText())
         val parts = File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText()
-        // The bars' badge and a card's badge scaled down with the face (24 dp on the 56 dp one).
-        assertTrue(parts.substringAfter("internal fun FriendFace(").substringBefore("\n}\n").contains(".size(18.dp)"))
-        assertTrue(parts.substringAfter("private fun MailBadge(").substringBefore("\n}\n").contains(".size(18.dp)"))
+        // The bars' badge and a card's badge at the 56 dp face's size, where they sat on it.
+        val friendFace = parts.substringAfter("internal fun FriendFace(").substringBefore("\n}\n")
+        assertTrue(friendFace.contains(".offset(3.dp, 3.dp)\n                    .size(24.dp)"))
+        assertTrue(friendFace.contains("if (mail) MailBadge(gap, Modifier.align(Alignment.TopEnd).offset(6.dp, (-4).dp))"))
+        val mail = parts.substringAfter("private fun MailBadge(").substringBefore("\n}\n")
+        assertTrue(mail.contains(".size(24.dp)"))
+        assertTrue(mail.contains("Icon(painterResource(R.drawable.ic_send), contentDescription = null, tint = brand.onHighlight, modifier = Modifier.size(13.dp))"))
         val face = parts.substringAfter("internal fun RowFace(").substringBefore("\n}\n")
-        assertTrue(face.startsWith("name: String, description: String, onClick: () -> Unit, face: @Composable () -> Unit)"))
-        assertEquals("the name alone", 1, Regex("""\bText\(""").findAll(face).count())
-        assertTrue(face.contains("maxLines = 1, overflow = TextOverflow.Ellipsis"))
-        // Each face is still a 48 dp touch target.
+        assertTrue(face.startsWith("name: String, line: String?, strong: Boolean, description: String, onClick: () -> Unit, face: @Composable () -> Unit)"))
+        assertTrue(face.contains(".width(74.dp)"))
+        assertTrue(face.contains("Box(Modifier.padding(bottom = 6.dp)) { face() }"))
+        assertEquals("the name and its line", 2, Regex("""\bText\(""").findAll(face).count())
+        // Each face is a 48 dp touch target.
         assertTrue(face.contains(".heightIn(min = 48.dp)"))
-        // No divider under the row: the For you card and the lists' headers below start bands of their own.
-        assertFalse(everywhere.substringAfter("private fun HuddleFriends(").substringBefore("\n}\n").contains("outlineVariant"))
+        // The divider under the row.
+        assertTrue(everywhere.substringAfter("private fun HuddleFriends(").substringBefore("\n}\n").contains(".height(1.dp).background(MaterialTheme.colorScheme.outlineVariant)"))
     }
 
     @Test
@@ -329,7 +338,7 @@ class HuddleScreenTest {
             assertTrue("$color", contrast(BrandLilac, away) >= 4.5f)
         }
         // Paused: a still pause mark where a playing face has its bars, on the face's own grey.
-        assertTrue(face.contains("if (playing) Equaliser(BrandLilac, Modifier.size(9.dp, 8.dp)) else Icon(painterResource(R.drawable.ic_pause_fill), contentDescription = null, tint = BrandLilac, modifier = Modifier.size(10.dp))"))
+        assertTrue(face.contains("if (playing) Equaliser(BrandLilac, Modifier.size(12.dp, 10.dp)) else Icon(painterResource(R.drawable.ic_pause_fill), contentDescription = null, tint = BrandLilac, modifier = Modifier.size(13.dp))"))
         assertTrue(face.contains(".background(lerp(ground, BrandBlack, 0.18f), CircleShape)"))
         // The Huddle page, the sheets, the player and the Now bar keep their faces: only the friends row greys one through,
         // pauses one or shows a cover in one.
