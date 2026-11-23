@@ -1,14 +1,19 @@
 package app.lyrify.huddle
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.media.ThumbnailUtils
 import android.util.Log
 import app.lyrify.BuildConfig
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.USER_AGENT
+import app.lyrify.auto.CarCovers
+import app.lyrify.auto.coverUri
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
+import app.lyrify.player.CoverFound
 import app.lyrify.stats.HeardTime
 import app.lyrify.stats.PlayEnd
 import app.lyrify.stats.PlayEvent
@@ -20,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.security.SecureRandom
 
 /**
@@ -130,12 +137,25 @@ object HuddleGraph {
 
     /**
      * Where the player's plays go for Friends sharing (player/PlaybackService.kt): each play heard long enough, and what the
-     * player does now, told on the player's thread so the newest is the last told.
+     * player does now (with its song's cover, [Huddle.listening]), told on the player's thread so the newest is the last told.
      */
     fun plays(context: Context): PlayEvents {
         val app = context.applicationContext
         return SharedPlays({ path, at -> scope.launch { shared(app, path)?.let { (song, favourite) -> huddle(app).played(song, at, favourite) } } }) { path, state, positionMs, at ->
-            huddle(app).listening(state, positionMs, at) { shared(app, path) }
+            huddle(app).listening(state, positionMs, at, coverOf = {
+                // Read as the notification reads it, cut square: none for a song without a cover of its own, or one not read now.
+                val song = (LibraryGraph.repository(app).state.value as? LibraryState.Ready)?.library?.song(path)
+                val found = song?.let {
+                    withContext(Dispatchers.IO) {
+                        CarCovers.read<CoverFound<ByteArray>>(app, coverUri(CarCovers.uris(app), it), { own ->
+                            val square = ThumbnailUtils.extractThumbnail(own, Messages.COVER_PX, Messages.COVER_PX)
+                            Messages.cover { quality -> ByteArrayOutputStream().also { out -> square.compress(Bitmap.CompressFormat.JPEG, quality, out) }.toByteArray() }
+                                ?.let { jpeg -> CoverFound.Own(jpeg) } ?: CoverFound.NoArt
+                        }) { CoverFound.NoArt }
+                    }
+                }
+                (found as? CoverFound.Own)?.cover
+            }) { shared(app, path) }
         }
     }
 

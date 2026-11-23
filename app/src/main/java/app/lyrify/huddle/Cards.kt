@@ -1,5 +1,8 @@
 package app.lyrify.huddle
 
+import android.graphics.BitmapFactory
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import app.lyrify.backup.ImportSong
 import app.lyrify.backup.SectionJson.flag
 import app.lyrify.backup.SectionJson.int
@@ -8,6 +11,7 @@ import app.lyrify.backup.SectionJson.long
 import app.lyrify.backup.SectionJson.text
 import app.lyrify.backup.SongMatcher
 import app.lyrify.library.Song
+import app.lyrify.player.coverSample
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -51,16 +55,34 @@ sealed interface Message {
     /**
      * What the friend's player does now ([state]), at [positionMs] in [song], told [at]: at each play, pause, resume, skip,
      * seek and stop, and every [SharedPlays.HEARTBEAT_MS] while it plays. The server keeps only the newest one waiting,
-     * and the phone only in memory.
+     * and the phone only in memory. [cover]: the song's, with the first now that plays it (or, read late, its next);
+     * the others carry none, and the friend's KJB keeps the one it has for the same song.
      */
-    data class Now(override val id: String, override val at: Long, val song: CardSong, val state: NowState, val positionMs: Long, val favourite: Boolean = false) : Message
+    data class Now(override val id: String, override val at: Long, val song: CardSong, val state: NowState, val positionMs: Long, val favourite: Boolean = false, val cover: NowCover? = null) : Message
+}
+
+/**
+ * The cover of the song a friend plays, as their now brings it ([Message.Now.cover]): a JPEG of at most
+ * [Messages.COVER_MAX_BYTES], cut square to about [Messages.COVER_PX].
+ */
+class NowCover(val jpeg: ByteArray) {
+    /**
+     * The cover to draw, decoded at its first read and then kept; null when it does not decode. At the largest halving
+     * still at least [Messages.COVER_PX] on its longer side ([coverSample]), whatever size its header claims.
+     */
+    val picture: ImageBitmap? by lazy {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
+        val sample = coverSample(bounds.outWidth, bounds.outHeight, Messages.COVER_PX) ?: return@lazy null
+        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+    }
 }
 
 /**
  * Messages as their sealed boxes hold them: JSON, then 0x80 and zero bytes up to one of a few sizes ([SIZES]), so the
  * server learns little from a box's length. Keys are short to fit long playlists: "v" format, "i" id, "t" time, "k" kind,
  * "c" card, "s" song or songs, "n" name, "m" note, "f" a favourite, "x" your name taken, "e" a now's state, "p" its place
- * in millis; a song is "t" title, "a" artist, "l" album, "d" length in millis.
+ * in millis, "j" its cover (a JPEG, base64url); a song is "t" title, "a" artist, "l" album, "d" length in millis.
  * A message of an unknown kind or format (a newer KJB's) reads as null and is dropped.
  */
 object Messages {
@@ -73,6 +95,15 @@ object Messages {
     /** The longest note, in characters. */
     const val NOTE_MAX: Int = 500
 
+    /** A now's cover is cut square to this many pixels a side: a friend's face on the friends row. */
+    const val COVER_PX: Int = 96
+
+    /** The largest cover a now carries, in bytes: a larger one from a friend reads as none. */
+    const val COVER_MAX_BYTES: Int = 6 * 1024
+
+    /** The cover a now carries ([Message.Now.cover]): the first of [COVER_QUALITIES] that [jpeg] makes within [COVER_MAX_BYTES]; null when none does. */
+    fun cover(jpeg: (quality: Int) -> ByteArray): ByteArray? = COVER_QUALITIES.asSequence().map(jpeg).firstOrNull { it.size <= COVER_MAX_BYTES }
+
     /** A card of [songs] from the library, their tags as they are (a friend's KJB matches by tags, not by KJB's renames), trimmed to the limits. */
     fun card(kind: CardKind, songs: List<Song>, name: String? = null, note: String? = null): Card =
         Card(kind = kind, songs = songs.take(SONGS_MAX).map(::song), name = clip(name, TEXT_MAX), note = clip(note, NOTE_MAX))
@@ -82,13 +113,18 @@ object Messages {
 
     /**
      * [message] padded to its size; a share too long for the largest keeps its first songs, as many as fit. A play and a now
-     * have the smallest size only (the server keeps them of 2 KB at most): long tags in a script of several bytes a
-     * character are cut, each half as long again, until it fits.
+     * have the smallest size only, a now with a cover [COVER_SIZE] (the server keeps a play of 2 KB at most, a now of 12):
+     * long tags in a script of several bytes a character are cut, each half as long again, until they fit the smallest
+     * size, beside the cover.
      */
     fun encode(message: Message): ByteArray {
+        val cover = (message as? Message.Now)?.cover
+        require(cover == null || cover.jpeg.size <= COVER_MAX_BYTES) { "a cover of ${cover?.jpeg?.size} bytes" }
         var plain = json(message)
+        // The tags' room: the smallest size, and a now's cover on top of it.
+        val room = SIZES.first() + if (cover == null) 0 else plain.size - json((message as Message.Now).copy(cover = null)).size
         var keep = TEXT_MAX
-        while ((message is Message.Play || message is Message.Now) && plain.size >= SIZES.first() && keep > 1) {
+        while ((message is Message.Play || message is Message.Now) && plain.size >= room && keep > 1) {
             keep /= 2
             plain = json(
                 when (message) {
@@ -109,7 +145,7 @@ object Messages {
             plain = json(message.withSongs(fits))
         }
         require(plain.size <= MAX_PLAIN) { "a message of ${plain.size} bytes" }
-        val size = SIZES.first { it > plain.size }
+        val size = if (cover == null) SIZES.first { it > plain.size } else COVER_SIZE
         return plain + END + ByteArray(size - plain.size - 1)
     }
 
@@ -131,7 +167,11 @@ object Messages {
                 val song = (root[SONG_KEY] as? JsonObject)?.let(::songOf) ?: return null
                 // A state a newer KJB tells, or no place: not this version's.
                 val state = NowState.entries.firstOrNull { it.name.lowercase() == root.text(STATE_KEY) } ?: return null
-                Message.Now(id, at, song, state, root.long(POSITION_KEY)?.takeIf { it >= 0 } ?: return null, favourite = root.flag(FAVOURITE_KEY) == true)
+                Message.Now(
+                    id, at, song, state, root.long(POSITION_KEY)?.takeIf { it >= 0 } ?: return null, favourite = root.flag(FAVOURITE_KEY) == true,
+                    // A cover that is not base64url, or larger than any this KJB sends: the now reads without it.
+                    cover = root.text(COVER_KEY)?.let(HuddleCrypto::decode)?.takeIf { it.size in 1..COVER_MAX_BYTES }?.let(::NowCover),
+                )
             }
             else -> null
         }
@@ -181,6 +221,7 @@ object Messages {
                     put(STATE_KEY, JsonPrimitive(message.state.name.lowercase()))
                     put(POSITION_KEY, JsonPrimitive(message.positionMs))
                     if (message.favourite) put(FAVOURITE_KEY, JsonPrimitive(true))
+                    message.cover?.let { put(COVER_KEY, JsonPrimitive(HuddleCrypto.encode(it.jpeg))) }
                 }
             }
         },
@@ -213,6 +254,12 @@ object Messages {
     /** The sizes a message is padded to: most are one song (1 KB); a long playlist takes the largest. */
     private val SIZES: IntArray = intArrayOf(1024, 4 * 1024, 16 * 1024, 48 * 1024)
 
+    /** The JPEG qualities a cover is tried at, the best first ([cover]). */
+    private val COVER_QUALITIES: List<Int> = listOf(85, 70, 55, 40)
+
+    /** The one size of a now with a cover: the smallest size for its tags, and the largest cover in base64url beside them. */
+    private const val COVER_SIZE: Int = 10 * 1024
+
     /** The longest JSON a message holds: the largest size, less the 0x80 that ends it. */
     private val MAX_PLAIN: Int = SIZES.last() - 1
     private const val END: Byte = 0x80.toByte()
@@ -230,6 +277,7 @@ object Messages {
     private const val TAKEN_KEY = "x"
     private const val STATE_KEY = "e"
     private const val POSITION_KEY = "p"
+    private const val COVER_KEY = "j"
     private const val TITLE_KEY = "t"
     private const val ARTIST_KEY = "a"
     private const val ALBUM_KEY = "l"

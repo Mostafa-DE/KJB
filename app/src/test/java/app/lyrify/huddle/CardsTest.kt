@@ -2,11 +2,14 @@ package app.lyrify.huddle
 
 import app.lyrify.backup.SongMatcher
 import app.lyrify.library.song
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.security.SecureRandom
 import java.util.Locale
+import kotlin.random.Random
 
 /** What friends send each other: the messages there and back, padded to a few sizes, and a friend's song found here or not. */
 class CardsTest {
@@ -87,6 +90,38 @@ class CardsTest {
         assertEquals(5_000L, back.positionMs)
         assertNull(Messages.decode("""{"v":1,"i":"m1","t":1,"k":"now","s":{"t":"Paper Lantern","d":1},"e":"rewinding","p":0}""".toByteArray() + byteArrayOf(0x80.toByte())))
         assertNull("no place", Messages.decode("""{"v":1,"i":"m1","t":1,"k":"now","s":{"t":"Paper Lantern","d":1},"e":"paused"}""".toByteArray() + byteArrayOf(0x80.toByte())))
+    }
+
+    @Test
+    fun `a now with a cover brings it back, every cover in one size that seals within the server's 12 KiB, and a friend's too large reads as none`() {
+        val largest = Random(7).nextBytes(Messages.COVER_MAX_BYTES)
+        val long = "ن".repeat(Messages.TEXT_MAX)
+        val now = Message.Now("m1", 1_700_000_000_000, CardSong(long, long, long, 200_000), NowState.PLAYING, 0, favourite = true, cover = NowCover(largest))
+        val bytes = Messages.encode(now)
+        assertEquals(10 * 1024, bytes.size)
+        assertEquals("a small cover, the same size: its length tells nothing of the picture", 10 * 1024, Messages.encode(now.copy(song = lantern, cover = NowCover(byteArrayOf(1, 2, 3)))).size)
+        val back = Messages.decode(bytes) as Message.Now
+        assertArrayEquals(largest, back.cover?.jpeg)
+        assertEquals("its tags cut as a now's without a cover", (Messages.decode(Messages.encode(now.copy(cover = null))) as Message.Now).song, back.song)
+        assertTrue(back.favourite)
+        // huddle-server's limit for a now (src/lib/limits.ts, dataBytes.now).
+        val sealed = HuddleCrypto.seal(ByteArray(32), bytes, "box".encodeToByteArray(), SecureRandom())
+        assertTrue("${sealed.size} bytes sealed", sealed.size <= 12 * 1024)
+        // A friend's KJB that sends a cover over the limit, or one that is not base64url: the now reads, without it.
+        for (cover in listOf(HuddleCrypto.encode(ByteArray(Messages.COVER_MAX_BYTES + 1)), "not base64!")) {
+            val read = Messages.decode("""{"v":1,"i":"m1","t":1,"k":"now","s":{"t":"Paper Lantern","d":1},"e":"playing","p":0,"j":"$cover"}""".toByteArray() + byteArrayOf(0x80.toByte())) as Message.Now
+            assertNull(read.cover)
+            assertEquals(NowState.PLAYING, read.state)
+        }
+    }
+
+    @Test
+    fun `a cover is made at the best JPEG quality within 6 KiB, stepping down, and none when even the lowest is over`() {
+        val tried = ArrayList<Int>()
+        val sizes = mapOf(85 to 9_000, 70 to 7_000, 55 to Messages.COVER_MAX_BYTES, 40 to 4_000)
+        assertEquals(Messages.COVER_MAX_BYTES, Messages.cover { quality -> ByteArray(sizes.getValue(quality)).also { tried += quality } }?.size)
+        assertEquals(listOf(85, 70, 55), tried)
+        assertNull(Messages.cover { ByteArray(Messages.COVER_MAX_BYTES + 1) })
     }
 
     @Test

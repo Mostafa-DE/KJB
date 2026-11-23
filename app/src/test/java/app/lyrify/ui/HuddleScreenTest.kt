@@ -9,6 +9,7 @@ import app.lyrify.huddle.FriendPlay
 import app.lyrify.huddle.HuddleState
 import app.lyrify.huddle.Match
 import app.lyrify.huddle.Message
+import app.lyrify.huddle.NowCover
 import app.lyrify.huddle.NowState
 import app.lyrify.huddle.PendingInvite
 import app.lyrify.huddle.Received
@@ -17,6 +18,7 @@ import app.lyrify.settings.LibraryTab
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -301,6 +303,20 @@ class HuddleScreenTest {
         assertTrue(friendsNow(ending, now + 60_000).single().playing)
         assertFalse("its song ended 30 s ago", friendsNow(ending, now + 60_001).single().playing)
         assertFalse("their latest play alone never is", friendsNow(HuddleState(friends = listOf(wren), plays = listOf(FriendPlay("f1", now - 10_000, lantern))), now).single().playing)
+    }
+
+    @Test
+    fun `a friend's cover comes with their song while it plays or is paused, and goes with it`() {
+        val wren = friend("f1", "Wren")
+        val now = 10_000_000L
+        val cover = NowCover(byteArrayOf(-1, -40, -1))
+        val playing = HuddleState(friends = listOf(wren), live = mapOf("f1" to told(lantern, NowState.PLAYING, now - 20_000).copy(cover = cover)))
+        assertSame(cover, friendsNow(playing, now).single().cover)
+        assertNull("two heartbeats missed", friendsNow(playing, now - 20_000 + 150_001).single().cover)
+        val paused = playing.copy(live = mapOf("f1" to told(lantern, NowState.PAUSED, now - 60_000).copy(cover = cover)))
+        assertSame(cover, friendsNow(paused, now).single().cover)
+        assertNull("paused 10 minutes ago", friendsNow(paused, now - 60_000 + 600_001).single().cover)
+        assertNull("stopped", friendsNow(playing.copy(live = mapOf("f1" to told(lantern, NowState.STOPPED, now - 1_000).copy(cover = cover))), now).single().cover)
     }
 
     @Test

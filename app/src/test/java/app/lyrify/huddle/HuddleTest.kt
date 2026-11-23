@@ -3,11 +3,13 @@ package app.lyrify.huddle
 import app.lyrify.suggestions.FriendPlay as SuggestionsPlay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -844,6 +846,88 @@ class HuddleTest {
         advanceTimeBy(Huddle.UNDO_MS + 1)
         wren.sync()
         assertEquals(acks + 1, server.requests.count { it == "ack" })
+    }
+
+    @Test
+    fun `a song that starts playing brings friends its cover, read once, kept on their phone through its heartbeats, pause and stop, gone with a next song without one`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
+        val jpeg = byteArrayOf(-1, -40, -1, -32, 7, 7)
+        var reads = 0
+        // Juniper's newest now on the server: 10 KB with a cover, a kilobyte without.
+        val covered = { HuddleCrypto.decode(server.waiting(wrenOnJuniper.outBox).single { server.kinds[it.seq] == Kind.NOW }.data)!!.size > 2 * 1024 }
+        val coverOnWren = suspend { wren.state.first().live.getValue(juniperOnWren.id).cover?.jpeg }
+        suspend fun tell(state: NowState, positionMs: Long, song: CardSong, cover: ByteArray?) {
+            juniper.listening(state, positionMs, now + testScheduler.currentTime, { reads++; cover }) { song to false }
+            advanceTimeBy(Huddle.NOW_GAP_MS + 1)
+            runCurrent()
+            assertTrue(wren.sync())
+        }
+        tell(NowState.PLAYING, 0, lantern, jpeg)
+        assertTrue("the song's first now carries its cover", covered())
+        assertArrayEquals(jpeg, coverOnWren())
+        tell(NowState.PLAYING, 60_000, lantern, jpeg)
+        assertFalse("a heartbeat carries none", covered())
+        assertArrayEquals("Wren keeps it for the same song", jpeg, coverOnWren())
+        tell(NowState.PAUSED, 70_000, lantern, jpeg)
+        assertFalse("nor a pause", covered())
+        assertArrayEquals(jpeg, coverOnWren())
+        tell(NowState.PLAYING, 70_000, lantern, jpeg)
+        assertFalse("nor a resume", covered())
+        assertEquals("read once for the song", 1, reads)
+        tell(NowState.PLAYING, 0, bell, null)
+        assertFalse("a song without a cover sends none", covered())
+        assertNull("and the last song's goes", coverOnWren())
+        tell(NowState.PLAYING, 0, lantern, jpeg)
+        assertTrue("a song again after another brings it again", covered())
+        tell(NowState.STOPPED, 80_000, lantern, jpeg)
+        assertFalse("nor a stop", covered())
+        assertArrayEquals(jpeg, coverOnWren())
+        tell(NowState.PLAYING, 0, lantern, jpeg)
+        assertTrue("playing again after a stop brings it again: the friend's KJB may have closed since", covered())
+        assertEquals(4, reads)
+    }
+
+    @Test
+    fun `a cover not read within 300 ms leaves its now to go without it, and rides the song's next heartbeat`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
+        val jpeg = byteArrayOf(-1, -40, -1, -32, 7, 7)
+        var reads = 0
+        val sends = { server.requests.count { it == "send" } }
+        val covered = { HuddleCrypto.decode(server.waiting(wrenOnJuniper.outBox).single { server.kinds[it.seq] == Kind.NOW }.data)!!.size > 2 * 1024 }
+        val before = sends()
+        juniper.listening(NowState.PLAYING, 0, now, {
+            reads++
+            delay(1_000)
+            jpeg
+        }) { lantern to false }
+        advanceTimeBy(Huddle.NOW_GAP_MS + Huddle.COVER_WAIT_MS - 1)
+        runCurrent()
+        assertEquals("waiting for its cover", before, sends())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(before + 1, sends())
+        assertFalse("gone without it", covered())
+        assertTrue(wren.sync())
+        assertEquals(lantern, wren.state.first().live.getValue(juniperOnWren.id).song)
+        assertNull(wren.state.first().live.getValue(juniperOnWren.id).cover)
+
+        // The cover is read meanwhile; the song's heartbeat a minute on carries it, once.
+        advanceTimeBy(60_000)
+        juniper.listening(NowState.PLAYING, 60_000, now + testScheduler.currentTime, { reads++; jpeg }) { lantern to false }
+        advanceTimeBy(Huddle.NOW_GAP_MS + 1)
+        runCurrent()
+        assertTrue("the heartbeat carries it", covered())
+        assertTrue(wren.sync())
+        assertArrayEquals(jpeg, wren.state.first().live.getValue(juniperOnWren.id).cover?.jpeg)
+        juniper.listening(NowState.PLAYING, 120_000, now + testScheduler.currentTime, { reads++; jpeg }) { lantern to false }
+        advanceTimeBy(Huddle.NOW_GAP_MS + 1)
+        runCurrent()
+        assertFalse("the next one none", covered())
+        assertEquals("read once", 1, reads)
     }
 
     @Test
