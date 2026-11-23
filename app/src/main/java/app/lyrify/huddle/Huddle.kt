@@ -199,8 +199,9 @@ class Huddle(
 
     /**
      * The song your nows play and its cover's read, started once the song kept playing [COVER_AFTER_MS] ([listening]): a
-     * read of none once a now carried it, so the song's next nows carry none. None for another song; after a stop, so the
-     * song playing again brings it again; and after a read that found nothing now, so it is read again. Under [nowLock].
+     * read of none once a now carried it to every friend, so the song's next nows carry none. None for another song; after
+     * a stop, so the song playing again brings it again; and after a read that found nothing now, so it is read again.
+     * Under [nowLock].
      */
     private var songCover: Pair<CardSong, Deferred<CoverFound<ByteArray>?>>? = null
 
@@ -403,7 +404,8 @@ class Huddle(
      * [COVER_AFTER_MS] with nothing newer told, so a song skipped sooner sends none: read once then with [coverOf]
      * ([CoverFound.NoArt] for none; null when it could not be read now, as for a read that throws, and read again once the
      * song keeps playing [COVER_AFTER_MS] from its next now that plays), and one read within [COVER_WAIT_MS] goes at once
-     * with a now of its own; one read later goes with the song's next now that plays. Called in the player's order.
+     * with a now of its own; one read later, or one a friend did not get, goes with the song's next now that plays.
+     * Called in the player's order.
      */
     fun listening(state: NowState, positionMs: Long, at: Long, coverOf: suspend () -> CoverFound<ByteArray>? = { CoverFound.NoArt }, songOf: suspend () -> Pair<CardSong, Boolean>?) =
         tell(nows.incrementAndGet(), state, positionMs, at, coverOf, songOf)
@@ -427,15 +429,13 @@ class Huddle(
                 shown = next
                 when {
                     next.state == NowState.STOPPED -> songCover = null
-                    // Carried: the song's next nows carry none.
-                    next.cover != null -> songCover = next.song to CompletableDeferred<CoverFound<ByteArray>?>(CoverFound.NoArt)
                     // Not read now (not a song without one), or another song: read once the song keeps playing.
                     read?.isCompleted == true && read.await() == null || songCover?.first != next.song -> songCover = null
                 }
                 next
             }
-            // The song kept playing COVER_AFTER_MS (this now waited NOW_GAP_MS of it) with nothing newer told, its cover not
-            // read yet: read now, and one found goes with a now of its own.
+            // Once the song kept playing COVER_AFTER_MS (this now waited NOW_GAP_MS of it) with nothing newer told, its cover
+            // not read yet: read it then, and one found goes with a now of its own.
             if (message.state == NowState.PLAYING) {
                 scope.launch {
                     delay(COVER_AFTER_MS - NOW_GAP_MS)
@@ -466,7 +466,10 @@ class Huddle(
                     val unreached = now().friends.filter { it.sharePlays && it.id !in reached }
                     val answers = coroutineScope { unreached.map { friend -> async { outgoing(friend, message, Kind.NOW, notBefore = clock())?.let { server.send(it.box, Kind.NOW, it.data) } } }.awaitAll() }
                     unreached.zip(answers).forEach { (friend, answer) -> if (answer != PostAnswer.NO_ANSWER) reached += friend.id }
-                    answers.count { it == PostAnswer.NO_ANSWER }
+                    answers.count { it == PostAnswer.NO_ANSWER }.also {
+                        // A cover every friend got: the song's next nows carry none. Until then they carry it.
+                        if (it == 0 && message.cover != null) songCover = message.song to CompletableDeferred<CoverFound<ByteArray>?>(CoverFound.NoArt)
+                    }
                 }
                 if (missed == 0) return@launch
                 log("huddle: now not sent to $missed (no_answer)")
