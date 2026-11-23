@@ -246,19 +246,23 @@ Up to 64 entries, each mailbox at most once. Deletes every message in that mailb
 
 ## How the phones poll
 
-- When KJB comes to the front: one `messages/inbox` call for every friend's incoming mailbox, then
-  `invites/status` for each invite still waiting.
-- While the Huddle page is open: the same every 30 seconds (this is what makes "now playing" live).
-- While KJB is in front but the Huddle page is not open: the same every hour.
-- KJB closed: no checks in v1 (no push, no background work).
-- After `inbox`: store, then one `messages/ack` call for the mailboxes that returned cards or profiles. Plays need no
-  ack.
+- While KJB is in front, on any page: one check when it comes to the front, then one every 30 seconds (this is what
+  makes "now playing" live on the Huddle page, in Library, on the player and on the Now bar). A check asks only what
+  there is to ask: `invites/status` for each invite still waiting, `messages/send` for what waits to go, then one
+  `messages/inbox` call for every friend's incoming mailbox.
+- KJB not in front: no checks in v1 (no push, no background work). Plays still go from the player as they happen,
+  screen off or not.
+- After `inbox`: store, then one `messages/ack` call up to the last message read in each mailbox that returned any.
+  Plays need no ack; KJB acknowledges them with the rest.
 - Sending: one `messages/send` per friend (each friend has their own mailbox and their own sealed copy). Plays go to
   the friends the user shares with, unless "Listen privately" is on.
-- Failures: on a network error, `5xx`, or `502/503` from Railway, retry after 30 s, then 60, 120, and so on, up to the
-  normal interval. On `429`, wait `Retry-After` seconds. Use a 15 s request timeout.
+- Failures: a `502`, or a `503` without the server's own error, is Railway restarting: that call is tried once more
+  after 3 s. A check without an answer (network error, `5xx`) is tried again after 30 s, 2 min and 10 min, then every
+  hour until one answers, and back to every 30 s. A card or play without an answer is sent again after 30 s, 2 min
+  and 10 min, KJB in front or not. On `429`, that endpoint waits `Retry-After` seconds (a day at most). Requests time
+  out after 15 s.
 
-At 10 friends with the Huddle page open, a phone makes about 2 calls a minute, far under the limits below. The
+At 10 friends with KJB in front, a phone makes about 2 calls a minute, far under the limits below. The
 per-IP limits leave room for several phones behind one address (one home Wi-Fi, or a mobile carrier's shared
 address): 10 friends behind one IP, each polling every 30 s and sending every play and card to 10 friends, make
 about 600 calls per 10 minutes, 20 MiB of data in a busy hour and 140 MiB in a heavy day.
