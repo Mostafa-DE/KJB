@@ -117,6 +117,23 @@ describe("the built server", () => {
     expect(sent.headers.get("x-content-type-options")).toBe("nosniff")
   })
 
+  it("holds an inbox read until a now lands, and hands that now out once", async () => {
+    const mailbox = randomId()
+    const began = Date.now()
+    const reading = post("/api/v1/messages/inbox", { mailboxes: [{ mailbox }], wait: 5_000 })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const sent = await post("/api/v1/messages/send", { mailbox, kind: "now", data: "bm93" })
+    const answer = await reading
+    const tookMs = Date.now() - began
+    const again = await post("/api/v1/messages/inbox", { mailboxes: [{ mailbox }] })
+
+    expect(sent.status).toBe(201)
+    expect(answer.body.mailboxes[0].messages).toEqual([{ id: sent.body.id, kind: "now", data: "bm93", sentAt: expect.any(Number) }])
+    expect(tookMs).toBeGreaterThanOrEqual(450)
+    expect(tookMs).toBeLessThan(3_000)
+    expect(again.body.mailboxes[0].messages).toEqual([])
+  })
+
   it("answers API errors as JSON", async () => {
     const response = await fetch(`${BASE}/api/v1/messages/send`, {
       method: "POST",

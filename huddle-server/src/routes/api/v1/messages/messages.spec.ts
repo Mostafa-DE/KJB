@@ -1,5 +1,6 @@
+import { setTimeout as sleep } from "node:timers/promises"
 import { describe, expect, it } from "vitest"
-import { db } from "@/db"
+import { db, storageKey } from "@/db"
 import { messages } from "@/db/schema"
 import { enforceRate } from "@/lib/api"
 import { LIMITS } from "@/lib/limits"
@@ -10,10 +11,11 @@ import { handleDeleteMessages } from "./delete"
 import { handleInbox } from "./inbox"
 import { handleSendMessage } from "./send"
 
-const HOUR_MS = 60 * 60 * 1000
+const MINUTE_MS = 60 * 1000
+const HOUR_MS = 60 * MINUTE_MS
 const DAY_MS = 24 * HOUR_MS
 
-type Kind = "card" | "play" | "profile"
+type Kind = "card" | "play" | "profile" | "now"
 
 async function send(mailbox: string, kind: Kind, data = sealed(200), ip?: string) {
   const sent = await call(handleSendMessage, { mailbox, kind, data }, { ip })
@@ -33,6 +35,13 @@ async function inbox(...mailboxes: Array<string | { mailbox: string; after?: str
       more: boolean
     }>
   }
+}
+
+/** A read of `mailbox` held up to `wait` ms, and how long it took to answer. */
+async function held(mailbox: string, wait: number, options?: { ip?: string; signal?: AbortSignal }) {
+  const began = Date.now()
+  const answer = await call(handleInbox, { mailboxes: [{ mailbox }], wait }, options)
+  return { ...answer, tookMs: Date.now() - began }
 }
 
 describe("POST /api/v1/messages/send", () => {
@@ -56,6 +65,7 @@ describe("POST /api/v1/messages/send", () => {
     ["card", LIMITS.dataBytes.card],
     ["profile", LIMITS.dataBytes.profile],
     ["play", LIMITS.dataBytes.play],
+    ["now", LIMITS.dataBytes.now],
   ] as const)("takes a %s up to its size limit and refuses one byte more", async (kind, limit) => {
     const fits = await call(handleSendMessage, { mailbox: randomId(), kind, data: sealed(limit) })
     const tooBig = await call(handleSendMessage, { mailbox: randomId(), kind, data: sealed(limit + 1) })
@@ -166,6 +176,41 @@ describe("POST /api/v1/messages/send", () => {
     expect(otherMailbox.status).toBe(201)
   })
 
+  it("keeps only the newest now in a mailbox, 10 minutes at most, and never counts it against the room", async () => {
+    const mailbox = randomId()
+    const first = await call(handleSendMessage, { mailbox, kind: "now", data: sealed(100) })
+    const newer = await send(mailbox, "now")
+
+    expect(first.status).toBe(201)
+    expect(first.body.expiresAt).toBe(first.body.sentAt + 10 * MINUTE_MS)
+    expect(await db.$count(messages)).toBe(1)
+    expect((await inbox(mailbox)).mailboxes[0].messages.map((message) => [message.id, message.kind])).toEqual([[newer.id, "now"]])
+
+    await send(mailbox, "now")
+    for (let i = 0; i < LIMITS.mailboxMessages; i++) await send(mailbox, "card", sealed(20))
+    const full = await call(handleSendMessage, { mailbox, kind: "card", data: sealed(20) })
+    const stillNow = await call(handleSendMessage, { mailbox, kind: "now", data: sealed(20) })
+
+    expect(full).toMatchObject({ status: 409, body: { error: "mailbox_full" } })
+    expect(stillNow.status).toBe(201)
+  })
+
+  it("allows 1,200 nows an hour into one mailbox, apart from the 240 sends of the other kinds", async () => {
+    const mailbox = randomId()
+    enforceRate(`sends:${storageKey(mailbox)}`, LIMITS.rate.mailboxSends, LIMITS.rate.mailboxSends.limit)
+    const play = await call(handleSendMessage, { mailbox, kind: "play", data: sealed(20) })
+    const now = await call(handleSendMessage, { mailbox, kind: "now", data: sealed(20) })
+    // That now and all but one of the hour's others spent: one more goes, the next waits.
+    enforceRate(`nows:${storageKey(mailbox)}`, LIMITS.rate.mailboxNows, LIMITS.rate.mailboxNows.limit - 2)
+    const last = await call(handleSendMessage, { mailbox, kind: "now", data: sealed(20) })
+    const over = await call(handleSendMessage, { mailbox, kind: "now", data: sealed(20) })
+
+    expect(play.status).toBe(429)
+    expect(now.status).toBe(201)
+    expect(last.status).toBe(201)
+    expect(over).toMatchObject({ status: 429, body: { error: "rate_limited" } })
+  })
+
   it("allows 32 MiB of data an hour from one address", async () => {
     const ip = randomIp()
     const cardsInBudget = LIMITS.rate.ipBytes.limit / LIMITS.dataBytes.card
@@ -176,9 +221,9 @@ describe("POST /api/v1/messages/send", () => {
     expect(refused).toMatchObject({ status: 429, body: { error: "rate_limited" } })
   })
 
-  it("allows 160 MiB of data a day from one address", async () => {
+  it("allows 320 MiB of data a day from one address", async () => {
     const ip = randomIp()
-    // All but two cards' worth of the day spent already, as some 2,500 earlier cards would have.
+    // All but two cards' worth of the day spent already, as some 5,000 earlier cards would have.
     enforceRate(`bytes-day:${ip}`, LIMITS.rate.ipBytesDay, LIMITS.rate.ipBytesDay.limit - 2 * LIMITS.dataBytes.card)
     await send(randomId(), "card", sealed(LIMITS.dataBytes.card), ip)
     await send(randomId(), "card", sealed(LIMITS.dataBytes.card), ip)
@@ -333,6 +378,104 @@ describe("POST /api/v1/messages/inbox", () => {
 
     expect(nextDay.mailboxes[0].messages.map((message) => message.kind)).toEqual(["card"])
     expect(nextMonth.mailboxes[0].messages).toEqual([])
+  })
+
+  it("hands a now out once, as a play, and drops it after 10 minutes", async () => {
+    const mailbox = randomId()
+    const now = await send(mailbox, "now")
+
+    const first = await inbox(mailbox)
+    const second = await inbox(mailbox)
+    await send(mailbox, "now")
+    advanceClock(10 * MINUTE_MS + 1000)
+    const later = await inbox(mailbox)
+
+    expect(first.mailboxes[0].messages.map((message) => message.id)).toEqual([now.id])
+    expect(second.mailboxes[0].messages).toEqual([])
+    expect(later.mailboxes[0].messages).toEqual([])
+  })
+
+  it("holds a read with wait until a message lands in one of its mailboxes, then answers with it", async () => {
+    const mailbox = randomId()
+    const other = randomId()
+    const reading = (async () => {
+      const began = Date.now()
+      const answer = await call(handleInbox, { mailboxes: [{ mailbox: other }, { mailbox }], wait: 5_000 })
+      return { ...answer, tookMs: Date.now() - began }
+    })()
+    await sleep(300)
+    const landed = await send(mailbox, "now")
+    const answer = await reading
+
+    expect(answer.status).toBe(200)
+    expect(answer.tookMs).toBeGreaterThanOrEqual(250)
+    expect(answer.tookMs).toBeLessThan(2_000)
+    expect(answer.body.mailboxes.map((entry: { messages: unknown[] }) => entry.messages.length)).toEqual([0, 1])
+    expect(answer.body.mailboxes[1].messages[0].id).toBe(landed.id)
+  })
+
+  it("answers a held read at once when something waits already, and a read without wait at once, as before", async () => {
+    const mailbox = randomId()
+    await send(mailbox, "card")
+
+    const waiting = await held(mailbox, 5_000)
+    const before = Date.now()
+    const plain = await call(handleInbox, { mailboxes: [{ mailbox: randomId() }] })
+
+    expect(waiting.tookMs).toBeLessThan(1_000)
+    expect(waiting.body.mailboxes[0].messages).toHaveLength(1)
+    expect(plain.body.mailboxes[0].messages).toEqual([])
+    expect(Date.now() - before).toBeLessThan(1_000)
+  })
+
+  it("answers a held read with nothing once its wait is up, a longer wait cut to the server's own", async () => {
+    const empty = await held(randomId(), 400)
+    const longest = LIMITS.inboxWaitMs
+    LIMITS.inboxWaitMs = 300
+    try {
+      const cut = await held(randomId(), 60_000)
+
+      expect(cut.tookMs).toBeGreaterThanOrEqual(280)
+      expect(cut.tookMs).toBeLessThan(2_000)
+    } finally {
+      LIMITS.inboxWaitMs = longest
+    }
+    expect(empty.status).toBe(200)
+    expect(empty.tookMs).toBeGreaterThanOrEqual(380)
+    expect(empty.body.mailboxes[0]).toMatchObject({ messages: [], more: false })
+  })
+
+  it("lets a held read go when its phone goes, and holds only so many at once, answering the rest at once", async () => {
+    const cap = LIMITS.inboxWaiters
+    LIMITS.inboxWaiters = 1
+    try {
+      const gone = new AbortController()
+      const first = held(randomId(), 10_000, { signal: gone.signal })
+      await sleep(200)
+      const over = await held(randomId(), 5_000)
+      gone.abort()
+      const left = Date.now()
+      await first
+      const after = await held(randomId(), 400)
+
+      expect(over.tookMs).toBeLessThan(1_000)
+      expect(Date.now() - left).toBeLessThan(1_500)
+      expect(after.tookMs).toBeGreaterThanOrEqual(380)
+    } finally {
+      LIMITS.inboxWaiters = cap
+    }
+  })
+
+  it("counts held reads in their own window per address, and past it answers at once", async () => {
+    const ip = randomIp()
+    enforceRate(`waits:${ip}`, LIMITS.rate.inboxWaits, LIMITS.rate.inboxWaits.limit)
+
+    const spent = await held(randomId(), 400, { ip })
+    const other = await held(randomId(), 400)
+
+    expect(spent.status).toBe(200)
+    expect(spent.tookMs).toBeLessThan(300)
+    expect(other.tookMs).toBeGreaterThanOrEqual(380)
   })
 
   it("refuses more than 64 mailboxes, the same mailbox twice, and a bad cursor", async () => {

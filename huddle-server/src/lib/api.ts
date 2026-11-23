@@ -152,7 +152,7 @@ export function errorResponse(error: unknown) {
  */
 export function apiRoute<Schema extends z.ZodType>(
   schema: Schema,
-  handle: (input: z.output<Schema>, ip: string) => Promise<Response>,
+  handle: (input: z.output<Schema>, ip: string, signal: AbortSignal) => Promise<Response>,
 ) {
   return async (request: Request) => {
     try {
@@ -162,7 +162,7 @@ export function apiRoute<Schema extends z.ZodType>(
         const field = parsed.error.issues[0]?.path.join(".")
         return json(400, { error: "bad_request", field: field || undefined })
       }
-      return await handle(parsed.data, ip)
+      return await handle(parsed.data, ip, request.signal)
     } catch (error) {
       return errorResponse(error)
     }

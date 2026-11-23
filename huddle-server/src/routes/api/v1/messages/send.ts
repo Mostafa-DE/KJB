@@ -12,8 +12,10 @@ export const handleSendMessage = apiRoute(
   async ({ mailbox, kind, data }, ip) => {
     const size = dataSize(data)
     if (size > LIMITS.dataBytes[kind]) throw new ApiError(413, "too_large")
-    // Keyed by the hash, so the rate counters never hold a mailbox id either.
-    enforceRate(`sends:${storageKey(mailbox)}`, LIMITS.rate.mailboxSends)
+    // Keyed by the hash, so the rate counters never hold a mailbox id either. Nows (a heartbeat a minute, and each
+    // skip) have a window of their own, so they never use up the one cards, plays and profiles share.
+    if (kind === "now") enforceRate(`nows:${storageKey(mailbox)}`, LIMITS.rate.mailboxNows)
+    else enforceRate(`sends:${storageKey(mailbox)}`, LIMITS.rate.mailboxSends)
     enforceRate(`bytes:${ip}`, LIMITS.rate.ipBytes, size)
     enforceRate(`bytes-day:${ip}`, LIMITS.rate.ipBytesDay, size)
     if (await storeIsFull()) throw new ApiError(503, "storage_full")
