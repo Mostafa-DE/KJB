@@ -248,14 +248,20 @@ class HuddleTest {
         runCurrent()
         assertEquals(sends + 2, server.requests.count { it == "send" })
         assertTrue(logged.toString(), "huddle: play not sent, next try in 30 s" in logged)
-        server.online = true
         advanceTimeBy(2 * 60_000L)
+        runCurrent()
+        assertEquals(sends + 3, server.requests.count { it == "send" })
+        server.online = true
+        advanceTimeBy(10 * 60_000L - 1)
+        runCurrent()
+        assertTrue(server.waiting(wrenOnJuniper.outBox).isEmpty())
+        advanceTimeBy(1)
         runCurrent()
         assertEquals(1, server.waiting(wrenOnJuniper.outBox).size)
         assertTrue(juniperState.now.outbox.isEmpty())
         advanceTimeBy(Huddle.HOUR_MS)
         runCurrent()
-        assertEquals("sent once, then no more tries", sends + 3, server.requests.count { it == "send" })
+        assertEquals("sent once, then no more tries", sends + 4, server.requests.count { it == "send" })
     }
 
     @Test
@@ -315,13 +321,86 @@ class HuddleTest {
     }
 
     @Test
+    fun `a newcomer who changes to another friend's name shows under a stand-in of that name, and is asked again`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (rook, _) = phone("Rook")
+        val (other, otherState) = phone("Juniper")
+        friends(wren, juniper)
+        rook.accept(checkNotNull(rook.parse(link(wren))))
+        other.accept(checkNotNull(other.parse(link(wren))))
+        wren.sync()
+        val newcomer = wrenState.now.friends.single { it.taken != null }
+        assertEquals("Juniper 2", newcomer.shownName)
+        other.sync()
+        assertTrue(other.setName("rook"))
+        wren.sync()
+        assertEquals("rook 2", wrenState.now.friends.single { it.id == newcomer.id }.shownName)
+        other.sync()
+        assertTrue(otherState.now.friends.single().asksNewName)
+    }
+
+    @Test
+    fun `a stand-in under a name you gave the friend stays taken, so the next newcomer gets another`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (second, _) = phone("Juniper")
+        val (third, _) = phone("Juniper")
+        friends(wren, juniper)
+        second.accept(checkNotNull(second.parse(link(wren))))
+        wren.sync()
+        val renamed = wrenState.now.friends.single { it.taken != null }
+        assertTrue(wren.rename(renamed.id, "June"))
+        third.accept(checkNotNull(third.parse(link(wren))))
+        wren.sync()
+        assertEquals("Juniper 3", wrenState.now.friends.single { it.id != renamed.id && it.taken != null }.taken)
+        // Your name for them taken back: every friend shows a name of their own.
+        assertTrue(wren.rename(renamed.id, null))
+        assertEquals(3, wrenState.now.friends.map { it.shownName.lowercase() }.distinct().size)
+    }
+
+    @Test
+    fun `a join written on a second try, after the friend of the same name left, gets no stand-in and asks nothing`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (other, otherState) = phone("wren")
+        val rookState = MemoryHuddle(HuddleState(name = "Rook"))
+        // The friend who leaves while the first write of a new friend fails (a full disk): the change runs again.
+        var leaves: String? = null
+        val storage = object : HuddleStorage {
+            override val state = rookState.state
+
+            override suspend fun change(change: (HuddleState) -> HuddleState): Boolean {
+                val gone = leaves
+                if (gone != null && change(rookState.now).friends.size > rookState.now.friends.size) {
+                    leaves = null
+                    rookState.change { state -> state.copy(friends = state.friends.filterNot { it.id == gone }) }
+                }
+                return rookState.change(change)
+            }
+        }
+        val rook = Huddle(storage, server, host, hosts, { now + testScheduler.currentTime }, random, backgroundScope)
+        leaves = friends(wren, rook).second.id
+        val joined = rook.accept(checkNotNull(rook.parse(link(other)))) as Accepted.Joined
+        assertNull(joined.friend.taken)
+        assertEquals(listOf("wren"), rookState.now.friends.map { it.shownName })
+        runCurrent()
+        other.sync()
+        assertFalse(otherState.now.friends.single().asksNewName)
+    }
+
+    @Test
     fun `your new name reaches every friend, and a name you gave a friend still wins on your phone`() = runTest {
         val (wren, _) = phone("Wren")
         val (juniper, juniperState) = phone("Juniper")
+        val (rook, rookState) = phone("Rook")
         val (_, wrenOnJuniper) = friends(wren, juniper)
+        rook.accept(checkNotNull(rook.parse(link(wren))))
+        wren.sync()
         assertTrue(wren.setName("  Wren   Calloway "))
         juniper.sync()
+        rook.sync()
         assertEquals("Wren Calloway", juniperState.now.friends.single().name)
+        assertEquals("Wren Calloway", rookState.now.friends.single().name)
         juniper.rename(wrenOnJuniper.id, "W")
         assertTrue(wren.setName("Wren"))
         juniper.sync()

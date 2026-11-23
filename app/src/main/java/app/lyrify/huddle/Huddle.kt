@@ -428,9 +428,12 @@ class Huddle(
     private fun friendOf(name: String, outBox: String, inBox: String, outKey: String, inKey: String, joinId: String): Friend =
         Friend(id = newId(FRIEND_ID_BYTES), name = name, outBox = outBox, inBox = inBox, outKey = outKey, inKey = inKey, joinId = joinId, addedAt = clock())
 
-    /** [friend] as a newcomer to [friends]: under a stand-in name ([Friend.taken]) when one of them goes by theirs. */
+    /**
+     * [friend] as a newcomer to [friends]: under a stand-in name ([Friend.taken]) when one of them goes by theirs, else under
+     * their own, also when a write runs this again ([HuddleStorage.change]) after that friend went.
+     */
     private fun newcomer(friend: Friend, friends: List<Friend>): Friend =
-        if (friends.any { sameName(it.shownName, friend.name) }) friend.copy(taken = standIn(friend.name, friends)) else friend
+        friend.copy(taken = if (friends.any { sameName(it.shownName, friend.name) }) standIn(friend.name, friends) else null)
 
     /** Your [name] for [friend], and whether theirs is taken in your list ([Friend.taken]), sealed for their mailbox. */
     private fun profile(friend: Friend, name: String, now: Long): Outgoing? =
@@ -581,8 +584,9 @@ class Huddle(
         // Whether what came asks for an answer (a name taken in your list, or free again): it goes in this sync.
         var answers = false
         val written = storage.change { state ->
-            val counted = state.copy(friends = state.friends.map { it.copy(notOpenedReads = notOpened[it.id] ?: it.notOpenedReads) })
-            counted.received(read, now).also { next -> answers = next.outbox.any { out -> state.outbox.none { it.id == out.id } } }
+            state.copy(friends = state.friends.map { it.copy(notOpenedReads = notOpened[it.id] ?: it.notOpenedReads) })
+                .received(read, now)
+                .also { next -> answers = next.outbox.any { out -> state.outbox.none { it.id == out.id } } }
         }
         if (!written) {
             log("huddle: inbox not kept (not_written)")
@@ -640,16 +644,16 @@ class Huddle(
      */
     private fun HuddleState.profiled(friend: Friend, profile: Message.Profile, now: Long): HuddleState {
         val others = friends.filter { it.id != friend.id }
-        val renamed = profile.name != friend.name
         val taken = when {
             others.none { sameName(it.shownName, profile.name) } -> null
-            // The same name again: as it was, never a newcomer's stand-in for a name they had before you named another so.
-            !renamed -> friend.taken
-            else -> friend.taken ?: standIn(profile.name, others)
+            // The same name again (case aside): as it was, never a newcomer's stand-in for a name they had before you named
+            // another so.
+            sameName(profile.name, friend.name) -> friend.taken
+            // Another friend's name: a stand-in of that one, not of the name they had.
+            else -> standIn(profile.name, others)
         }
         val updated = friend.copy(name = profile.name, taken = taken, asksNewName = profile.taken)
-        val tell = (renamed && taken != null) || (friend.taken != null && taken == null)
-        val answer = name?.takeIf { tell }?.let { profile(updated, it, now) }
+        val answer = name?.takeIf { (profile.name != friend.name && taken != null) || (friend.taken != null && taken == null) }?.let { profile(updated, it, now) }
         return copy(
             friends = friends.map { if (it.id == friend.id) updated else it },
             outbox = if (answer == null) outbox else outbox.filterNot { it.kind == Kind.PROFILE && it.box == friend.outBox } + answer,
@@ -705,9 +709,14 @@ class Huddle(
 /** Whether two names are one in a friend list: case aside (both are clean already, [Invites.cleanName]). */
 private fun sameName(a: String, b: String): Boolean = a.equals(b, ignoreCase = true)
 
-/** The name KJB shows for a newcomer whose [name] one of [friends] goes by: "<name> 2", or the first number free. */
+/**
+ * The name KJB shows for a newcomer whose [name] one of [friends] goes by: "<name> 2", or the first number free, also of
+ * a stand-in under the name you gave a friend (shown again once you take that back).
+ */
 private fun standIn(name: String, friends: List<Friend>): String =
-    generateSequence(2) { it + 1 }.map { "$name $it" }.first { candidate -> friends.none { sameName(it.shownName, candidate) } }
+    generateSequence(2) { it + 1 }.map { "$name $it" }.first { candidate ->
+        friends.none { friend -> listOfNotNull(friend.shownName, friend.taken).any { sameName(it, candidate) } }
+    }
 
 /** Friends' plays for Suggestions (handoff/sg1-interfaces.md, section 3): what [storage] keeps, mapped to Suggestions' own form. */
 class HuddleFriends(private val storage: HuddleStorage) : FriendsSource {
