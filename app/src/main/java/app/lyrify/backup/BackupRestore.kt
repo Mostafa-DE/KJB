@@ -202,6 +202,9 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         known,
     )
 
+    /** The paths of this phone's songs: a saved download not found here never takes another song's file. */
+    private val phonePaths: Set<String> = phone.mapTo(HashSet()) { it.path }
+
     private fun ref(ref: SongRef): SongRef? = found[ref.path]?.ref
 
     /** The songs the [chosen] sections name that are not on this phone, each once, in the summary's order. */
@@ -380,12 +383,16 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             Prepared.Books(BookState(state.books.values.mapNotNull(::matched).associateBy { it.id }, marks))
         }
         Section.BOOK_PLAYS -> Prepared.Plays(here(checkNotNull(contents.bookPlays)), books = true)
-        // A saved song on its file here when it is found; else on its path there, and its sheet offers Play once a file is.
+        // A saved song on its file here when it is found. Else on its path there, and its sheet offers Play once a file
+        // is; but on no file (an empty path) when another song of this phone is at that path, as when this phone saved
+        // another download under that name first: its Play never plays that song as this one.
         Section.DOWNLOADS -> checkNotNull(contents.downloads).let { memory ->
             Prepared.Downloads(
                 memory.copy(
                     items = memory.items.map { item ->
-                        (item.state as? DownloadState.Done)?.let { done -> found[done.path]?.let { item.copy(state = done.copy(path = it.path)) } } ?: item
+                        (item.state as? DownloadState.Done)?.let { done ->
+                            item.copy(state = done.copy(path = found[done.path]?.path ?: done.path.takeUnless { it in phonePaths }.orEmpty()))
+                        } ?: item
                     },
                 ),
             )

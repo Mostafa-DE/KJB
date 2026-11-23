@@ -1,10 +1,13 @@
 package app.lyrify.backup
 
 import app.lyrify.backup.BackupFixtures.T0
+import app.lyrify.backup.BackupFixtures.bell
 import app.lyrify.backup.BackupFixtures.contents
 import app.lyrify.backup.BackupFixtures.download
 import app.lyrify.backup.BackupFixtures.downloads
 import app.lyrify.backup.BackupFixtures.entries
+import app.lyrify.backup.BackupFixtures.lantern
+import app.lyrify.backup.BackupFixtures.moved
 import app.lyrify.backup.BackupFixtures.newLantern
 import app.lyrify.backup.BackupFixtures.newLibrary
 import app.lyrify.backup.BackupFixtures.snapshot
@@ -91,6 +94,21 @@ class DownloadsBackupTest {
         // Restored again: nothing more.
         runBlocking { plan.apply(setOf(Section.DOWNLOADS), phone, newId) }
         assertEquals(listOf("d9", "d2", "d1", "d8"), phone.downloads.items.map { it.key })
+    }
+
+    @Test
+    fun `a saved download not found here keeps its path for the file to come, but never one where another song is`() {
+        // The new phone saved another download under the same free name first: its Play must not play that one as this.
+        val taken = MemoryStores()
+        val free = MemoryStores()
+
+        runBlocking {
+            RestorePlan(contents(), listOf(moved(bell, lantern.path, bell.durationMs))).apply(setOf(Section.DOWNLOADS), taken, newId)
+            RestorePlan(contents(), newLibrary - newLantern).apply(setOf(Section.DOWNLOADS), free, newId)
+        }
+
+        assertEquals("never on another song's file", DownloadState.Done("", T0 + 10), taken.downloads.items.single { it.key == "d1" }.state)
+        assertEquals("on its path there, Play once the file is", DownloadState.Done(lantern.path, T0 + 10), free.downloads.items.single { it.key == "d1" }.state)
     }
 
     @Test
