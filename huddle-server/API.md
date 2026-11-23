@@ -275,9 +275,9 @@ entries; `0` is fine and safe to retry).
 - Sending: one `messages/send` per friend (each friend has their own mailbox and their own sealed copy). Plays and nows
   go to the friends the user shares with, unless "Listen privately" is on. A play goes once 10 s of the song were
   heard, a now at once at each play, pause, resume, skip, seek and stop (several within half a second go as the newest),
-  and every minute while the song plays. The first now that plays a song also carries its cover: cut square to 96 px,
-  a JPEG of at most 6 KiB, so the now is padded to 10 KiB instead of 1 KiB. A now waits for the cover 300 ms at most;
-  one read later goes with the song's next now that plays. Heartbeats, pauses and stops carry none, nor does a song
+  and every minute while the song plays. The first now that plays a song also carries its cover: cut square, 96 px at
+  most, a JPEG of at most 6 KiB, so the now is padded to 10 KiB instead of 1 KiB. A now waits for the cover 300 ms at
+  most; one read later, or read again after a read that failed, goes with the song's next now that plays. Heartbeats, pauses and stops carry none, nor does a song
   without a cover. The friend's KJB keeps it in memory with the song's now. A now is kept in memory only: one a
   friend's server did not answer is sent to that friend again after 2 s, 5 s, 15 s, 30 s and 60 s while it is the
   newest (the last under 2 minutes after it, so a pause lands before a friend lets the "playing" go), and after that
