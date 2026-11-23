@@ -8,6 +8,8 @@ import app.lyrify.huddle.Friend
 import app.lyrify.huddle.FriendPlay
 import app.lyrify.huddle.HuddleState
 import app.lyrify.huddle.Match
+import app.lyrify.huddle.Message
+import app.lyrify.huddle.NowState
 import app.lyrify.huddle.PendingInvite
 import app.lyrify.huddle.Received
 import app.lyrify.library.song
@@ -32,6 +34,9 @@ class HuddleScreenTest {
 
     private fun friend(id: String, name: String, lastSentAt: Long? = null, rename: String? = null) =
         Friend(id, name, "out-$id", "in-$id", "ok", "ik", "join-$id", addedAt = 1, rename = rename, lastSentAt = lastSentAt)
+
+    /** A friend's now: [song] in [state] at [positionMs], told [at]. */
+    private fun told(song: CardSong, state: NowState, at: Long, positionMs: Long = 0) = Message.Now("n-$at", at, song, state, positionMs)
 
     @Test
     fun `Tools says what Huddle is for, then who waits, then how many friends with the cards not opened as the badge`() {
@@ -111,19 +116,25 @@ class HuddleScreenTest {
     }
 
     @Test
-    fun `friends playing now come first, the newest song first, then the others by their latest play, then by name`() {
+    fun `friends playing now come first, the newest song first, then those paused, then the others by their latest play, then by name`() {
         val now = 10_000_000L
         val state = HuddleState(
-            friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper"), friend("f3", "Rook"), friend("f4", "Ash"), friend("f5", "Moss"), friend("f6", "Birch")),
+            friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper"), friend("f3", "Rook"), friend("f4", "Ash"), friend("f5", "Moss"), friend("f6", "Birch"), friend("f7", "Fern")),
             plays = listOf(
                 FriendPlay("f1", now - 100_000, lantern),
                 FriendPlay("f2", now - 30_000, bell),
                 FriendPlay("f3", now - 900_000, bell),
                 FriendPlay("f4", now - 600_000, lantern),
             ),
+            live = mapOf(
+                "f1" to told(lantern, NowState.PLAYING, now - 40_000, positionMs = 60_000),
+                "f2" to told(bell, NowState.PLAYING, now - 20_000, positionMs = 10_000),
+                "f7" to told(bell, NowState.PAUSED, now - 50_000),
+            ),
         )
-        assertEquals(listOf("f2", "f1", "f4", "f3", "f6", "f5"), friendsNow(state, now).map { it.friend.id })
-        assertEquals(listOf(true, true, false, false, false, false), friendsNow(state, now).map { it.playing })
+        assertEquals(listOf("f2", "f1", "f7", "f4", "f3", "f6", "f5"), friendsNow(state, now).map { it.friend.id })
+        assertEquals(listOf(true, true, false, false, false, false, false), friendsNow(state, now).map { it.playing })
+        assertEquals(listOf(false, false, true, false, false, false, false), friendsNow(state, now).map { it.paused })
     }
 
     @Test
@@ -132,14 +143,16 @@ class HuddleScreenTest {
         val other = CardSong("Low Tide", "Odile Marsh", null, 200_000)
         val state = HuddleState(
             friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper"), friend("f3", "Rook"), friend("f4", "Ash")),
-            plays = listOf(
-                FriendPlay("f2", now - 20_000, bell),
-                FriendPlay("f1", now - 100_000, lantern),
-                FriendPlay("f3", now - 1_200_000, lantern),
-                FriendPlay("f4", now - 10_000, other),
+            plays = listOf(FriendPlay("f3", now - 30_000, lantern)),
+            live = mapOf(
+                "f2" to told(bell, NowState.PLAYING, now - 20_000),
+                "f1" to told(lantern, NowState.PLAYING, now - 100_000, positionMs = 20_000),
+                "f3" to told(lantern, NowState.STOPPED, now - 10_000),
+                "f4" to told(other, NowState.PLAYING, now - 10_000),
+                "f5" to told(lantern, NowState.PAUSED, now - 10_000),
             ),
         )
-        val on = friendsOn(state, now, "Paper Lantern", "Kit Calloway")
+        val on = friendsOn(state.copy(friends = state.friends + friend("f5", "Moss")), now, "Paper Lantern", "Kit Calloway")
         assertEquals(listOf("f1" to true, "f2" to false), on.map { it.friend.friend.id to it.sameSong })
         // Case, accents and spacing aside.
         assertEquals(on, friendsOn(state, now, "paper  lantern", "KIT CALLOWAY"))
@@ -213,9 +226,10 @@ class HuddleScreenTest {
         val now = 10_000_000L
         val wren = friend("f1", "Wren")
         assertFalse(huddleLive(HuddleState(friends = listOf(wren)), now).playing.isNotEmpty())
-        assertTrue(huddleLive(HuddleState(friends = listOf(wren), plays = listOf(FriendPlay("f1", now - 60_000, lantern))), now).playing.isNotEmpty())
-        assertFalse(huddleLive(HuddleState(friends = listOf(wren), plays = listOf(FriendPlay("f1", now - 600_000, lantern))), now).playing.isNotEmpty())
-        assertFalse(huddleLive(HuddleState(plays = listOf(FriendPlay("f1", now - 60_000, lantern))), now).playing.isNotEmpty())
+        assertTrue(huddleLive(HuddleState(friends = listOf(wren), live = mapOf("f1" to told(lantern, NowState.PLAYING, now - 60_000))), now).playing.isNotEmpty())
+        assertFalse("paused", huddleLive(HuddleState(friends = listOf(wren), live = mapOf("f1" to told(lantern, NowState.PAUSED, now - 60_000))), now).playing.isNotEmpty())
+        assertFalse("a play alone", huddleLive(HuddleState(friends = listOf(wren), plays = listOf(FriendPlay("f1", now - 60_000, lantern))), now).playing.isNotEmpty())
+        assertFalse(huddleLive(HuddleState(live = mapOf("f1" to told(lantern, NowState.PLAYING, now - 60_000))), now).playing.isNotEmpty())
     }
 
     @Test
@@ -226,12 +240,16 @@ class HuddleScreenTest {
         val state = HuddleState(
             name = "Kai",
             friends = listOf(wren, friend("f2", "Juniper"), friend("f3", "Rook")),
-            plays = listOf(FriendPlay("f1", now - 60_000, lantern), FriendPlay("f2", now - 30_000, bell), FriendPlay("f3", now - 900_000, bell)),
+            live = mapOf(
+                "f1" to told(lantern, NowState.PLAYING, now - 60_000),
+                "f2" to told(bell, NowState.PLAYING, now - 30_000),
+                "f3" to told(bell, NowState.PLAYING, now - 900_000),
+            ),
         )
         assertEquals(HuddleLive(joined = true, playing = listOf("Juniper", "Wrennie")), huddleLive(state, now))
         assertEquals(HuddleLive(joined = true), huddleLive(state, now + 900_000))
-        // A play from someone no longer a friend counts for nothing.
-        assertEquals(HuddleLive(joined = true), huddleLive(HuddleState(name = "Kai", plays = listOf(FriendPlay("f9", now - 60_000, lantern))), now))
+        // A now from someone no longer a friend counts for nothing.
+        assertEquals(HuddleLive(joined = true), huddleLive(HuddleState(name = "Kai", live = mapOf("f9" to told(lantern, NowState.PLAYING, now - 60_000))), now))
     }
 
     @Test
@@ -268,25 +286,41 @@ class HuddleScreenTest {
     }
 
     @Test
-    fun `each friend shows their latest play, playing until its length and a minute have passed`() {
+    fun `a friend plays only while their newest now says so, two heartbeats missed at most, and not past their song's end and 30 s`() {
         val wren = friend("f1", "Wren")
-        val juniper = friend("f2", "Juniper")
-        val rook = friend("f3", "Rook")
         val now = 10_000_000L
-        val state = HuddleState(
-            friends = listOf(wren, juniper, rook),
-            plays = listOf(FriendPlay("f1", now - 100_000, lantern), FriendPlay("f2", now - 300_000, bell), FriendPlay("f1", now - 900_000, bell)),
-        )
-        assertEquals(
-            listOf(
-                FriendNow(wren, FriendPlay("f1", now - 100_000, lantern), playing = true),
-                FriendNow(juniper, FriendPlay("f2", now - 300_000, bell), playing = false),
-                FriendNow(rook, null, playing = false),
-            ),
-            friendsNow(state, now),
-        )
-        assertEquals(true, friendsNow(state, now - 100_000 + 200_000 + 60_000).first().playing)
-        assertEquals(false, friendsNow(state, now - 100_000 + 200_000 + 60_001).single { it.friend == wren }.playing)
+        val playing = told(lantern, NowState.PLAYING, now - 20_000, positionMs = 60_000)
+        val state = HuddleState(friends = listOf(wren), plays = listOf(FriendPlay("f1", now - 900_000, bell)), live = mapOf("f1" to playing))
+        // Where they are: the place told, and the time since; Play along starts there.
+        assertEquals(FriendNow(wren, FriendPlay("f1", now - 80_000, lantern), playing = true), friendsNow(state, now).single())
+        assertEquals(80_000L, playAlongMs(friendsNow(state, now).single().play!!, now))
+        assertTrue(friendsNow(state, now - 20_000 + 150_000).single().playing)
+        assertFalse("two heartbeats missed", friendsNow(state, now - 20_000 + 150_001).single().playing)
+        assertEquals("then their latest play, as before", FriendPlay("f1", now - 900_000, bell), friendsNow(state, now - 20_000 + 150_001).single().play)
+        val ending = state.copy(live = mapOf("f1" to told(lantern, NowState.PLAYING, now - 20_000, positionMs = 150_000)))
+        assertTrue(friendsNow(ending, now + 60_000).single().playing)
+        assertFalse("its song ended 30 s ago", friendsNow(ending, now + 60_001).single().playing)
+        assertFalse("their latest play alone never is", friendsNow(HuddleState(friends = listOf(wren), plays = listOf(FriendPlay("f1", now - 10_000, lantern))), now).single().playing)
+    }
+
+    @Test
+    fun `a paused friend is paused for 10 minutes after the pause, still, and a stopped one leaves at once`() {
+        val wren = friend("f1", "Wren")
+        val now = 10_000_000L
+        val history = FriendPlay("f1", now - 900_000, bell)
+        val paused = HuddleState(friends = listOf(wren), plays = listOf(history), live = mapOf("f1" to told(lantern, NowState.PAUSED, now - 60_000, positionMs = 30_000)))
+        assertEquals(FriendNow(wren, FriendPlay("f1", now - 90_000, lantern), playing = false, paused = true), friendsNow(paused, now).single())
+        assertTrue(friendsNow(paused, now - 60_000 + 600_000).single().paused)
+        assertEquals(FriendNow(wren, history, playing = false), friendsNow(paused, now - 60_000 + 600_001).single())
+        val stopped = paused.copy(live = mapOf("f1" to told(lantern, NowState.STOPPED, now - 1_000, positionMs = 30_000)))
+        assertEquals(FriendNow(wren, history, playing = false), friendsNow(stopped, now).single())
+        // The card, the friends row and their song's sheet say Paused, with a still face: no ring, no bars.
+        val parts = File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText()
+        val everywhere = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText()
+        val sheets = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText()
+        assertTrue(parts.substringAfter("internal fun FriendCard(").substringBefore("\n}\n").contains("R.string.huddle_paused"))
+        assertTrue(everywhere.substringAfter("internal fun FriendsRow(").substringBefore("\n}\n").contains("R.string.huddle_row_paused"))
+        assertTrue(sheets.substringAfter("private fun PeekSheet(").substringBefore("\n}\n").contains("R.string.huddle_paused"))
     }
 
     @Test

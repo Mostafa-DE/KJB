@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm"
 import { bigserial, check, index, integer, pgTable, text, timestamp } from "drizzle-orm/pg-core"
 
-export const messageKinds = ["card", "play", "profile"] as const
+export const messageKinds = ["card", "play", "profile", "now"] as const
 
 /**
  * Encrypted messages waiting in a mailbox. `mailbox_hash` is the SHA-256 of the mailbox id (see `storageKey`),
@@ -21,7 +21,7 @@ export const messages = pgTable(
   (table) => [
     index("messages_mailbox_idx").on(table.mailboxHash, table.id),
     index("messages_expires_idx").on(table.expiresAt),
-    check("messages_kind_check", sql`${table.kind} in ('card', 'play', 'profile')`),
+    check("messages_kind_check", sql`${table.kind} in ('card', 'play', 'profile', 'now')`),
   ],
 )
 

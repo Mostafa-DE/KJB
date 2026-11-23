@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.Transient
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -139,10 +140,10 @@ data class FriendPlay(val friend: String, val at: Long, val song: CardSong, val 
 
 /**
  * A message's kind as the server knows it (huddle-server/API.md): it keeps a card and a profile 30 days until read (a new
- * profile in its place), a play a day.
+ * profile in its place), a play a day, a now 10 minutes (the newest only).
  */
 @Serializable
-enum class Kind { CARD, PLAY, PROFILE }
+enum class Kind { CARD, PLAY, PROFILE, NOW }
 
 /**
  * A sealed message ([data], base64url) of [kind] waiting to go to [box], made [at], going no earlier than [notBefore] (Undo);
@@ -180,6 +181,11 @@ data class HuddleState(
     val backupKey: BackupKey? = null,
     /** Friends who joined your invites, by id, not yet greeted ("<name> joined your Huddle!", once each). */
     val joined: List<String> = emptyList(),
+    /**
+     * Each friend's newest now ([Message.Now], its time as received), by friend id: worth seconds, so kept in memory only
+     * ([Huddle.state] adds it), never in huddle.json or a backup.
+     */
+    @Transient val live: Map<String, Message.Now> = emptyMap(),
 ) {
     companion object {
         /** Listen privately until turned back on. */

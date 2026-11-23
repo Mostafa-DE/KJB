@@ -1,6 +1,7 @@
 package app.lyrify.huddle
 
 import app.lyrify.backup.SectionJson.jsonObject
+import app.lyrify.backup.SectionJson.long
 import app.lyrify.backup.SectionJson.text
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -20,11 +21,12 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * [HuddleServer] over HTTPS on [host], as huddle-server/API.md has it: every call a POST of JSON to `/api/v1/...`, ids
- * only in the body (never in a URL a log could keep), 15 s timeouts, no redirect followed, at most [MAX_ANSWER_BYTES]
- * read. A 502, or a 503 without the server's own error, is Railway restarting: tried once more after [RETRY_MS]. A
- * 5xx or no network is no answer, and the next sync tries again; a 429 is no answer, and that endpoint is not asked again
- * until its Retry-After is over ([MAX_WAIT_MS] at most), the others as before. The log gets the call's name, its status
- * and a reason code only.
+ * only in the body (never in a URL a log could keep), 15 s timeouts (a held inbox read gets its wait on top), no redirect
+ * followed, at most [MAX_ANSWER_BYTES] read. A 502, or a 503 without the server's own error, is Railway restarting: tried
+ * once more after [RETRY_MS]. A 5xx or no network is no answer, and the next sync tries again; a 429 is no answer, and
+ * that endpoint is not asked again until its Retry-After is over ([MAX_WAIT_MS] at most), the others as before (a send
+ * of a now apart from the other sends, as the server counts them apart). The log gets the call's name, its status and a
+ * reason code only.
  */
 class HuddleClient(
     private val host: String,
@@ -58,7 +60,11 @@ class HuddleClient(
     override suspend fun deleteInvite(owner: String): Boolean = call("invites/delete", body(OWNER to JsonPrimitive(owner)))?.code == OK
 
     override suspend fun send(box: String, kind: Kind, data: String): PostAnswer {
-        val answer = call("messages/send", body(MAILBOX to JsonPrimitive(box), KIND to JsonPrimitive(kind.name.lowercase()), DATA to JsonPrimitive(data)))
+        val answer = call(
+            "messages/send",
+            body(MAILBOX to JsonPrimitive(box), KIND to JsonPrimitive(kind.name.lowercase()), DATA to JsonPrimitive(data)),
+            quiet = if (kind == Kind.NOW) "messages/send now" else "messages/send",
+        )
         return when {
             answer == null -> PostAnswer.NO_ANSWER
             answer.code == CREATED -> PostAnswer.POSTED
@@ -69,19 +75,25 @@ class HuddleClient(
         }
     }
 
-    override suspend fun inbox(boxes: List<String>): Map<String, List<Posted>>? {
+    override suspend fun inbox(boxes: List<String>, after: Map<String, Long>, waitMs: Long): Map<String, List<Posted>>? {
+        val began = clock()
         val read = LinkedHashMap<String, MutableList<Posted>>()
         // The server lets plays go as it hands them out: once a page came, what was read is kept, and the next sync asks again.
         var answered = false
+        // Held on the server only by the first call, and only when one call asks every box.
+        var wait = if (boxes.distinct().size <= MAX_IDS) waitMs else 0
         for (chunk in boxes.distinct().chunked(MAX_IDS)) {
-            // Each box's cursor ("after") while the server has more for it; a box is asked again only then.
-            var asking: Map<String, String?> = chunk.associateWith { null }
+            // Each box's cursor ("after"): the seq it was read to, then the server's last while it has more for it; a box is
+            // asked again only then.
+            var asking: Map<String, String?> = chunk.associateWith { after[it]?.toString() }
             repeat(MAX_PAGES) {
                 if (asking.isEmpty()) return@repeat
                 val ask = JsonArray(asking.map { (box, after) -> JsonObject(buildMap { put(MAILBOX, JsonPrimitive(box)); after?.let { put(AFTER, JsonPrimitive(it)) } }) })
-                val json = call("messages/inbox", body(MAILBOXES to ask))?.takeIf { it.code == OK }?.json
+                val json = call("messages/inbox", JsonObject(buildMap { put(MAILBOXES, ask); if (wait > 0) put(WAIT, JsonPrimitive(wait)) }).toString(), waitMs = wait)?.takeIf { it.code == OK }?.json
+                wait = 0
                 val pages = json?.get(MAILBOXES) as? JsonArray ?: return read.takeIf { answered }
                 answered = true
+                val serverNow = json.long(NOW)
                 val more = HashMap<String, String?>()
                 for (element in pages) {
                     val one = element as? JsonObject ?: continue
@@ -89,13 +101,18 @@ class HuddleClient(
                     val messages = (one[MESSAGES] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
                     messages.forEach { message ->
                         val seq = message.text(ID)?.toLongOrNull() ?: return@forEach
-                        message.text(DATA)?.let { read.getOrPut(box) { ArrayList() } += Posted(seq, it) }
+                        // Its age by the server's own clock, so a phone clock that is off changes nothing.
+                        val ageMs = serverNow?.let { now -> message.long(SENT_AT)?.let { now - it } }?.coerceAtLeast(0) ?: 0
+                        message.text(DATA)?.let { read.getOrPut(box) { ArrayList() } += Posted(seq, it, clock() - ageMs) }
                     }
                     if ((one[MORE] as? JsonPrimitive)?.content == "true") more[box] = messages.lastOrNull()?.text(ID) ?: asking[box]
                 }
                 asking = more
             }
         }
+        // Nothing came well before the wait was up: a server that holds no read (one before `wait`, or one holding all it
+        // can) is waited out here, so KJB never asks again and again.
+        if (read.isEmpty() && waitMs > 0) delay(waitMs - (clock() - began))
         return read
     }
 
@@ -116,23 +133,26 @@ class HuddleClient(
 
     private fun body(vararg fields: Pair<String, JsonElement>): String = JsonObject(mapOf(*fields)).toString()
 
-    /** POSTs [body] to [endpoint] (`/api/v1/<endpoint>`), once more after a restart's 502 or bare 503; null without an answer. */
-    private suspend fun call(endpoint: String, body: String): Answer? {
-        val left = (quietUntil[endpoint] ?: 0L) - clock()
+    /**
+     * POSTs [body] to [endpoint] (`/api/v1/<endpoint>`), once more after a restart's 502 or bare 503; null without an
+     * answer. A 429 holds back the calls of its [quiet] name; [waitMs] is how long the server may hold the answer.
+     */
+    private suspend fun call(endpoint: String, body: String, quiet: String = endpoint, waitMs: Long = 0): Answer? {
+        val left = (quietUntil[quiet] ?: 0L) - clock()
         if (left > 0) {
-            log("huddle: $endpoint not asked (retry_after, ${(left + 999) / 1_000} s left)")
+            log("huddle: $quiet not asked (retry_after, ${(left + 999) / 1_000} s left)")
             return null
         }
-        val first = withContext(io) { exchange(endpoint, body) }
+        val first = withContext(io) { exchange(endpoint, body, quiet, waitMs) }
         if (first == null || !restarting(first)) return first
         delay(RETRY_MS)
-        return withContext(io) { exchange(endpoint, body) }
+        return withContext(io) { exchange(endpoint, body, quiet, waitMs) }
     }
 
     private fun restarting(answer: Answer): Boolean = answer.code == BAD_GATEWAY || (answer.code == SERVICE_UNAVAILABLE && answer.json?.text(ERROR) == null)
 
     /** One POST, blocking; null when nothing usable came back (no network, a redirect, an answer too long). */
-    private fun exchange(endpoint: String, body: String): Answer? {
+    private fun exchange(endpoint: String, body: String, quiet: String, waitMs: Long): Answer? {
         val uri = try {
             URI("https", host, "$API/$endpoint", null)
         } catch (_: URISyntaxException) {
@@ -146,7 +166,7 @@ class HuddleClient(
         return try {
             connection.requestMethod = POST
             connection.connectTimeout = TIMEOUT_MS
-            connection.readTimeout = TIMEOUT_MS
+            connection.readTimeout = TIMEOUT_MS + waitMs.toInt()
             connection.useCaches = false
             connection.instanceFollowRedirects = false
             connection.doOutput = true
@@ -157,7 +177,7 @@ class HuddleClient(
             val code = connection.responseCode
             if (code == TOO_MANY_REQUESTS) {
                 connection.getHeaderField(RETRY_AFTER)?.trim()?.toLongOrNull()?.takeIf { it > 0 }?.let { seconds ->
-                    quietUntil[endpoint] = clock() + minOf(seconds, MAX_WAIT_MS / 1_000) * 1_000
+                    quietUntil[quiet] = clock() + minOf(seconds, MAX_WAIT_MS / 1_000) * 1_000
                 }
             }
             if (code in REDIRECTS) {
@@ -243,6 +263,9 @@ class HuddleClient(
         private const val MORE = "more"
         private const val ACKS = "acks"
         private const val UP_TO = "upTo"
+        private const val WAIT = "wait"
+        private const val NOW = "now"
+        private const val SENT_AT = "sentAt"
         private const val ERROR = "error"
     }
 }

@@ -75,6 +75,7 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
+import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.backup.SongMatcher
 import app.lyrify.data.LedgerState
@@ -89,6 +90,7 @@ import app.lyrify.huddle.HuddleGraph
 import app.lyrify.huddle.HuddleState
 import app.lyrify.huddle.Invites
 import app.lyrify.huddle.Match
+import app.lyrify.huddle.NowState
 import app.lyrify.huddle.PendingInvite
 import app.lyrify.huddle.Received
 import app.lyrify.huddle.match
@@ -96,6 +98,8 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.lyrics.TrackNames
+import app.lyrify.player.QueueSource
+import app.lyrify.player.SourceKind
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibraryTab
 import java.text.Collator
@@ -140,21 +144,31 @@ fun sendOrder(friends: List<Friend>): List<Friend> {
     return friends.sortedWith(compareByDescending<Friend> { it.lastSentAt ?: Long.MIN_VALUE }.thenBy(collator) { it.shownName })
 }
 
-/** A friend on the Huddle page, by the name you see: their latest play, and whether it may still be playing. */
-data class FriendNow(val friend: Friend, val play: FriendPlay?, val playing: Boolean)
+/**
+ * A friend on the Huddle page, by the name you see: the song they play or paused (as if begun when it would have, so
+ * Play along finds their place), else their latest play; and whether it plays now, or is paused.
+ */
+data class FriendNow(val friend: Friend, val play: FriendPlay?, val playing: Boolean, val paused: Boolean = false)
 
 /**
- * Every friend with their latest play ([FriendNow]), as the friends row and the page show them: those playing now first,
- * the song begun last first, then the others by their latest play, then those who never shared one, by name. A play is
- * still playing until its length and a minute have passed.
+ * Every friend as [FriendNow], the one place every screen reads what friends play: the friends row, the page, their
+ * song's sheet, the player, the Now bar and the bar's dot. Playing only while their newest now ([HuddleState.live]) says
+ * so, at most [LIVE_MS] old, and not more than [END_GRACE_MS] past their song's end; paused for [PAUSED_KEPT_MS] after
+ * the pause; stopped, or past those, as their latest play. Those playing first, the song begun last first, then those
+ * paused, then the others by their latest play, then those who never shared one, by name.
  */
 fun friendsNow(state: HuddleState, now: Long): List<FriendNow> {
     val collator = Collator.getInstance()
     val latest = state.plays.groupBy { it.friend }.mapValues { (_, plays) -> plays.maxBy { it.at } }
     return state.friends.map { friend ->
-        val play = latest[friend.id]
-        FriendNow(friend, play, playing = play != null && now <= play.at + play.song.durationMs + PLAYING_GRACE_MS)
-    }.sortedWith(compareByDescending<FriendNow> { it.playing }.thenByDescending { it.play?.at ?: Long.MIN_VALUE }.thenBy(collator) { it.friend.shownName })
+        val live = state.live[friend.id]
+        val playing = live != null && live.state == NowState.PLAYING && now - live.at <= LIVE_MS &&
+            (live.song.durationMs <= 0 || now <= live.at + live.song.durationMs - live.positionMs + END_GRACE_MS)
+        val paused = live != null && live.state == NowState.PAUSED && now - live.at <= PAUSED_KEPT_MS
+        FriendNow(friend, if (live != null && (playing || paused)) FriendPlay(friend.id, live.at - live.positionMs, live.song, live.favourite) else latest[friend.id], playing, paused)
+    }.sortedWith(
+        compareByDescending<FriendNow> { it.playing }.thenByDescending { it.paused }.thenByDescending { it.play?.at ?: Long.MIN_VALUE }.thenBy(collator) { it.friend.shownName },
+    )
 }
 
 /** A friend playing now what you play: the same song, or another of the same artist ([sameSong] false). */
@@ -258,10 +272,16 @@ fun huddleLive(state: HuddleState, now: Long): HuddleLive =
 /** Whether Library's [tab] leads with the friends row: the tab Library [opensOn], once there is a friend. */
 fun friendsRowShows(tab: LibraryTab, opensOn: LibraryTab, state: HuddleState): Boolean = tab == opensOn && state.friends.isNotEmpty()
 
-/** How long past its end a friend's play still shows as playing: a pause, a seek back, a clock a little off. */
-private const val PLAYING_GRACE_MS: Long = 60_000
+/** A friend's "playing" is let go this long after it was told: two heartbeats missed ([app.lyrify.huddle.SharedPlays.HEARTBEAT_MS]) and a little. */
+private const val LIVE_MS: Long = 150_000
 
-/** How often the times and "Playing now" are worked out again: as often as friends' plays come while KJB is in front. */
+/** How long past their song's end a friend still shows as playing: the next song's now on its way, a clock a little off. */
+private const val END_GRACE_MS: Long = 30_000
+
+/** A paused friend leaves Listening now this long after the pause. */
+private const val PAUSED_KEPT_MS: Long = 10 * 60_000L
+
+/** How often the times and "Playing now" are worked out again; what friends play comes as it changes. */
 private const val TICK_MS: Long = Huddle.FAST_MS
 
 
@@ -471,7 +491,7 @@ fun HuddlePage(onBack: (() -> Unit)?) {
             return@PageFrame
         }
         val friends = friendsNow(shown, now)
-        val playing = friends.filter { it.playing }
+        val listening = friends.filter { it.playing || it.paused }
         val names = shown.friends.associate { it.id to it.shownName }
         val inbox = cards?.filter { it.friend in names }
         LazyColumn(
@@ -533,7 +553,7 @@ fun HuddlePage(onBack: (() -> Unit)?) {
                 }
             }
             item(key = "listening", contentType = "heading") {
-                HuddleHeading(stringResource(R.string.huddle_listening_now), playing.size.takeIf { it > 0 }?.toString()) {
+                HuddleHeading(stringResource(R.string.huddle_listening_now), listening.size.takeIf { it > 0 }?.toString()) {
                     if (shown.friends.isNotEmpty()) LyrifyButton(stringResource(R.string.huddle_row_invite), onClick = { sheet = HuddleSheet.Ticket }, kind = ButtonKind.SECONDARY, icon = R.drawable.ic_add, compact = true)
                 }
             }
@@ -542,20 +562,29 @@ fun HuddlePage(onBack: (() -> Unit)?) {
                     EmptyCard(onInvite = { sheet = HuddleSheet.Ticket }, onPaste = paste)
                 } else {
                     LazyRow(contentPadding = PaddingValues(horizontal = ScreenPadding), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(playing, key = { it.friend.id }) { friend ->
+                        items(listening, key = { it.friend.id }) { friend ->
                             val play = friend.play
                             val song = play?.let { (matcher?.match(it.song) as? Match.Found)?.song }
                             FriendCard(
                                 friend,
                                 song,
                                 friend.friend.shownName,
-                                // Not here: their song's sheet says so, with Ask and Search on YouTube.
-                                onPlayAlong = { if (song != null && play != null) playAlong(context, song, play, friend.friend.shownName, player) else sheet = HuddleSheet.Peek(friend.friend.id) },
+                                // Not here: their song's sheet says so, with Ask and Search on YouTube. Paused: Play it, from the top.
+                                onPlayAlong = {
+                                    when {
+                                        play == null || song == null -> sheet = HuddleSheet.Peek(friend.friend.id)
+                                        friend.paused -> {
+                                            Lyrify.playback(context).play(listOf(song.ref), 0, QueueSource(SourceKind.HUDDLE, "${play.friend}:${play.at}", friend.friend.shownName))
+                                            player()
+                                        }
+                                        else -> playAlong(context, song, play, friend.friend.shownName, player)
+                                    }
+                                },
                                 onSend = { sheet = HuddleSheet.SendTo(friend.friend.id) },
                                 onMore = { sheet = HuddleSheet.Menu(friend.friend.id) },
                             )
                         }
-                        if (playing.isEmpty()) {
+                        if (listening.isEmpty()) {
                             item(key = "nobody") {
                                 Column(
                                     verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
@@ -641,7 +670,7 @@ fun HuddlePage(onBack: (() -> Unit)?) {
                     }
                 }
             }
-            val idle = friends.filter { !it.playing }
+            val idle = friends.filter { !it.playing && !it.paused }
             if (idle.isNotEmpty()) {
                 item(key = "idle", contentType = "heading") { HuddleHeading(stringResource(R.string.huddle_not_playing)) }
                 items(idle, key = { "friend " + it.friend.id }, contentType = { "friend" }) { friend ->

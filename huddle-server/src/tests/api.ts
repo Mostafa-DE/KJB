@@ -6,6 +6,8 @@ type Handler = (request: Request) => Promise<Response>
 type CallOptions = {
   ip?: string
   contentType?: string
+  /** The caller going away, as a phone whose connection drops. */
+  signal?: AbortSignal
 }
 
 /** A made-up 43-character id, like the ones phones derive. */
@@ -23,11 +25,12 @@ export function sealed(bytes: number) {
   return randomBytes(bytes).toString("base64url")
 }
 
-export function apiRequest(body: unknown, { ip = randomIp(), contentType = "application/json" }: CallOptions = {}) {
+export function apiRequest(body: unknown, { ip = randomIp(), contentType = "application/json", signal }: CallOptions = {}) {
   return new Request("https://huddle.test/api/v1/test", {
     method: "POST",
     headers: { "Content-Type": contentType, "X-Real-IP": ip },
     body: typeof body === "string" ? body : JSON.stringify(body),
+    signal,
   })
 }
 

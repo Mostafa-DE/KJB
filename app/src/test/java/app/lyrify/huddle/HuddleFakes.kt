@@ -6,14 +6,19 @@ import app.lyrify.stats.PlaysSchema
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Huddle's server in memory, as huddle-server/API.md has it: invite slots made by their owner, accepted once, read and
- * deleted by the owner; mailboxes of numbered messages, plays gone once read, cards until acknowledged; mailboxes
- * deleted on request. [online] false answers nothing, and the calls named in [silent] answer nothing (one route the server
- * holds back); [requests] names each call. An accept sent again with the same data
- * answers as joined (huddle-server makes it safe to retry); [lostAccepts] accepts are stored but their answer is lost.
- * The inbox answers after [slowMs], as a server KJB waits on until its timeout.
+ * deleted by the owner; mailboxes of numbered messages, plays gone once read, cards until acknowledged, a new now in
+ * place of the one waiting and read by every read until then (an acknowledgement leaves it); mailboxes deleted on
+ * request. A read asks each box after a seq; one with a wait is held until a message after it waits in one of its
+ * boxes, or the wait is up. Each message is dated by [clock], the server's, as a phone with that clock reads it.
+ * [online] false answers nothing, and the calls named in [silent] answer nothing (one route the server holds back);
+ * [requests] names each call. An accept sent again with the same data answers as joined (huddle-server makes it safe
+ * to retry); [lostAccepts] accepts are stored but their answer is lost. The inbox answers after [slowMs], as a server
+ * KJB waits on until its timeout.
  */
 class FakeServer : HuddleServer {
     var online: Boolean = true
@@ -23,12 +28,16 @@ class FakeServer : HuddleServer {
     /** How long an accept's answer takes (virtual time): two joins of one link can run at once. */
     var acceptDelay: Long = 0
     var slowMs: Long = 0
+    var clock: () -> Long = { 0 }
     /** Invite id to its owner id and the accept's data, null while waiting. */
     val invites = HashMap<String, Pair<String, String?>>()
     val boxes = HashMap<String, MutableList<Posted>>()
     val kinds = LinkedHashMap<Long, Kind>()
     val requests = ArrayList<String>()
     private var seq = 0L
+
+    /** The newest message's seq: a held read looks again at each. */
+    private val landed = MutableStateFlow(0L)
 
     /** The inbox reads so far: one per sync that had friends to ask for. */
     val fetches: Int get() = requests.count { it == "inbox" }
@@ -71,25 +80,30 @@ class FakeServer : HuddleServer {
         requests += "send"
         if (!online || "send" in silent) return PostAnswer.NO_ANSWER
         val next = ++seq
-        boxes.getOrPut(box) { ArrayList() } += Posted(next, data)
+        val posted = boxes.getOrPut(box) { ArrayList() }
+        if (kind == Kind.NOW) posted.removeAll { kinds[it.seq] == Kind.NOW }
+        posted += Posted(next, data, clock())
         kinds[next] = kind
+        landed.value = next
         return PostAnswer.POSTED
     }
 
-    override suspend fun inbox(boxes: List<String>): Map<String, List<Posted>>? {
+    override suspend fun inbox(boxes: List<String>, after: Map<String, Long>, waitMs: Long): Map<String, List<Posted>>? {
         requests += "inbox"
         delay(slowMs)
         if (!online || "inbox" in silent) return null
-        val read = boxes.associateWith { this.boxes[it].orEmpty().toList() }.filterValues { it.isNotEmpty() }
+        val newer = { boxes.associateWith { box -> this.boxes[box].orEmpty().filter { it.seq > (after[box] ?: 0) } }.filterValues { it.isNotEmpty() } }
+        if (waitMs > 0) withTimeoutOrNull(waitMs) { landed.first { newer().isNotEmpty() } }
+        val read = newer()
         // Plays go as they are read.
-        read.values.flatten().filter { kinds[it.seq] == Kind.PLAY }.forEach { play -> this.boxes.values.forEach { box -> box.removeAll { it.seq == play.seq } } }
+        read.values.flatten().filter { kinds[it.seq] == Kind.PLAY }.forEach { once -> this.boxes.values.forEach { box -> box.removeAll { it.seq == once.seq } } }
         return read
     }
 
     override suspend fun ack(upTo: Map<String, Long>): Boolean {
         requests += "ack"
         if (!online || "ack" in silent) return false
-        upTo.forEach { (box, last) -> boxes[box]?.removeAll { it.seq <= last } }
+        upTo.forEach { (box, last) -> boxes[box]?.removeAll { it.seq <= last && kinds[it.seq] != Kind.NOW } }
         return true
     }
 
@@ -102,8 +116,9 @@ class FakeServer : HuddleServer {
     /** Puts [data] in [box] again as a card, as a server replaying an old message would. */
     fun replay(box: String, data: String) {
         val next = ++seq
-        boxes.getOrPut(box) { ArrayList() } += Posted(next, data)
+        boxes.getOrPut(box) { ArrayList() } += Posted(next, data, clock())
         kinds[next] = Kind.CARD
+        landed.value = next
     }
 
     fun waiting(box: String): List<Posted> = boxes[box].orEmpty()

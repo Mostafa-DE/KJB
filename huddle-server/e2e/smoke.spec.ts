@@ -117,6 +117,27 @@ describe("the built server", () => {
     expect(sent.headers.get("x-content-type-options")).toBe("nosniff")
   })
 
+  it("holds an inbox read until a now lands, then hands that now to a read without a cursor only", async () => {
+    const mailbox = randomId()
+    const began = Date.now()
+    let answered = false
+    const reading = post("/api/v1/messages/inbox", { mailboxes: [{ mailbox }], wait: 5_000 }).finally(() => (answered = true))
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const heldWhileEmpty = !answered
+    const sent = await post("/api/v1/messages/send", { mailbox, kind: "now", data: "bm93" })
+    const answer = await reading
+    const tookMs = Date.now() - began
+    const again = await post("/api/v1/messages/inbox", { mailboxes: [{ mailbox }] })
+    const past = await post("/api/v1/messages/inbox", { mailboxes: [{ mailbox, after: sent.body.id }] })
+
+    expect(heldWhileEmpty).toBe(true)
+    expect(sent.status).toBe(201)
+    expect(answer.body.mailboxes[0].messages).toEqual([{ id: sent.body.id, kind: "now", data: "bm93", sentAt: expect.any(Number) }])
+    expect(tookMs).toBeLessThan(3_000)
+    expect(again.body.mailboxes[0].messages.map((message: { id: string }) => message.id)).toEqual([sent.body.id])
+    expect(past.body.mailboxes[0].messages).toEqual([])
+  })
+
   it("answers API errors as JSON", async () => {
     const response = await fetch(`${BASE}/api/v1/messages/send`, {
       method: "POST",

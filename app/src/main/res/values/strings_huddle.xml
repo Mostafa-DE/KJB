@@ -143,6 +143,7 @@
     <!-- The Huddle page: Listening now, Sent to you, Not playing. -->
     <string name="huddle_listening_now">Listening now</string>
     <string name="huddle_playing_now">Playing now</string>
+    <string name="huddle_paused">Paused</string>
     <string name="huddle_play_along">Play along</string>
     <string name="huddle_not_playing">Not playing</string>
     <string name="huddle_nothing_yet">Nothing shared yet</string>
@@ -188,6 +189,7 @@
     <!-- What TalkBack reads for a face: "Wren, playing Paper Lantern by Kit Calloway". -->
     <string name="huddle_row_playing">%1$s, playing %2$s</string>
     <string name="huddle_row_played">%1$s, played %2$s, %3$s</string>
+    <string name="huddle_row_paused">%1$s, paused %2$s</string>
     <string name="huddle_sent_you">sent you a song</string>
 
     <!-- A card a friend sent. -->

@@ -6,6 +6,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 /** What friends send each other: the messages there and back, padded to a few sizes, and a friend's song found here or not. */
 class CardsTest {
@@ -68,6 +69,38 @@ class CardsTest {
         assertTrue(back.song.title.isNotEmpty())
         assertEquals(200_000L, back.song.durationMs)
         assertTrue(back.favourite)
+    }
+
+    @Test
+    fun `a now comes back with its state and place, padded to a kilobyte, its long tags cut, and a state of a newer KJB is dropped`() {
+        listOf(
+            Message.Now("m1", 1_700_000_000_000, lantern, NowState.PLAYING, 72_000, favourite = true),
+            Message.Now("m2", 1_700_000_000_001, bell, NowState.PAUSED, 0),
+            Message.Now("m3", 1_700_000_000_002, bell, NowState.STOPPED, 187_000),
+        ).forEach { now ->
+            assertEquals(1024, Messages.encode(now).size)
+            assertEquals(now, Messages.decode(Messages.encode(now)))
+        }
+        val long = "ن".repeat(Messages.TEXT_MAX)
+        val back = Messages.decode(Messages.encode(Message.Now("m4", 1, CardSong(long, long, long, 200_000), NowState.PLAYING, 5_000))) as Message.Now
+        assertTrue(long.startsWith(back.song.title))
+        assertEquals(5_000L, back.positionMs)
+        assertNull(Messages.decode("""{"v":1,"i":"m1","t":1,"k":"now","s":{"t":"Paper Lantern","d":1},"e":"rewinding","p":0}""".toByteArray() + byteArrayOf(0x80.toByte())))
+        assertNull("no place", Messages.decode("""{"v":1,"i":"m1","t":1,"k":"now","s":{"t":"Paper Lantern","d":1},"e":"paused"}""".toByteArray() + byteArrayOf(0x80.toByte())))
+    }
+
+    @Test
+    fun `a now's state is written the same in any phone language, so a Turkish phone's playing reads on every other`() {
+        val now = Message.Now("m1", 1_700_000_000_000, lantern, NowState.PLAYING, 72_000)
+        val before = Locale.getDefault()
+        val sealed = try {
+            // Turkish lower-cases "I" to a dotless "ı": "playıng" would read on no other phone.
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            Messages.encode(now)
+        } finally {
+            Locale.setDefault(before)
+        }
+        assertEquals(now, Messages.decode(sealed))
     }
 
     @Test
