@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -430,7 +431,7 @@ private fun WeekColumns(days: DaysCard, period: PagePeriod, heat: List<Color>) {
                 verticalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.weight(1f).then(if (ms == null) Modifier.clearAndSetSemantics {} else Modifier.clearAndSetSemantics { contentDescription = description }),
             ) {
-                Text(stepText(days.heard, i, short = true), style = AxisLabel.copy(fontWeight = FontWeight.SemiBold), color = if (today) colors.onSurface else colors.onSurfaceVariant, maxLines = 1)
+                Text(stepText(days.heard, i, short = true), style = AxisLabel.copy(fontWeight = FontWeight.SemiBold), color = if (today) colors.onSurface else colors.onSurfaceVariant, maxLines = 1, autoSize = TextAutoSize.StepBased(minFontSize = SMALLEST_LABEL, maxFontSize = AxisLabel.fontSize))
                 Canvas(Modifier.fillMaxWidth().height(96.dp)) {
                     val corner = CornerRadius(14.dp.toPx())
                     if (ms == null) {
@@ -442,7 +443,7 @@ private fun WeekColumns(days: DaysCard, period: PagePeriod, heat: List<Color>) {
                     val height = size.height * (ms.toFloat() / top) * phase(clock.ms(), i * 3 * BAR_STEP_MS, BAR_MS, Motion.Rise)
                     drawRoundRect(heat[heatLevel(ms, Step.DAY).coerceAtLeast(1)], Offset(0f, size.height - height), Size(size.width, height), CornerRadius(12.dp.toPx()))
                 }
-                Text(if (ms == null) "" else stringResource(R.string.insights_hours_short, String.format(Locale.getDefault(), "%.1f", ms / HOUR.toDouble())), style = AxisLabel.copy(fontWeight = FontWeight.SemiBold).tabular(), color = colors.onSurfaceVariant, maxLines = 1)
+                Text(if (ms == null) "" else stringResource(R.string.insights_hours_short, String.format(Locale.getDefault(), "%.1f", ms / HOUR.toDouble())), style = AxisLabel.copy(fontWeight = FontWeight.SemiBold).tabular(), color = colors.onSurfaceVariant, maxLines = 1, autoSize = TextAutoSize.StepBased(minFontSize = SMALLEST_LABEL, maxFontSize = AxisLabel.fontSize))
             }
         }
     }
@@ -768,3 +769,6 @@ private const val MONTHS_IN_YEAR = 12
 private const val MINUTE = 60_000L
 
 internal const val HOUR = 3_600_000L
+
+/** A week's small labels shrink to fit their column with large text, to this at the least. */
+private val SMALLEST_LABEL = 8.sp

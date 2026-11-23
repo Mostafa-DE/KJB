@@ -150,12 +150,12 @@ class StoryState(val slides: List<StorySlide>) {
 internal fun StoryFrame(title: String, state: StoryState, onClose: () -> Unit, content: @Composable (StorySlide) -> Unit) {
     val reduced = LocalReducedMotion.current
     val scope = rememberCoroutineScope()
-    val fill = remember { Animatable(0f) }
     val answered = state.answer != null
-    // A new slide, or the quiz answered: its bar starts again, then runs while nothing holds it.
-    LaunchedEffect(state.at, answered) { fill.snapTo(if (reduced) 1f else 0f) }
+    // A new slide, or the quiz answered: its bar starts again (full and still with reduced motion), then runs while
+    // nothing holds it, on from where a pause left it.
+    val fill = remember(state.at, answered) { Animatable(if (reduced) 1f else 0f) }
     val runs = state.runs(reduced)
-    LaunchedEffect(state.at, answered, runs) {
+    LaunchedEffect(fill, runs) {
         val ms = storyMs(state.slide, state.at == state.slides.lastIndex, answered) ?: return@LaunchedEffect
         if (!runs) return@LaunchedEffect
         fill.animateTo(1f, tween(((1f - fill.value) * ms).toInt(), easing = LinearEasing))

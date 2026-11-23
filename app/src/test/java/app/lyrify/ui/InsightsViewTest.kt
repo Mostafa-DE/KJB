@@ -131,7 +131,7 @@ class InsightsViewTest {
         // The story's bar stands full and nothing follows on its own.
         val story = File(ui, "InsightsStory.kt").readText()
         assertTrue(story.contains("val runs = state.runs(reduced)"))
-        assertTrue(story.contains("LaunchedEffect(state.at, answered) { fill.snapTo(if (reduced) 1f else 0f) }"))
+        assertTrue(story.contains("val fill = remember(state.at, answered) { Animatable(if (reduced) 1f else 0f) }"))
     }
 
     // The cards' rules

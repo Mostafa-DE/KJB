@@ -269,7 +269,7 @@ internal fun TopSongs(card: TopCard<Song>, settings: Settings, onOpen: (Page) ->
                         }
                         Text(listOfNotNull(song.artist?.takeIf { it.isNotBlank() }, listenedText(row.top.heardMs)).joinToString(" · "), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(IntrinsicWidthOfCount)) {
+                    Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(CountColumn)) {
                         Text(formatCount(row.top.plays), style = CountStyle, color = colors.onSurface)
                         Text(pluralStringResource(R.plurals.insights_plays_word, row.top.plays), style = FigureLabel.copy(fontSize = 11.5.sp), color = colors.onSurfaceVariant)
                         val share = row.top.plays.toFloat() / first.top.plays.coerceAtLeast(1)
@@ -635,7 +635,7 @@ private val CountStyle = display(15, 20, weight = 700)
 private val RowTitle = body(15f, 19, 600)
 
 /** The plays column of a top song's row: room for "1,048" and the short bar under it. */
-private val IntrinsicWidthOfCount = 56.dp
+private val CountColumn = 56.dp
 
 private const val RACE_MS = 900
 
