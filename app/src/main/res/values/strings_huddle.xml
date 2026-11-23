@@ -185,10 +185,10 @@
     <string name="huddle_row_private_until">Until %1$s</string>
     <string name="huddle_row_private_on">On</string>
     <string name="huddle_private_desc">Listening privately, %1$s</string>
-    <!-- What TalkBack reads for a face: "Wren, playing Paper Lantern by Kit Calloway". -->
+    <!-- What TalkBack reads for a face: "Wren, playing Paper Lantern by Kit Calloway", "Wren, paused", "Wren, played 15 minutes ago". -->
     <string name="huddle_row_playing">%1$s, playing %2$s</string>
-    <string name="huddle_row_played">%1$s, played %2$s, %3$s</string>
-    <string name="huddle_row_paused">%1$s, paused %2$s</string>
+    <string name="huddle_row_played">%1$s, played %2$s</string>
+    <string name="huddle_row_paused">%1$s, paused</string>
     <string name="huddle_sent_you">sent you a song</string>
 
     <!-- A card a friend sent. -->

@@ -89,6 +89,7 @@ import app.lyrify.huddle.HuddleGraph
 import app.lyrify.huddle.HuddleState
 import app.lyrify.huddle.Invites
 import app.lyrify.huddle.Match
+import app.lyrify.huddle.NowCover
 import app.lyrify.huddle.NowState
 import app.lyrify.huddle.PendingInvite
 import app.lyrify.huddle.Received
@@ -143,9 +144,10 @@ fun sendOrder(friends: List<Friend>): List<Friend> {
 
 /**
  * A friend on the Huddle page, by the name you see: the song they play or paused (as if begun when it would have, so
- * Play along finds their place), else their latest play; and whether it plays now, or is paused.
+ * Play along finds their place), else their latest play; whether it plays now, or is paused; and that song's [cover]
+ * while it plays or is paused, when their KJB sent one.
  */
-data class FriendNow(val friend: Friend, val play: FriendPlay?, val playing: Boolean, val paused: Boolean = false)
+data class FriendNow(val friend: Friend, val play: FriendPlay?, val playing: Boolean, val paused: Boolean = false, val cover: NowCover? = null)
 
 /**
  * Every friend as [FriendNow], the one place every screen reads what friends play: the friends row, the page, their

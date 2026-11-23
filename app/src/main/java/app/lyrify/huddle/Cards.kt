@@ -1,5 +1,8 @@
 package app.lyrify.huddle
 
+import android.graphics.BitmapFactory
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import app.lyrify.backup.ImportSong
 import app.lyrify.backup.SectionJson.flag
 import app.lyrify.backup.SectionJson.int
@@ -54,6 +57,12 @@ sealed interface Message {
      * and the phone only in memory.
      */
     data class Now(override val id: String, override val at: Long, val song: CardSong, val state: NowState, val positionMs: Long, val favourite: Boolean = false) : Message
+}
+
+/** The cover of the song a friend plays, as their now brings it: a small JPEG. */
+class NowCover(val jpeg: ByteArray) {
+    /** The cover to draw, decoded at its first read and then kept; null when it does not decode. */
+    val picture: ImageBitmap? by lazy { BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)?.asImageBitmap() }
 }
 
 /**

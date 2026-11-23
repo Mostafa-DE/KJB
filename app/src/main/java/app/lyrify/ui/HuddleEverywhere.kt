@@ -143,9 +143,11 @@ private fun HuddleFriends(tab: LibraryTab, modifier: Modifier, bleed: Dp = 0.dp)
 
 /**
  * The friends row, compact (user 2026-11-23): a lock first while you listen privately, Invite, then every friend
- * ([friendsNow]), each a 40 dp face over their name. Playing now has the live ring and the bars, paused or not playing a
- * quiet, still ring; a card not opened yet wiggles a badge on its sender's face. What a face does not say in words (their
- * song, Paused, when they last played, until when you listen privately) TalkBack says.
+ * ([friendsNow]: those playing now first, then the others by their latest play), each a 40 dp face over their name.
+ * Playing now shows their song's cover in the face when their KJB sent one (else their letter, in colour) with the live
+ * ring and the bars; paused or not playing, their letter greyed through, still, with a pause mark when paused. A card not
+ * opened yet wiggles a badge on its sender's face. What a face does not say in words (their song, Paused, when they last
+ * played, until when you listen privately) TalkBack says.
  */
 @Composable
 internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFriend: (String) -> Unit, onInvite: () -> Unit, onPrivately: () -> Unit) {
@@ -178,11 +180,11 @@ internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFri
             val said = when {
                 play == null -> name
                 friend.playing -> stringResource(R.string.huddle_row_playing, name, songBy(resources, play.song))
-                friend.paused -> stringResource(R.string.huddle_row_paused, name, songBy(resources, play.song))
-                else -> stringResource(R.string.huddle_row_played, name, songBy(resources, play.song), ago(play.at, now))
+                friend.paused -> stringResource(R.string.huddle_row_paused, name)
+                else -> stringResource(R.string.huddle_row_played, name, ago(play.at, now))
             }
             RowFace(name, description = if (sent) listOf(said, stringResource(R.string.huddle_sent_you)).joinToString(", ") else said, onClick = { onFriend(friend.friend.id) }) {
-                FriendFace(name, friendColor(friend.friend.id), 40.dp, ring = if (friend.playing) FaceRing.LIVE else FaceRing.IDLE, playing = friend.playing, mail = sent)
+                FriendFace(name, friendColor(friend.friend.id), 40.dp, ring = if (friend.playing) FaceRing.LIVE else FaceRing.AWAY, playing = friend.playing, paused = friend.paused, mail = sent, cover = friend.cover?.takeIf { friend.playing }?.picture)
             }
         }
     }

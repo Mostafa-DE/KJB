@@ -14,6 +14,7 @@ import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,15 +54,18 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.VectorPath
 import androidx.compose.ui.graphics.vector.toPath
@@ -99,15 +103,19 @@ import coil3.compose.AsyncImage
 /** A friend's colour, the same on every screen and every start: from their id, KJB's own random one. */
 fun friendColor(id: String): Color = FriendColors[Math.floorMod(id.hashCode(), FriendColors.size)]
 
-/** How a face is ringed: playing now (a turning, glowing ring), not right now (a quiet one), or not at all. */
-enum class FaceRing { LIVE, IDLE, NONE }
+/**
+ * How a face is ringed: playing now (a turning, glowing ring), not right now (a quiet one), away (the quiet one, the face
+ * greyed through: the friends row's "disconnected" face, user 2026-11-23), or not at all.
+ */
+enum class FaceRing { LIVE, IDLE, AWAY, NONE }
 
 /**
- * A face: the first letter of [name], white on [color]. [ring] LIVE turns a ring of the friend's colour, gold and coral
- * round it with a soft breathing glow, IDLE draws a quiet ring and greys the face a little; [gap] is the ground it sits
- * on, kept as a thin ring between face and ring. [playing] adds the moving bars at its foot, [mail] a small wiggling
- * badge at its top (a card not opened yet), both sized for the friends row's 40 dp faces. Decorative: the name and what
- * they play are words beside it.
+ * A face: the first letter of [name], white on [color], or a [cover] (the song a friend plays now) cut round in its place.
+ * [ring] LIVE turns a ring of the friend's colour, gold and coral round it with a soft breathing glow, IDLE draws a quiet
+ * ring and greys the face a little, AWAY greys it through, as light as its colour so the letter reads as well; [gap] is
+ * the ground it sits on, kept as a thin ring between face and ring. [playing] adds the moving bars at its foot, [paused]
+ * a still pause mark there, [mail] a small wiggling badge at its top (a card not opened yet), all sized for the friends
+ * row's 40 dp faces. Decorative: the name and what they play are words beside it.
  */
 @Composable
 internal fun FriendFace(
@@ -118,16 +126,23 @@ internal fun FriendFace(
     ring: FaceRing = FaceRing.NONE,
     gap: Color = MaterialTheme.colorScheme.background,
     playing: Boolean = false,
+    paused: Boolean = false,
     mail: Boolean = false,
+    cover: ImageBitmap? = null,
 ) {
-    // Not right now: the colour a little greyed, toward the mean of its channels.
+    // Not right now: the colour a little greyed, toward the mean of its channels. Away: a grey of the colour's own
+    // luminance, so lilac keeps the colour's contrast on it.
     val mean = (color.red + color.green + color.blue) / 3
-    val ground = if (ring == FaceRing.IDLE) lerp(color, Color(mean, mean, mean), IDLE_GREY) else color
+    val ground = when (ring) {
+        FaceRing.IDLE -> lerp(color, Color(mean, mean, mean), IDLE_GREY)
+        FaceRing.AWAY -> color.luminance().let { Color(it, it, it, colorSpace = ColorSpaces.LinearSrgb).convert(ColorSpaces.Srgb) }
+        else -> color
+    }
     val letter = with(LocalDensity.current) { (size * INITIAL_SHARE).toSp() }
     Box(modifier.size(size).clearAndSetSemantics {}) {
         when (ring) {
             FaceRing.LIVE -> LiveRing(color)
-            FaceRing.IDLE -> Box(Modifier.matchParentSize().border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))
+            FaceRing.IDLE, FaceRing.AWAY -> Box(Modifier.matchParentSize().border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))
             FaceRing.NONE -> Unit
         }
         Box(
@@ -140,14 +155,18 @@ internal fun FriendFace(
                     drawCircle(Brush.radialGradient(listOf(lerp(ground, BrandLilac, 0.3f), ground), Offset(this.size.width * 0.32f, this.size.height * 0.26f), this.size.width * 0.64f))
                 },
         ) {
-            Text(
-                name.trim().takeIf(String::isNotEmpty)?.let { String(Character.toChars(it.codePointAt(0))).uppercase() }.orEmpty(),
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = letter, lineHeight = letter),
-                color = BrandLilac,
-                maxLines = 1,
-            )
+            if (cover != null) {
+                Image(cover, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize().clip(CircleShape))
+            } else {
+                Text(
+                    name.trim().takeIf(String::isNotEmpty)?.let { String(Character.toChars(it.codePointAt(0))).uppercase() }.orEmpty(),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = letter, lineHeight = letter),
+                    color = BrandLilac,
+                    maxLines = 1,
+                )
+            }
         }
-        if (playing) {
+        if (playing || paused) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
@@ -155,8 +174,10 @@ internal fun FriendFace(
                     .offset(2.dp, 2.dp)
                     .size(18.dp)
                     .drawBehind { drawCircle(gap, radius = this.size.minDimension / 2 + 2.dp.toPx()) }
-                    .background(lerp(color, BrandBlack, 0.18f), CircleShape),
-            ) { Equaliser(BrandLilac, Modifier.size(9.dp, 8.dp)) }
+                    .background(lerp(ground, BrandBlack, 0.18f), CircleShape),
+            ) {
+                if (playing) Equaliser(BrandLilac, Modifier.size(9.dp, 8.dp)) else Icon(painterResource(R.drawable.ic_pause_fill), contentDescription = null, tint = BrandLilac, modifier = Modifier.size(10.dp))
+            }
         }
         if (mail) MailBadge(gap, Modifier.align(Alignment.TopEnd).offset(4.dp, (-2).dp))
     }
