@@ -5,6 +5,7 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.VOLUME
 import app.lyrify.library.albumKey
+import app.lyrify.library.notPlayed
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.song
 import app.lyrify.settings.LibrarySettings
@@ -439,6 +440,28 @@ class ListeningTest {
         assertEquals(listOf(alder.ref), stats.recentlyPlayed(500).map { it.song })
         // Recently added keeps them: an episode new on the phone is news.
         assertEquals(setOf(alder.path, birch.path, episode.path), recentlyAdded(withTalks, null).map { it.path }.toSet())
+    }
+
+    @Test
+    fun `Not played leaves out exactly the songs Most played counts a play of, in a period and over all time`() = runBlocking {
+        val episode = song("Music/Talks/Episode 7.mp3", isPodcast = true, id = 60)
+        val withTalks = Library.of(listOf(alder, birch, ember, salt, episode), Settings())
+        val stats = stats(
+            play(alder, fifteenDays - HOUR),
+            play(birch, fifteenDays + HOUR),
+            // Heard a while and never counted, then a skip: ember was never played.
+            play(ember, lateToday - HOUR, heardMs = 20_000, counted = false),
+            LoggedPlay(ember.ref, lateToday - 2 * HOUR, 300, counted = false, end = PlayEnded(PlayEnd.NEXT, 300)),
+            // An import's play dated in the period: Most played counts it over all time, not in a period.
+            LoggedPlay(salt.ref, lateToday - 3 * HOUR, 0, counted = true, imported = true),
+            library = withTalks,
+        )
+
+        // The past 15 days: ember never played, then alder (played before them), then salt (its import's play).
+        assertEquals(listOf(ember, alder, salt), notPlayed(stats, withTalks, fifteenDays).map { it.first })
+        assertEquals(listOf(null, fifteenDays - HOUR, lateToday - 3 * HOUR), notPlayed(stats, withTalks, fifteenDays).map { it.second?.lastPlayedAt })
+        // All time: only ember. The podcast episode is never in it, as it is never in Most played.
+        assertEquals(listOf(ember), notPlayed(stats, withTalks, null).map { it.first })
     }
 
     @Test

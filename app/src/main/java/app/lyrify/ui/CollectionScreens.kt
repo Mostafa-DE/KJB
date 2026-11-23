@@ -86,6 +86,7 @@ import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
 import app.lyrify.library.displayTitle
+import app.lyrify.library.notPlayed
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.search.fold
 import app.lyrify.player.QueueSource
@@ -654,9 +655,9 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
 }
 
 /**
- * Most played (with an Insights button beside its sort), Recently played, or Recently added: its period chips (each
- * list keeps the one it was left on, [ListPeriod]) and Search in this list over its header and songs. The hero's line,
- * the header, Shuffle and Play all go by the songs shown: the chip's, those the search leaves.
+ * Most played (with an Insights button beside its sort), Recently played, Recently added, or Not played: its period chips
+ * (each list keeps the one it was left on, [ListPeriod]) and Search in this list over its header and songs. The hero's
+ * line, the header, Shuffle and Play all go by the songs shown: the chip's, those the search leaves.
  */
 @Composable
 private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
@@ -669,9 +670,10 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
     val period = ui.settings.library.periodOf(list.songList)
     var sorting by rememberSaveable { mutableStateOf(false) }
     var words by rememberSaveable { mutableStateOf("") }
-    // Most played and Recently played bring each song's plays in the period, which their order goes by; Recently added
-    // reads every song's when sorted by them. Each song with its plays, for the note after the artist: "12 plays", or
-    // when it was played last. Read again on each play logged, so the list follows it, and as the day turns.
+    // Most played and Recently played bring each song's plays in the period, which their order goes by, and Not played
+    // each song's of all time (none: never played); Recently added reads every song's when sorted by them. Each song with
+    // its plays, for the note after the artist: "12 plays", or when it was played last. Read again on each play logged,
+    // so the list follows it, and as the day turns.
     val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
     val today = rememberToday()
     val rows by produceState<List<Pair<Song, SongPlays?>>?>(null, library, list, written, period, today) {
@@ -681,7 +683,8 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
         value = when (list) {
             BuiltInList.MOST_PLAYED -> found(plays.mostPlayed(PLAYED_LIST_SIZE, since))
             BuiltInList.RECENTLY_PLAYED -> found(plays.recentlyPlayed(RECENTLY_PLAYED_SIZE, since))
-            // Off the main thread: over all time it is the whole library.
+            // Off the main thread: over all time each may be the whole library.
+            BuiltInList.NOT_PLAYED -> withContext(Dispatchers.Default) { notPlayed(plays, library, since) }
             else -> withContext(Dispatchers.Default) { recentlyAdded(library, since).map { it to null } }
         }
     }
@@ -696,6 +699,7 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
     val kind = when (list) {
         BuiltInList.MOST_PLAYED -> SourceKind.MOST_PLAYED
         BuiltInList.RECENTLY_PLAYED -> SourceKind.RECENTLY_PLAYED
+        BuiltInList.NOT_PLAYED -> SourceKind.NOT_PLAYED
         else -> SourceKind.RECENTLY_ADDED
     }
     val notes = songs.associate { song ->
@@ -706,7 +710,8 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
         item(key = "hero", contentType = "hero") {
             Box(rowMotion(reduced)) {
                 FavouritesHead(title, songsMeta(songs, hours = true), list) {
-                    ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = sortChip(order, R.string.lib_sort_title), onSort = { sorting = true }, gutter = 0.dp) {
+                    // The own order's name: of these lists only Not played has one.
+                    ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = sortChip(order, R.string.lib_sort_never_played_first), onSort = { sorting = true }, gutter = 0.dp) {
                         // Most played's way to Insights: a small button beside the sort, not a card above the songs (user 2026-11-22).
                         if (list == BuiltInList.MOST_PLAYED) HeaderButton(R.drawable.ic_bar_chart, stringResource(R.string.insights_open), enabled = true, primary = false, label = false) { nav.open(Page.Listening) }
                     }
@@ -745,6 +750,8 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
             item(key = "empty", contentType = "empty") {
                 if (words.isNotBlank() && rows.orEmpty().isNotEmpty()) {
                     EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match), rowMotion(reduced), action = stringResource(R.string.search_clear), onAction = { words = "" })
+                } else if (list == BuiltInList.NOT_PLAYED) {
+                    EmptyState(EmptyArt.Glyph, stringResource(R.string.lib_not_played_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_not_played_empty))
                 } else {
                     EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(if (list == BuiltInList.RECENTLY_ADDED) R.string.lib_added_empty else R.string.lib_played_empty))
                 }
@@ -752,7 +759,7 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
         }
         songRows(songList, note = { notes[it.path] })
     }
-    if (sorting) ListSortSheet(list.songList, order, R.string.lib_sort_title, onOrder) { sorting = false }
+    if (sorting) ListSortSheet(list.songList, order, R.string.lib_sort_never_played_first, onOrder) { sorting = false }
 }
 
 /**

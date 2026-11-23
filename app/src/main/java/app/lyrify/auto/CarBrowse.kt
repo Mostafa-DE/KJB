@@ -39,6 +39,7 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.mostPlayed
+import app.lyrify.library.notPlayed
 import app.lyrify.library.recentlyPlayed
 import app.lyrify.player.Found
 import app.lyrify.player.LibraryTree
@@ -224,7 +225,7 @@ class CarBrowse(
 
     /**
      * A snapshot of what the tree is built from, once the queues and the library are read, with [controller]'s app's
-     * searches (none without one); Most played and Recently played only for the lists that show them.
+     * searches (none without one); Most played, Recently played and Not played only for the lists that show them.
      */
     private suspend fun data(controller: MediaSession.ControllerInfo?, plays: Boolean = false): TreeData {
         core.ready.first { it }
@@ -232,14 +233,17 @@ class CarBrowse(
         val state = LibraryGraph.repository(context).state.first { it !is LibraryState.Loading }
         val library = (state as? LibraryState.Ready)?.library ?: Library.of(emptyList(), settings)
         val lists = LibraryGraph.playlists(context).state.first()
-        val (most, recent) = if (!plays) {
-            emptyList<Song>() to emptyList()
+        val (most, recent, unplayed) = if (!plays) {
+            Triple(emptyList<Song>(), emptyList(), emptyList())
         } else {
             // Each over the period it was left on in the app, as the app shows it.
             withContext(Dispatchers.IO) {
                 Lyrify.plays(context).let {
-                    mostPlayed(it, library, sinceOf(settings.library.periodOf(SongList.MOST_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())) to
-                        recentlyPlayed(it, library, sinceOf(settings.library.periodOf(SongList.RECENTLY_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault()))
+                    Triple(
+                        mostPlayed(it, library, sinceOf(settings.library.periodOf(SongList.MOST_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())),
+                        recentlyPlayed(it, library, sinceOf(settings.library.periodOf(SongList.RECENTLY_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())),
+                        notPlayed(it, library, sinceOf(settings.library.periodOf(SongList.NOT_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())).map { (song, _) -> song },
+                    )
                 }
             }
         }
@@ -254,6 +258,7 @@ class CarBrowse(
             favourites = lists.favouriteSongs,
             mostPlayed = most,
             recentlyPlayed = recent,
+            notPlayed = unplayed,
             now = System.currentTimeMillis(),
             found = controller?.let { searches.of(it.packageName) }.orEmpty(),
         ) { queueNames[it.id] ?: queueLabel(context, book, it) }
@@ -275,7 +280,8 @@ class CarBrowse(
     private suspend fun find(query: String, library: Library): Found =
         Found(query, withContext(Dispatchers.Default) { search.songs(query, library, settings.value.library) }, search.source(query))
 
-    private fun needsPlays(id: String): Boolean = id == LibraryTree.PLAYLISTS || id.startsWith(LibraryTree.MOST_PLAYED) || id.startsWith(LibraryTree.RECENTLY_PLAYED)
+    private fun needsPlays(id: String): Boolean =
+        id == LibraryTree.PLAYLISTS || id.startsWith(LibraryTree.MOST_PLAYED) || id.startsWith(LibraryTree.RECENTLY_PLAYED) || id.startsWith(LibraryTree.NOT_PLAYED)
 
     /** [nodes] as media items, built off the main thread. */
     private suspend fun items(nodes: List<TreeNode>): List<MediaItem> {
@@ -316,6 +322,7 @@ class CarBrowse(
             LibraryTree.MOST_PLAYED -> R.string.queue_source_most_played
             LibraryTree.RECENTLY_PLAYED -> R.string.queue_source_recently_played
             LibraryTree.RECENTLY_ADDED -> R.string.queue_source_recently_added
+            LibraryTree.NOT_PLAYED -> R.string.queue_source_not_played
             LibraryTree.BUILT_FOR_YOU -> R.string.auto_built_for_you
             LibraryTree.YOUR_PLAYLISTS -> R.string.auto_your_playlists
             else -> return id

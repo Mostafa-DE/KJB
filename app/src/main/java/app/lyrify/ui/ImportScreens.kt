@@ -241,7 +241,7 @@ fun rememberImportFromApp(): () -> Unit {
         onImport = { preview ->
             sheet.value = preview.copy(importing = true)
             scope.launch {
-                val reserved = listOf(R.string.lib_favourites, R.string.lib_most_played, R.string.lib_recently_played, R.string.lib_recently_added).map(resources::getString).toSet()
+                val reserved = listOf(R.string.lib_favourites, R.string.lib_most_played, R.string.lib_recently_played, R.string.lib_recently_added, R.string.lib_not_played).map(resources::getString).toSet()
                 val named = { name: String? -> name?.let { resources.getString(R.string.import_queue_named, it) } ?: resources.getString(R.string.import_queue_name) }
                 val done = withContext(NonCancellable) {
                     // Kept for the process at once, so the summary and its Undo outlive a turn of the phone meanwhile.

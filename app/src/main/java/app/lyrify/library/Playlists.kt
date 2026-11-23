@@ -7,6 +7,7 @@ import androidx.datastore.core.Serializer
 import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import app.lyrify.data.writeWithRetries
 import app.lyrify.stats.PlaysQuery
+import app.lyrify.stats.SongPlays
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -424,3 +425,17 @@ suspend fun mostPlayed(plays: PlaysQuery, library: Library, since: Long?): List<
 /** "Recently played": the [RECENTLY_PLAYED_SIZE] songs played last since [since] (null: all time), the latest first; those gone or hidden left out. */
 suspend fun recentlyPlayed(plays: PlaysQuery, library: Library, since: Long?): List<Song> =
     library.listed(plays.recentlyPlayed(RECENTLY_PLAYED_SIZE, since).map { it.song })
+
+/**
+ * "Not played": the library's songs without a play Most played counts since [since] (null: ever), podcast episodes aside
+ * as there, each with its plays of all time as Most played counts them (null: never played); those never played first,
+ * the newest added first (songs without a date last), then those played longest ago.
+ */
+suspend fun notPlayed(plays: PlaysQuery, library: Library, since: Long?): List<Pair<Song, SongPlays?>> {
+    // Every song Most played counts, not only its top 50.
+    val ever = plays.mostPlayed(Int.MAX_VALUE).associateBy { it.song.path }
+    val played = if (since == null) ever.keys else plays.mostPlayed(Int.MAX_VALUE, since).mapTo(HashSet()) { it.song.path }
+    return library.songs.filter { !it.isPodcast && it.path !in played }
+        .map { it to ever[it.path] }
+        .sortedWith(compareBy<Pair<Song, SongPlays?>, Long?>(nullsFirst()) { it.second?.lastPlayedAt }.thenByDescending { it.first.addedAt ?: Long.MIN_VALUE })
+}

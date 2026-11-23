@@ -91,7 +91,7 @@ sealed interface Page {
     @Serializable @SerialName("playlist")
     data class Playlist(val id: String) : CollectionPages
 
-    /** Built for you: Favourites (with its tabs), Most played, Recently played, Recently added. */
+    /** Built for you: Favourites (with its tabs), Most played, Recently played, Recently added, Not played. */
     @Serializable @SerialName("builtIn")
     data class BuiltIn(val list: BuiltInList) : CollectionPages
 
@@ -200,7 +200,7 @@ sealed interface Page {
     data class Licence(val name: String) : Page
 }
 
-enum class BuiltInList { FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED }
+enum class BuiltInList { FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, NOT_PLAYED }
 
 enum class TopKind { SONGS, ARTISTS, ALBUMS, GENRES }
 

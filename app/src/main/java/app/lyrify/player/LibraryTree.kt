@@ -60,9 +60,10 @@ class TreeData(
     val name: (String) -> String = { it },
     /** Favourites, the latest added first. */
     val favourites: List<SongRef> = emptyList(),
-    /** The play counter's Most played and Recently played (S1), as the app shows them. */
+    /** The play counter's Most played and Recently played (S1), and Not played, as the app shows them. */
     val mostPlayed: List<Song> = emptyList(),
     val recentlyPlayed: List<Song> = emptyList(),
+    val notPlayed: List<Song> = emptyList(),
     /** Wall-clock millis, for Recently added. */
     val now: Long = 0,
     /** The phone's time zone, for the days of the period Recently added was left on in the app. */
@@ -75,7 +76,7 @@ class TreeData(
 
 /**
  * The browse tree for Bluetooth and Android Auto: Recent queues; Playlists, Built for you first (Shuffle all,
- * Favourites, Most played, Recently played, Recently added, those with songs) then the user's; Albums, shown as a grid;
+ * Favourites, Most played, Recently played, Recently added, Not played, those with songs) then the user's; Albums, shown as a grid;
  * Artists; Songs with Shuffle all at the top. Android Auto shows only so many root items ([root]). Pure: the service
  * turns nodes into media items and pages them ([page]). A song's id is its list's id, a bar, and its place there
  * ("album:<key>|3"), so playing it plays that list from it as the same list in the app does: a list plays as the app's
@@ -97,6 +98,7 @@ object LibraryTree {
     const val MOST_PLAYED: String = "most_played"
     const val RECENTLY_PLAYED: String = "recently_played"
     const val RECENTLY_ADDED: String = "recently_added"
+    const val NOT_PLAYED: String = "not_played"
     const val BUILT_FOR_YOU: String = "built_for_you"
     const val YOUR_PLAYLISTS: String = "your_playlists"
 
@@ -104,7 +106,7 @@ object LibraryTree {
     const val MAX_CHILDREN: Int = 500
 
     private val TOP = listOf(QUEUES, PLAYLISTS, ALBUMS, ARTISTS, SONGS)
-    private val BUILT_IN = listOf(FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED)
+    private val BUILT_IN = listOf(FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, NOT_PLAYED)
     private const val QUEUE = "queue:"
     private const val PLAYLIST = "playlist:"
     private const val ALBUM = "album:"
@@ -119,7 +121,7 @@ object LibraryTree {
     private val CAR_SONGS = QueueSource(SourceKind.SONGS, "car-songs", "")
 
     /** The lists whose children are songs: these, and those named by one of [SONG_LIST_PREFIXES]. */
-    private val SONG_LISTS = setOf(SONGS, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED)
+    private val SONG_LISTS = setOf(SONGS, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, NOT_PLAYED)
     private val SONG_LIST_PREFIXES = listOf(QUEUE, PLAYLIST, ALBUM, ARTIST, SEARCH)
 
     /**
@@ -238,6 +240,7 @@ object LibraryTree {
             id == MOST_PLAYED -> data.mostPlayed
             id == RECENTLY_PLAYED -> data.recentlyPlayed
             id == RECENTLY_ADDED -> recentlyAdded(library, sinceOf(data.settings.periodOf(SongList.RECENTLY_ADDED), data.now, data.zone))
+            id == NOT_PLAYED -> data.notPlayed
             id.startsWith(QUEUE) -> data.book.queue(id.removePrefix(QUEUE))?.items?.map { library.resolver.find(it.song) }
             id.startsWith(PLAYLIST) -> data.playlists.firstOrNull { it.id == id.removePrefix(PLAYLIST) }?.let { library.listed(it.songs) }
             id.startsWith(ALBUM) -> library.album(id.removePrefix(ALBUM))?.songs
@@ -254,6 +257,7 @@ object LibraryTree {
         id == MOST_PLAYED -> QueueSource(SourceKind.MOST_PLAYED, "MOST_PLAYED", "")
         id == RECENTLY_PLAYED -> QueueSource(SourceKind.RECENTLY_PLAYED, "RECENTLY_PLAYED", "")
         id == RECENTLY_ADDED -> QueueSource(SourceKind.RECENTLY_ADDED, "RECENTLY_ADDED", "")
+        id == NOT_PLAYED -> QueueSource(SourceKind.NOT_PLAYED, "NOT_PLAYED", "")
         id.startsWith(PLAYLIST) -> data.playlists.firstOrNull { it.id == id.removePrefix(PLAYLIST) }?.let { QueueSource(SourceKind.PLAYLIST, it.id, it.name) }
         id.startsWith(ALBUM) -> data.library.album(id.removePrefix(ALBUM))?.let { QueueSource(SourceKind.ALBUM, it.key, it.title) }
         id.startsWith(ARTIST) -> id.removePrefix(ARTIST).let { QueueSource(SourceKind.ARTIST, it, it) }

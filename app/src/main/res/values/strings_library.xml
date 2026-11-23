@@ -67,6 +67,8 @@
     <string name="lib_sort_track">Track</string>
     <!-- Favourites' songs and a playlist in the order the user put them in, the one the drag handles change. -->
     <string name="lib_sort_custom">Custom order</string>
+    <!-- Not played's own order: the songs never played first, the newest added first, then those played longest ago. -->
+    <string name="lib_sort_never_played_first">Never played first</string>
     <string name="lib_show">Show</string>
     <string name="lib_filter_all">All</string>
     <string name="lib_filter_plain">Plain lyrics</string>
@@ -113,7 +115,10 @@
     <string name="lib_played_empty">Play some music and it shows here.</string>
     <!-- Recently added with nothing in its period: every period ends today, so a new song shows. -->
     <string name="lib_added_empty">New songs on your phone show here.</string>
-    <!-- The period chips of Recently added, Recently played and Most played: today and the days before it. -->
+    <!-- Not played with no song left in its period: true of every period, as a new song shows until it is played. -->
+    <string name="lib_not_played_empty_title">You\'ve played every song</string>
+    <string name="lib_not_played_empty">New songs show here until you play them.</string>
+    <!-- The period chips of Recently added, Recently played, Most played and Not played: today and the days before it. -->
     <plurals name="lib_past_days">
         <item quantity="one">Past day</item>
         <item quantity="other">Past %d days</item>

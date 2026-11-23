@@ -78,6 +78,7 @@ import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.mostPlayed
+import app.lyrify.library.notPlayed
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.recentlyPlayed
 import app.lyrify.library.search.Hit
@@ -395,12 +396,14 @@ private suspend fun listRows(library: Library, playlists: PlaylistsState, names:
             BuiltInList.MOST_PLAYED to mostPlayed(plays, library, sinceOf(settings.periodOf(SongList.MOST_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())).size,
             BuiltInList.RECENTLY_PLAYED to recentlyPlayed(plays, library, sinceOf(settings.periodOf(SongList.RECENTLY_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())).size,
             BuiltInList.RECENTLY_ADDED to recentlyAdded(library, sinceOf(settings.periodOf(SongList.RECENTLY_ADDED), System.currentTimeMillis(), ZoneId.systemDefault())).size,
+            BuiltInList.NOT_PLAYED to notPlayed(plays, library, sinceOf(settings.periodOf(SongList.NOT_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())).size,
         )
         val icons = mapOf(
             BuiltInList.FAVOURITES to R.drawable.ic_queue_music,
             BuiltInList.MOST_PLAYED to R.drawable.ic_bar_chart,
             BuiltInList.RECENTLY_PLAYED to R.drawable.ic_history,
             BuiltInList.RECENTLY_ADDED to R.drawable.ic_schedule,
+            BuiltInList.NOT_PLAYED to R.drawable.ic_timer_off,
         )
         BuiltInList.entries.map { ListRow(Page.BuiltIn(it), names.getValue(it), counts.getValue(it), icons.getValue(it)) } +
             playlists.playlists.map { ListRow(Page.Playlist(it.id), it.name, library.listed(it.songs).size, R.drawable.ic_queue_music) }

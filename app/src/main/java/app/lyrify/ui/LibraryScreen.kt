@@ -61,6 +61,7 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.mostPlayed
+import app.lyrify.library.notPlayed
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.recentlyPlayed
 import app.lyrify.library.sortAlbums
@@ -633,7 +634,8 @@ internal fun LazyListScope.folderRows(rows: List<FolderRow>, reduced: Boolean) {
 
 /**
  * Playlists, in Library's Playlists tab and on the Playlists tab's root: the pinned Queues row ("4 queues"), Built for
- * you (Favourites, Most played, Recently played, Recently added), then the user's playlists by name and New playlist.
+ * you (Favourites, Most played, Recently played, Recently added, Not played), then the user's playlists by name and New
+ * playlist.
  */
 @Composable
 private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, reselect: Int, sheets: SongSheets, inLibrary: Boolean) {
@@ -653,9 +655,12 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
     val played by produceState(0, library, written, ui.settings.library, today) {
         value = recentlyPlayed(Lyrify.plays(context), library, sinceOf(ui.settings.library.periodOf(SongList.RECENTLY_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())).size
     }
-    // Off the main thread: over all time it is the whole library.
+    // Off the main thread: over all time each may be the whole library.
     val added by produceState(0, library, ui.settings.library, today) {
         value = withContext(Dispatchers.Default) { recentlyAdded(library, sinceOf(ui.settings.library.periodOf(SongList.RECENTLY_ADDED), System.currentTimeMillis(), ZoneId.systemDefault())).size }
+    }
+    val unplayed by produceState(0, library, written, ui.settings.library, today) {
+        value = withContext(Dispatchers.Default) { notPlayed(Lyrify.plays(context), library, sinceOf(ui.settings.library.periodOf(SongList.NOT_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())).size }
     }
     val queues = queuesCount(ui.queues)
     val source = QueueSource(SourceKind.SONGS, "tab:playlists", stringResource(R.string.library_tab_playlists))
@@ -678,6 +683,7 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
         item(key = "most", contentType = "built in") { Box(rowMotion(reduced)) { BuiltInRow(BuiltInList.MOST_PLAYED, most) } }
         item(key = "played", contentType = "built in") { Box(rowMotion(reduced)) { BuiltInRow(BuiltInList.RECENTLY_PLAYED, played) } }
         item(key = "added", contentType = "built in") { Box(rowMotion(reduced)) { BuiltInRow(BuiltInList.RECENTLY_ADDED, added) } }
+        item(key = "unplayed", contentType = "built in") { Box(rowMotion(reduced)) { BuiltInRow(BuiltInList.NOT_PLAYED, unplayed) } }
         item(key = "yours heading", contentType = "heading") { Box(rowMotion(reduced)) { ListHeading(stringResource(R.string.lib_your_playlists)) } }
         items(playlists, key = { "playlist ${it.id}" }, contentType = { "row" }) { playlist ->
             val count = library.listed(playlist.songs).size
@@ -708,6 +714,7 @@ internal fun BuiltInTile(list: BuiltInList, size: Dp = 48.dp) {
         BuiltInList.MOST_PLAYED -> Tile(R.drawable.ic_bar_chart, size = size)
         BuiltInList.RECENTLY_PLAYED -> Tile(R.drawable.ic_history, size = size)
         BuiltInList.RECENTLY_ADDED -> Tile(R.drawable.ic_schedule, size = size)
+        BuiltInList.NOT_PLAYED -> Tile(R.drawable.ic_timer_off, size = size)
     }
 }
 
@@ -718,6 +725,7 @@ internal val BuiltInList.words: Int
         BuiltInList.MOST_PLAYED -> R.string.lib_most_played
         BuiltInList.RECENTLY_PLAYED -> R.string.lib_recently_played
         BuiltInList.RECENTLY_ADDED -> R.string.lib_recently_added
+        BuiltInList.NOT_PLAYED -> R.string.lib_not_played
     }
 
 /** Where a Built for you list's order is remembered. */
@@ -727,6 +735,7 @@ internal val BuiltInList.songList: SongList
         BuiltInList.MOST_PLAYED -> SongList.MOST_PLAYED
         BuiltInList.RECENTLY_PLAYED -> SongList.RECENTLY_PLAYED
         BuiltInList.RECENTLY_ADDED -> SongList.RECENTLY_ADDED
+        BuiltInList.NOT_PLAYED -> SongList.NOT_PLAYED
     }
 
 /** Genres (off by default): each with how many songs it has. */
