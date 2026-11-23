@@ -12,8 +12,6 @@
     <string name="stats_this_month">This month</string>
     <string name="stats_this_year">This year</string>
 
-    <string name="stats_time">Listening time</string>
-    <string name="stats_plays_label">Plays</string>
     <string name="stats_top_songs">Top songs</string>
     <string name="stats_top_artists">Top artists</string>
     <string name="stats_top_albums">Top albums</string>
