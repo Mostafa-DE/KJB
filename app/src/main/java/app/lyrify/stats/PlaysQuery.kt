@@ -15,7 +15,6 @@ import app.lyrify.library.SongRef
 import app.lyrify.logFailures
 import app.lyrify.player.PlayerExtras
 import app.lyrify.settings.Settings
-import app.lyrify.suggestions.FriendPlay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -137,9 +136,9 @@ object StatsGraph {
                     bookmarks = PlayerExtras.of(app).state.value.bookmarks.values.flatten().map { it.addedAt }.filter { it > 0 },
                     finishedBooks = BooksGraph.store(app).state.value.books.values.filter { it.finished }.mapNotNull { it.lastPlayedAt },
                     friends = friends.friends.map { FriendName(it.id, it.shownName, past = false) } + friends.past.map { FriendName(it.id, it.name, past = true) },
-                    friendPlays = huddle.historySince(from ?: 0).map { FriendPlay(it.friend, it.song.title, it.song.artist, it.song.album, it.song.durationMs, it.at, it.favourite) },
+                    friendPlays = huddle.historySince(from ?: 0),
                     shared = huddle.everyCard().filter { (it as? Sent)?.delivered != false }.flatMap { kept ->
-                        kept.card.songs.map { SharedSong(kept.id, kept.friend, kept.at, kept is Sent, it.title, it.artist, it.durationMs) }
+                        kept.card.songs.map { song -> SharedSong(kept.id, kept.friend, kept.at, kept is Sent, song.title, song.artist, song.durationMs.takeIf { it > 0 }) }
                     },
                 )
             },

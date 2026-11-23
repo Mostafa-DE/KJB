@@ -9,6 +9,7 @@ import app.lyrify.library.SongRef
 import app.lyrify.library.albumKey
 import java.text.Collator
 import java.time.DayOfWeek
+import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -122,7 +123,7 @@ fun insightsOf(data: InsightsData, period: Period?, previous: Period?, now: Long
         artists = tops.artists.takeIf { enough && it.size >= MIN_TOP_OTHERS }.orEmpty(),
         albums = tops.albums.takeIf { enough && it.size >= MIN_TOP_OTHERS }.orEmpty(),
         genres = genresOf(tops.songs, library).takeIf { enough && it.size >= MIN_TOP_OTHERS }.orEmpty(),
-        versus = versusOf(ledger, data, period, previous, now, kinds),
+        versus = versusOf(ledger, data, period, previous, now, zone, kinds),
         clock = clockOf(heard, zone),
         streaks = streaksOf(heard, data.plays, going, now, zone, kinds),
         milestones = milestonesOf(data, period, going, kinds),
@@ -256,12 +257,23 @@ internal fun genresOf(songs: List<Top<Song>>, library: Library): List<Top<Genre>
 }
 
 /** The period so far against the one before up to the same point (all of it once the period is over). */
-private fun versusOf(ledger: Ledger, data: InsightsData, period: Period?, previous: Period?, now: Long, kinds: Kinds): Versus? {
+private fun versusOf(ledger: Ledger, data: InsightsData, period: Period?, previous: Period?, now: Long, zone: ZoneId, kinds: Kinds): Versus? {
     if (period == null || previous == null) return null
-    val window = if (now in period) Period(previous.from, minOf(previous.until, previous.from + (now - period.from))) else previous
+    val window = Period(previous.from, samePointIn(previous, period, now, zone))
     val before = ledgerOf(data.plays.within(window), data.books.within(window), kinds)
     if (before.plays < MIN_VERSUS_PLAYS && before.heardMs < MIN_VERSUS_HEARD_MS) return null
     return Versus(ledger.heardMs, ledger.plays, before.heardMs, before.plays)
+}
+
+/**
+ * As far into [previous] as [now] is into [period] by the phone's clock, the same day and time of day (a day of 23 or 25
+ * hours is still a day), and no further than its end; all of it once [period] is over.
+ */
+internal fun samePointIn(previous: Period, period: Period, now: Long, zone: ZoneId): Long {
+    if (now !in period) return previous.until
+    fun local(at: Long): LocalDateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(at), zone)
+    val into = Duration.between(local(period.from), local(now))
+    return minOf(previous.until, local(previous.from).plus(into).atZone(zone).toInstant().toEpochMilli())
 }
 
 private fun clockOf(heard: List<LoggedPlay>, zone: ZoneId): ListeningClock? {

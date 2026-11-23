@@ -214,6 +214,37 @@ class InsightsPageTest {
     }
 
     @Test
+    fun `a play heard where it is tomorrow already counts on today's step, so the steps still add up`() {
+        // Thursday 21:30 in Amman is Friday 03:30 in Tokyo, where it was heard.
+        val ahead = play(copper, nov(26, "21:30"), heardMs = 10 * MINUTE, zone = 540)
+
+        val cards = page(plays(harbour, 9, nov(23)) + ahead, ListeningPeriod.WEEK).cards
+
+        assertEquals(minutes(18, 0, 0, 10, null, null, null), shown(cards.time).heard.heardMs)
+        assertEquals(minutes(18, 0, 0, 10, null, null, null), shown(cards.days).heard.heardMs)
+    }
+
+    @Test
+    fun `the period before goes up to the same day and time on the clock, across a clock change`() {
+        val berlin = ammanCalendar.copy(zone = ZoneId.of("Europe/Berlin"), weekend = setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY))
+        // Sunday 25 October 2026 has 25 hours in Berlin: its noon is 157 hours into the week, the Sunday before's 156.
+        val sundayNoon = at("2026-10-25T12:00+01:00[Europe/Berlin]")
+        val plays = listOf(
+            play(copper, at("2026-10-19T12:00+02:00[Europe/Berlin]")),
+            play(harbour, at("2026-10-18T11:00+02:00[Europe/Berlin]"), heardMs = 40 * MINUTE),
+            play(north, at("2026-10-18T12:30+02:00[Europe/Berlin]"), heardMs = 40 * MINUTE),
+        )
+
+        val page = page(plays, ListeningPeriod.WEEK, calendar = berlin, now = sundayNoon)
+
+        assertEquals(at("2026-10-18T12:00+02:00[Europe/Berlin]"), page.period.beforeUntil)
+        assertEquals(40 * MINUTE, shown(page.cards.time).before?.heardMs)
+        // in1's Insights set the week against the same point.
+        val insights = runBlocking { stats(plays, emptyList(), library).insights(ListeningPeriod.WEEK, sundayNoon, berlin.zone, DayOfWeek.MONDAY) }
+        assertEquals(40 * MINUTE, insights.versus?.beforeHeardMs)
+    }
+
+    @Test
     fun `a month's days follow the phone's calendar across a clock change`() {
         val berlin = ammanCalendar.copy(zone = ZoneId.of("Europe/Berlin"), weekend = setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY))
         // 25 October 2026 has 25 hours in Berlin: a play at 23:30 is still on the 25th.
@@ -500,6 +531,30 @@ class InsightsPageTest {
     }
 
     @Test
+    fun `on the move needs a time zone other than the phone's own, never only its summer time`() {
+        val berlin = ammanCalendar.copy(zone = ZoneId.of("Europe/Berlin"), weekend = setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY))
+        val home = listOf(play(copper, at("2026-07-10T12:00+02:00[Europe/Berlin]"), zone = 120), play(harbour, at("2026-11-10T12:00+01:00[Europe/Berlin]"), zone = 60))
+        val away = play(north, at("2026-08-01T12:00+03:00[Asia/Amman]"), zone = 180)
+
+        assertEquals(emptyList<Moment>(), page(home, ListeningPeriod.YEAR, calendar = berlin).cards.moments.filterIsInstance<Moment.OnTheMove>())
+        // The phone's own time zone as it is now (UTC+1 in November), the most heard first.
+        assertEquals(listOf(Moment.OnTheMove(listOf(60, 180))), page(home + away, ListeningPeriod.YEAR, calendar = berlin).cards.moments.filterIsInstance<Moment.OnTheMove>())
+    }
+
+    @Test
+    fun `the longest session is the longest listening, never a shorter one shown in its place`() {
+        // A book for an hour without a break, then 40 minutes of music on another day.
+        val book = List(6) { bookPlay(nov(10, "08:00") + it * 10 * MINUTE, heardMs = 10 * MINUTE) }
+        val music = List(10) { play(north, nov(12, "20:00") + it * 4 * MINUTE, heardMs = 4 * MINUTE) }
+
+        assertEquals(emptyList<Moment>(), page(music, books = book).cards.moments.filterIsInstance<Moment.LongestSession>())
+        assertEquals(
+            listOf(Moment.LongestSession(java.time.LocalDateTime.of(2026, 11, 12, 20, 0), 40 * MINUTE, north)),
+            page(music).cards.moments.filterIsInstance<Moment.LongestSession>(),
+        )
+    }
+
+    @Test
     fun `all time begins with the first play, and a month over has no year ago today`() {
         val plays = listOf(play(north, at("2025-02-14T19:00+03:00[Asia/Amman]"))) + plays(signal, 3, at("2025-10-26T12:00+03:00[Asia/Amman]")) + plays(copper, 10, nov(3))
 
@@ -709,6 +764,19 @@ class InsightsPageTest {
         assertEquals(InSync("f-wren", "Wren", copper, 1), card.inSync)
         assertEquals(SentKept("f-wren", "Wren", north, 2), card.favourite)
         assertNull(page(mine).cards.friends)
+    }
+
+    @Test
+    fun `a card from a friend no longer listed is left out, never the whole page`() {
+        val sources = PageSources(
+            friends = listOf(FriendName("f-wren", "Wren", past = false)),
+            shared = listOf(shared("c1", "f-wren", nov(3), sent = true, north), shared("c9", "f-gone", nov(4), sent = false, kite)),
+        )
+
+        val card = shown(page(plays(kite, 12, nov(5)), sources = sources).cards.friends)
+
+        assertEquals(Triple(1, 0, 0), Triple(card.sent, card.got, card.kept))
+        assertNull(card.favourite)
     }
 
     // Nothing to show

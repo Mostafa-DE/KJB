@@ -41,7 +41,7 @@ private const val DAYS_IN_WEEK = 7
  * The period a page shows: its [kind] (a month's recap is a [ListeningPeriod.MONTH]) and [bounds] (null for all time);
  * the days it covers so far, [firstDay] (all time: the first play's day) to [lastDay] (today while it is [going], else its
  * last day); and the period before ([before], null for all time), whose figures go up to [beforeUntil]: as far into it as
- * now is into this one while this one goes on, its end once this one is over.
+ * now is into this one by the phone's clock ([samePointIn]) while this one goes on, its end once this one is over.
  */
 data class PagePeriod(
     val kind: ListeningPeriod,
@@ -77,8 +77,8 @@ data class PageSources(
 /** A friend ([id]) by the [name] you see them by, [past] once they left. */
 data class FriendName(val id: String, val name: String, val past: Boolean)
 
-/** One song of the card [card] between you and [friend], [sent] by you or to you, [at] when. */
-data class SharedSong(val card: String, val friend: String, val at: Long, val sent: Boolean, val title: String, val artist: String?, val durationMs: Long)
+/** One song of the card [card] between you and [friend], [sent] by you or to you, [at] when; its length null when not known. */
+data class SharedSong(val card: String, val friend: String, val at: Long, val sent: Boolean, val title: String, val artist: String?, val durationMs: Long?)
 
 /**
  * The page of [kind] with [bounds] (null: all time), set against the period [before] it, as of [now] in the phone's
@@ -106,7 +106,7 @@ fun insightsPageOf(
         lastDay = bounds?.takeIf { !going }?.let { dayOf(it.until - 1, zone).date } ?: today,
         going = going,
         before = before,
-        beforeUntil = before?.let { if (going && bounds != null) minOf(it.until, it.from + (now - bounds.from)) else it.until },
+        beforeUntil = before?.let { previous -> bounds?.let { samePointIn(previous, it, now, zone) } },
     )
     return InsightsPage(period, PageWork(data, sources, period, now, calendar, library).cards())
 }

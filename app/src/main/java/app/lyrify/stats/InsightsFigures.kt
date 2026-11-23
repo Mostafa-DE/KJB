@@ -8,6 +8,7 @@ import app.lyrify.library.search.fold
 import app.lyrify.lyrics.TrackNames
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.ListPeriod
+import app.lyrify.suggestions.friendSong
 import app.lyrify.suggestions.nameKey
 import java.time.Instant
 import java.time.LocalDate
@@ -221,16 +222,16 @@ internal class PageWork(
      * You and your friends (past friends too): the taste match with each friend with [MIN_FRIEND_PLAYS] plays in the
      * period (the share of plays you both gave the same artists), the cards both ways, the songs sent you that you went
      * on playing ([KEPT_PLAYS] times), the times you both played a song within [IN_SYNC_MS], and the song sent you that you
-     * played most since. Friends' songs are found in the library as Suggestions find them ([nameKey], the length within 2 s).
+     * played most since. Friends' songs are found in the library's music as Suggestions find them ([friendSong]); a card
+     * or a play of a friend no longer listed (a restore writes cards before friends, for a moment) is left out.
      */
     private fun friendsOf(library: Library): FriendsCard? {
+        if (sources.friendPlays.isEmpty() && sources.shared.isEmpty()) return null
         val names = sources.friends.associateBy { it.id }
         val until = period.bounds?.until ?: Long.MAX_VALUE
         val theirs = sources.friendPlays.filter { it.at < until && it.friend in names }
-        val byName = HashMap<String, MutableList<Song>>()
-        library.songs.filter { !it.isPodcast }.forEach { byName.getOrPut(nameKey(it.title, it.artist)) { ArrayList() } += it }
-        fun found(title: String, artist: String?, durationMs: Long?): Song? =
-            byName[nameKey(title, artist)]?.firstOrNull { durationMs == null || durationMs <= 0 || abs(it.durationMs - durationMs) <= SONG_KEY_LENGTH_STEP_MS }
+        val cardSongs = sources.shared.filter { it.friend in names }
+        val byName = library.songs.filter { !it.isPodcast }.groupBy { nameKey(it.title, it.artist) }
         // Each side's plays by artist, as a share of all the artists they played.
         fun shares(artists: List<String>): Map<String, Double> = artists.groupingBy { TrackNames.normalize(it) }.eachCount().let { counts ->
             val all = counts.values.sum().toDouble()
@@ -244,23 +245,28 @@ internal class PageWork(
         }
         val closest = matches.maxByOrNull { it.second.values.sum() }
         val artists = library.artists.associateBy { TrackNames.normalize(it.name) }
-        val inPeriod = sources.shared.filter { period.bounds == null || it.at in period.bounds }
+        val inPeriod = cardSongs.filter { period.bounds == null || it.at in period.bounds }
         val got = inPeriod.filter { !it.sent }.groupBy { it.card }
         // A song sent to you, and your plays of it after it came (up to the period's end).
-        val sentToYou = sources.shared.filter { !it.sent && it.at < until }.mapNotNull { shared -> found(shared.title, shared.artist, shared.durationMs)?.let { shared to it } }
+        val sentToYou = cardSongs.filter { !it.sent && it.at < until }.mapNotNull { shared -> friendSong(byName, shared.title, shared.artist, shared.durationMs)?.let { shared to it } }
         val sentSongs = sentToYou.mapTo(HashSet()) { it.second }
         val playedAt = data.plays.filter { it.counted }.mapNotNull { play -> songOf(play)?.takeIf { it in sentSongs }?.let { it to play.startedAt } }.groupBy({ it.first }, { it.second })
         fun playsAfter(song: Song, at: Long): Int = playedAt[song].orEmpty().count { it in at until until }
-        val keptCards = got.count { (_, songs) -> songs.any { shared -> found(shared.title, shared.artist, shared.durationMs)?.let { playsAfter(it, shared.at) >= KEPT_PLAYS } == true } }
+        val keptCards = got.count { (_, songs) -> songs.any { shared -> friendSong(byName, shared.title, shared.artist, shared.durationMs)?.let { playsAfter(it, shared.at) >= KEPT_PLAYS } == true } }
         val favourite = sentToYou.map { (shared, song) -> Triple(shared, song, playsAfter(song, shared.at)) }
             .filter { it.third >= KEPT_PLAYS }
             .maxWithOrNull(compareBy<Triple<SharedSong, Song, Int>> { it.third }.thenBy { it.first.at })
-        val theirSongs = theirs.groupBy { nameKey(it.title, it.artist) }
+        // Friends' plays by the song of yours they are, each found once, the oldest first: in sync with one of yours is the
+        // latest of them up to an hour after it (found by halves: the first after that hour, then the one before), from an
+        // hour before it.
+        val theirSongs = theirs.sortedBy { it.at }.mapNotNull { their -> friendSong(byName, their.title, their.artist, their.durationMs)?.let { it to their } }
+            .groupBy({ it.first }, { it.second })
         val inSync = counted.mapNotNull { (play, song) ->
-            theirSongs[nameKey(song.title, song.artist)]?.filter { abs(it.at - play.startedAt) <= IN_SYNC_MS && found(it.title, it.artist, it.durationMs) == song }
-                ?.maxByOrNull { it.at }?.let { play to it }
+            val plays = theirSongs[song] ?: return@mapNotNull null
+            val after = -plays.binarySearch { if (it.at <= play.startedAt + IN_SYNC_MS) -1 else 1 } - 1
+            plays.getOrNull(after - 1)?.takeIf { it.at >= play.startedAt - IN_SYNC_MS }?.let { play to it }
         }
-        val card = FriendsCard(
+        return FriendsCard(
             matches = matches.map { (friend, both) -> checkNotNull(names[friend]).let { FriendMatch(it.id, it.name, it.past, (both.values.sum() * PERCENT).roundToInt()) } }
                 .sortedWith(compareByDescending<FriendMatch> { it.percent }.thenBy { it.name }),
             both = closest?.second.orEmpty().entries.filter { it.value > 0 }.sortedByDescending { it.value }.mapNotNull { artists[it.key] }.take(BOTH_SHOWN),
@@ -272,8 +278,7 @@ internal class PageWork(
                 InSync(friend.id, friend.name, checkNotNull(songOf(play)), inSync.size)
             },
             favourite = favourite?.let { (shared, song, plays) -> checkNotNull(names[shared.friend]).let { SentKept(it.id, it.name, song, plays) } },
-        )
-        return card.takeIf { it.matches.isNotEmpty() || it.sent + it.got > 0 }
+        ).takeIf { it.matches.isNotEmpty() || it.sent + it.got > 0 }
     }
 
     /**
@@ -445,7 +450,7 @@ internal class PageWork(
 
     /**
      * The longest listening without a break: plays (books too) with under [SESSION_GAP_MS] from one's end to the next's
-     * start, from [MIN_SESSION_MS], its most played music song shown.
+     * start, from [MIN_SESSION_MS], its most played music song shown (none when it had none: a book's, say).
      */
     private fun longestSessionOf(): Moment.LongestSession? {
         val sessions = mutableListOf<MutableList<LoggedPlay>>()
@@ -455,13 +460,9 @@ internal class PageWork(
             sessions.last() += play
             end = maxOf(end, play.startedAt + play.realMs)
         }
-        return sessions.map { it to it.sumOf { play -> play.realMs } }
-            .filter { it.second >= MIN_SESSION_MS }
-            .sortedByDescending { it.second }
-            .firstNotNullOfOrNull { (plays, ms) ->
-                val song = plays.filter { it.counted && kinds.of(it) == Kind.MUSIC }.mapNotNull(::songOf).groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
-                song?.let { Moment.LongestSession(localTimeOf(plays.first(), zone).truncatedTo(ChronoUnit.MINUTES), ms, it) }
-            }
+        val (plays, ms) = sessions.map { it to it.sumOf { play -> play.realMs } }.maxByOrNull { it.second }?.takeIf { it.second >= MIN_SESSION_MS } ?: return null
+        return plays.filter { it.counted && kinds.of(it) == Kind.MUSIC }.mapNotNull(::songOf).groupingBy { it }.eachCount().maxByOrNull { it.value }
+            ?.let { Moment.LongestSession(localTimeOf(plays.first(), zone).truncatedTo(ChronoUnit.MINUTES), ms, it.key) }
     }
 
     /** The latest a music play started at night, [NIGHT_FROM] to [NIGHT_UNTIL] o'clock where it was heard. */
@@ -499,9 +500,12 @@ internal class PageWork(
         return latest?.let { Moment.StartToFinish(through, it) }
     }
 
-    /** The time zones the period's plays were heard in, from two, the most heard first. */
+    /**
+     * The time zones the period's plays were heard in, from two, the most heard first; a play heard in the phone's own
+     * time zone is in it as it is now, so its summer time is never a second one.
+     */
     private fun onTheMoveOf(): Moment.OnTheMove? = (heard + books).filter { it.zoneOffsetMinutes != null }
-        .groupBy { checkNotNull(it.zoneOffsetMinutes) }
+        .groupBy { play -> checkNotNull(play.zoneOffsetMinutes).takeIf { it != zoneOffsetMinutes(zone, play.startedAt) } ?: zoneOffsetMinutes(zone, now) }
         .mapValues { (_, its) -> its.sumOf { it.realMs } }
         .entries.sortedByDescending { it.value }.map { it.key }
         .takeIf { it.size >= MIN_ZONES }
@@ -678,11 +682,12 @@ internal class PageWork(
 
     /**
      * [plays]' real minutes by [step], [count] steps from [first], each play in the step of the day it was heard (one a
-     * time zone took past either end goes in the first or the last); a step after [last] has none yet.
+     * time zone took past either end, or past [last], goes in the first step or the last one shown); a step after [last]
+     * has none yet.
      */
     private fun stepsOf(plays: List<LoggedPlay>, step: Step, first: LocalDate, count: Int, last: LocalDate?): Steps {
         val sums = LongArray(count)
-        plays.forEach { sums[stepsBetween(step, first, localDay(it)).coerceIn(0, count - 1)] += it.realMs }
+        plays.forEach { sums[stepsBetween(step, first, minOf(localDay(it), last ?: LocalDate.MAX)).coerceIn(0, count - 1)] += it.realMs }
         val lastStep = last?.let { stepsBetween(step, first, it) } ?: count
         return Steps(step, first, sums.mapIndexed { at, ms -> ms.takeIf { at <= lastStep } })
     }

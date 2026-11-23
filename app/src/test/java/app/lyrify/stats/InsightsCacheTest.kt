@@ -6,6 +6,7 @@ import app.lyrify.library.VOLUME
 import app.lyrify.library.song
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.Settings
+import app.lyrify.suggestions.FriendPlay
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
@@ -362,6 +363,24 @@ class InsightsCacheTest {
     }
 
     @Test
+    fun `in sync stays quick when you and a friend each play one song thousands of times`() = runBlocking {
+        val song = songs[0]
+        val from = at("2026-11-01T00:00+01:00[Europe/Berlin]")
+        val mine = FakePlayLog(List(SAME_SONG_PLAYS) { play(0, from + it * MINUTE / 2) })
+        val theirs = List(SAME_SONG_PLAYS) { FriendPlay("f-wren", song.title, song.artist, song.album, song.durationMs, from + it * MINUTE / 2) }
+        val friends = PageSources(friends = listOf(FriendName("f-wren", "Wren", past = false)), friendPlays = theirs)
+        suspend fun month(sources: PageSources): InsightsPage = PlayStats(mine, { library }, Dispatchers.Unconfined, sources = { sources }).page(ListeningPeriod.MONTH, now, calendar)
+
+        month(PageSources())
+        val alone = cpuMs { month(PageSources()) }
+        val together = cpuMs { month(friends) }
+        println("IN2D measure: this month with $SAME_SONG_PLAYS plays of one song: $alone ms of CPU alone, $together ms with a friend's as many")
+
+        assertEquals(SAME_SONG_PLAYS, month(friends).cards.friends?.inSync?.times)
+        assertTrue("in sync: ${together - alone} ms more", together - alone < IN_SYNC_BUDGET_MS)
+    }
+
+    @Test
     fun `the app's play log and book log tell Insights each play written`() {
         val graph = java.io.File("src/main/java/app/lyrify/stats/PlaysQuery.kt").readText()
         // plays.db's helper is one, shared with Huddle's history (HY1): changed on purpose from a helper of the play log's own.
@@ -391,5 +410,9 @@ class InsightsCacheTest {
          */
         const val PAGES_COLD_MS: Long = 8_000
         const val PAGE_WARM_MS: Long = 1_200
+
+        /** A song played every 30 s for days, yours and a friend's (in2d's review), and what a friend's may add to the page. */
+        const val SAME_SONG_PLAYS: Int = 10_000
+        const val IN_SYNC_BUDGET_MS: Long = 500
     }
 }
