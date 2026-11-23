@@ -703,6 +703,8 @@ class HuddleTest {
         runCurrent()
         assertTrue(reading.isCompleted)
         assertTrue(wrenState.now.inbox.isEmpty())
+        // Nor in the history, which keeps a read's cards before huddle.json.
+        assertTrue(wren.cards().isEmpty())
         assertEquals("nothing of theirs read on: no acknowledgement", acks, server.requests.count { it == "ack" })
     }
 
