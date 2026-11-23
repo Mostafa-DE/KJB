@@ -151,8 +151,8 @@ data class FriendNow(val friend: Friend, val play: FriendPlay?, val playing: Boo
  * Every friend as [FriendNow], the one place every screen reads what friends play: the friends row, the page, their
  * song's sheet, the player, the Now bar and the bar's dot. Playing only while their newest now ([HuddleState.live]) says
  * so, at most [LIVE_MS] old, and not more than [END_GRACE_MS] past their song's end; paused for [PAUSED_KEPT_MS] after
- * the pause; stopped, or past those, as their latest play. Those playing first, the song begun last first, then those
- * paused, then the others by their latest play, then those who never shared one, by name.
+ * the pause; stopped, or past those, as their latest play. Those playing first, the song begun last first, then everyone
+ * else, paused or not, by their latest play, the newest first (user 2026-11-23), then those who never shared one, by name.
  */
 fun friendsNow(state: HuddleState, now: Long): List<FriendNow> {
     val collator = Collator.getInstance()
@@ -164,7 +164,7 @@ fun friendsNow(state: HuddleState, now: Long): List<FriendNow> {
         val paused = live != null && live.state == NowState.PAUSED && now - live.at <= PAUSED_KEPT_MS
         FriendNow(friend, if (live != null && (playing || paused)) FriendPlay(friend.id, live.at - live.positionMs, live.song, live.favourite) else latest[friend.id], playing, paused)
     }.sortedWith(
-        compareByDescending<FriendNow> { it.playing }.thenByDescending { it.paused }.thenByDescending { it.play?.at ?: Long.MIN_VALUE }.thenBy(collator) { it.friend.shownName },
+        compareByDescending<FriendNow> { it.playing }.thenByDescending { it.play?.at ?: Long.MIN_VALUE }.thenBy(collator) { it.friend.shownName },
     )
 }
 

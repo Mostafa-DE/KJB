@@ -116,25 +116,31 @@ class HuddleScreenTest {
     }
 
     @Test
-    fun `friends playing now come first, the newest song first, then those paused, then the others by their latest play, then by name`() {
+    fun `friends playing now come first, the song begun last first, then everyone else by their latest play, paused or not, then by name`() {
         val now = 10_000_000L
         val state = HuddleState(
-            friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper"), friend("f3", "Rook"), friend("f4", "Ash"), friend("f5", "Moss"), friend("f6", "Birch"), friend("f7", "Fern")),
+            friends = listOf(
+                friend("f1", "Wren"), friend("f2", "Juniper"), friend("f3", "Rook"), friend("f4", "Ash"), friend("f5", "Moss"), friend("f6", "Birch"),
+                friend("f7", "Fern"), friend("f8", "Sorrel"), friend("f9", "Larch"),
+            ),
             plays = listOf(
                 FriendPlay("f1", now - 100_000, lantern),
                 FriendPlay("f2", now - 30_000, bell),
                 FriendPlay("f3", now - 900_000, bell),
                 FriendPlay("f4", now - 600_000, lantern),
+                FriendPlay("f8", now - 60_000, lantern),
             ),
             live = mapOf(
                 "f1" to told(lantern, NowState.PLAYING, now - 40_000, positionMs = 60_000),
                 "f2" to told(bell, NowState.PLAYING, now - 20_000, positionMs = 10_000),
-                "f7" to told(bell, NowState.PAUSED, now - 50_000),
+                // Paused on a song begun before Sorrel's latest play, and one begun after it.
+                "f7" to told(bell, NowState.PAUSED, now - 50_000, positionMs = 120_000),
+                "f9" to told(lantern, NowState.PAUSED, now - 5_000, positionMs = 10_000),
             ),
         )
-        assertEquals(listOf("f2", "f1", "f7", "f4", "f3", "f6", "f5"), friendsNow(state, now).map { it.friend.id })
-        assertEquals(listOf(true, true, false, false, false, false, false), friendsNow(state, now).map { it.playing })
-        assertEquals(listOf(false, false, true, false, false, false, false), friendsNow(state, now).map { it.paused })
+        assertEquals(listOf("f2", "f1", "f9", "f8", "f7", "f4", "f3", "f6", "f5"), friendsNow(state, now).map { it.friend.id })
+        assertEquals(listOf(true, true, false, false, false, false, false, false, false), friendsNow(state, now).map { it.playing })
+        assertEquals(listOf(false, false, true, false, true, false, false, false, false), friendsNow(state, now).map { it.paused })
     }
 
     @Test
