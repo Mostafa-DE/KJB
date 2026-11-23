@@ -16,6 +16,12 @@ import app.lyrify.media.SessionTracks
 import app.lyrify.settings.AdvancedSettings
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -27,6 +33,7 @@ import kotlin.random.Random
  * KJB's own playback beyond the queue model: lyrics for its own queue, the browse tree, the state the media session
  * shows, and when offload may run. Made-up names only.
  */
+@kotlin.OptIn(ExperimentalCoroutinesApi::class)
 class OwnPlaybackTest {
     private val songs: List<Song> = (1..10).map {
         song("Music/Harbour Glass/%02d Paper Lantern %d.flac".format(it, it), album = "Harbour Glass", artist = "Kit Calloway", track = it, durationMs = 200_000L + it, id = it.toLong())
@@ -265,5 +272,93 @@ class OwnPlaybackTest {
         assertFalse(offloadAllowed(AdvancedSettings(), processing = false))
         assertTrue(offloadAllowed(AdvancedSettings(audioOffload = true), processing = false))
         assertFalse(offloadAllowed(AdvancedSettings(audioOffload = true), processing = true))
+    }
+
+    // The phone's media card
+
+    /**
+     * The phone's media card as Android runs it (AOSP): SystemUI reads the song playing only when KJB posts its media
+     * notification, and NotificationManagerService drops an update while the app's posting rate is over five a second.
+     * The rate is RateEstimator's: the time between the posts it let through, each new gap weighed 0.3, read before the
+     * post; a dropped post moves nothing.
+     */
+    private class PhoneCard(private val clock: () -> Long) {
+        var shows: String? = null
+        private var lastAt: Long? = null
+        private var gapS = 1_000.0
+
+        fun posted(song: String) {
+            val now = clock()
+            lastAt?.let { last ->
+                val estimate = 0.7 * gapS + 0.3 * maxOf((now - last) / 1_000.0, 0.0005)
+                if (1 / estimate > 5) return
+                gapS = estimate
+            }
+            lastAt = now
+            shows = song
+        }
+    }
+
+    @Test
+    fun `after Next is pressed fast many times, NotificationRepost's post brings the phone's media card to the song playing`() = runTest {
+        val card = PhoneCard { currentTime }
+        // The song before came on minutes ago: Media3 posted the song, buffering, ready, then its cover.
+        listOf(0L, 20, 40, 240).forEach { gap ->
+            advanceTimeBy(gap)
+            card.posted("Song 1")
+        }
+        advanceTimeBy(180_000)
+        var playing = "Song 1"
+        lateinit var repost: NotificationRepost
+        repost = NotificationRepost(backgroundScope) {
+            card.posted(playing)
+            // KJB's own post reaches Media3's update hook too, as triggerNotificationUpdate does.
+            repost.posted()
+        }
+        // Next nine times, a tenth of a second apart, each cover read ahead: Media3 posts the song, buffering and ready.
+        repeat(9) { n ->
+            playing = "Song ${n + 2}"
+            listOf(0L, 20, 40).forEach { gap ->
+                advanceTimeBy(gap)
+                runCurrent()
+                card.posted(playing)
+                repost.posted()
+            }
+            advanceTimeBy(40)
+            runCurrent()
+        }
+        assertEquals("Song 10", playing)
+        assertEquals("Android dropped the last posts: the card is behind, as on the phone", "Song 9", card.shows)
+
+        advanceTimeBy(REPOST_QUIET_MS)
+        runCurrent()
+        assertEquals(playing, card.shows)
+    }
+
+    @Test
+    fun `the notification is posted once more only once its updates stop, and its own post starts no other wait`() = runTest {
+        var posts = 0
+        lateinit var repost: NotificationRepost
+        repost = NotificationRepost(backgroundScope) {
+            posts++
+            repost.posted()
+        }
+        repost.posted()
+        advanceTimeBy(REPOST_QUIET_MS - 100)
+        repost.posted()
+        advanceTimeBy(REPOST_QUIET_MS - 100)
+        runCurrent()
+        assertEquals("still updating: no post yet", 0, posts)
+        advanceTimeBy(200)
+        runCurrent()
+        assertEquals(1, posts)
+        advanceTimeBy(10 * REPOST_QUIET_MS)
+        runCurrent()
+        assertEquals("its own post is not an update", 1, posts)
+
+        repost.posted()
+        advanceTimeBy(REPOST_QUIET_MS + 100)
+        runCurrent()
+        assertEquals(2, posts)
     }
 }
