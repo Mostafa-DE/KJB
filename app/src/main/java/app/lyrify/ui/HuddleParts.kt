@@ -438,7 +438,7 @@ internal fun HaveChip(match: Match?, modifier: Modifier = Modifier, some: Pair<I
 
 /**
  * A friend playing now, as a big card (Listening now): their song glowing behind, their face with its live ring, "Playing
- * now" with the bars, the song's cover ([song]: yours, else their colour's pattern), title and artist, then Play along
+ * now" with the bars, the song's cover ([song]: yours, else their colour's pattern), title, artist and length, then Play along
  * and Send. Paused, the face is still with a quiet ring, "Paused" without the bars, and Play it in place of Play along.
  * The card's ground is dark in either theme.
  */
@@ -453,9 +453,10 @@ internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlon
         DarkGround {
             Column(Modifier.padding(start = 14.dp, top = 12.dp, end = 8.dp, bottom = 14.dp)) {
                 val playing = stringResource(if (friend.paused) R.string.huddle_paused else R.string.huddle_playing_now)
+                val length = lengthWords(play.song.durationMs)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     FriendFace(name, color, 44.dp, ring = if (friend.paused) FaceRing.IDLE else FaceRing.LIVE, gap = HuddleCardGround)
-                    Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = listOf(name, playing, songBy(resources, play.song)).joinToString(", ") }) {
+                    Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = listOfNotNull(name, playing, songBy(resources, play.song), length.ifEmpty { null }).joinToString(", ") }) {
                         Text(name, style = CardName, color = BrandLilac, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (!friend.paused) Equaliser(BrandLilac.copy(alpha = 0.85f), Modifier.size(15.dp, 12.dp))
@@ -468,7 +469,10 @@ internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlon
                     FriendArt(song, color, 76.dp, RoundedCornerShape(18.dp))
                     Column(Modifier.weight(1f)) {
                         Text(play.song.title, style = CardTitle, color = BrandLilac, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        play.song.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = BrandLilac.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            play.song.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = BrandLilac.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)) }
+                            SongLength(play.song.durationMs, color = BrandLilac.copy(alpha = 0.85f))
+                        }
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp, end = 6.dp)) {
@@ -488,10 +492,10 @@ internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlon
 
 /**
  * A card a friend sent, as a postcard (Sent to you): their note in big type, the song's cover as the stamp (yours, else
- * their colour's pattern), then [from]'s face and who sent it ([line]: "From Wren", "From you"), the song, whether you
- * have it ([have], or [some] of a list; a card you sent that never got there, [undelivered], says so there instead) and a
- * play button. Tilted a little, [tilt] degrees. A tap opens the card; the play button plays it (or opens it, when it is
- * not here).
+ * their colour's pattern), then [from]'s face and who sent it ([line]: "From Wren", "From you"), the song (and under it
+ * its length, [lengthMs], on a song's card), whether you have it ([have], or [some] of a list; a card you sent that
+ * never got there, [undelivered], says so there instead) and a play button. Tilted a little, [tilt] degrees. A tap
+ * opens the card; the play button plays it (or opens it, when it is not here).
  */
 @Composable
 internal fun Postcard(
@@ -508,6 +512,7 @@ internal fun Postcard(
     onOpen: () -> Unit,
     onPlay: () -> Unit,
     undelivered: Boolean = false,
+    lengthMs: Long = 0,
 ) {
     val paper = if (LocalDarkTheme.current) DarkPaper else LightPaper
     val colors = MaterialTheme.colorScheme
@@ -565,6 +570,7 @@ internal fun Postcard(
                     if (fresh) NewMark()
                 }
                 Text(title, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                SongLength(lengthMs)
                 if (undelivered) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
                         Icon(painterResource(R.drawable.ic_error), contentDescription = null, tint = colors.error, modifier = Modifier.size(14.dp))
@@ -613,6 +619,7 @@ internal fun KeptPostcard(kept: KeptCard, name: String, color: Color, matcher: S
         onOpen = onOpen,
         onPlay = onPlay,
         undelivered = (kept as? Sent)?.delivered == false,
+        lengthMs = if (card.kind == CardKind.SONG) card.songs.first().durationMs else 0,
     )
 }
 

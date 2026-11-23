@@ -200,8 +200,9 @@ internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFri
 
 /**
  * A card a friend sent, at the top of Library (the mockup's 4.1): who sent it and when (New until it is opened), its
- * cover tilted like a photo (yours, else their colour's pattern), what it is and the note, then Play (plays a song you
- * have at once, else opens the card), Send back and Hide (it stays on the Huddle page). A tap opens it.
+ * cover tilted like a photo (yours, else their colour's pattern), what it is (a song with its length) and the note, then
+ * Play (plays a song you have at once, else opens the card), Send back and Hide (it stays on the Huddle page). A tap opens
+ * it.
  */
 @Composable
 internal fun FromCard(received: Received, friend: Friend, now: Long, matcher: SongMatcher?, modifier: Modifier, onOpen: (Boolean) -> Unit, onSendBack: () -> Unit, onHide: () -> Unit) {
@@ -248,13 +249,17 @@ internal fun FromCard(received: Received, friend: Friend, now: Long, matcher: So
             ) { FriendArt((found as? Match.Found)?.song ?: (found as? Match.Maybe)?.song, color, 56.dp, RoundedCornerShape(3.dp)) }
             Column(Modifier.weight(1f)) {
                 Text(title, style = FromTitle, color = colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(
-                    if (card.kind == CardKind.SONG) first.artist.orEmpty() else pluralStringResource(R.plurals.lib_songs, card.songs.size, card.songs.size),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (card.kind == CardKind.SONG) first.artist.orEmpty() else pluralStringResource(R.plurals.lib_songs, card.songs.size, card.songs.size),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (card.kind == CardKind.SONG) SongLength(first.durationMs)
+                }
                 card.note?.let {
                     Text(
                         stringResource(R.string.huddle_note_quoted, it),

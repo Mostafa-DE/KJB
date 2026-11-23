@@ -86,8 +86,8 @@ class SortedListsDeviceTest {
 
     private fun ui(playlists: PlaylistsState) = LibraryUi(LibraryState.Ready(library), byTitle, playlists, queues = emptyList(), ledger = LedgerState())
 
-    /** Whether [song]'s row is there, as TalkBack reads it. */
-    private fun shows(song: Song): Boolean = compose.onAllNodesWithContentDescription("${song.title}, Kit Calloway").fetchSemanticsNodes().isNotEmpty()
+    /** Whether [song]'s row is there, as TalkBack reads it with its length in words. */
+    private fun shows(song: Song): Boolean = compose.onAllNodesWithContentDescription("${song.title}, Kit Calloway, 3 minutes 20 seconds").fetchSemanticsNodes().isNotEmpty()
 
     /** The shell's locals a page needs: a navigator, lyrics and messages. */
     @Composable

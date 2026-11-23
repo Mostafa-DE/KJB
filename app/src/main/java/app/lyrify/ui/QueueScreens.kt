@@ -971,6 +971,8 @@ private fun QueueSongRow(
         here -> resources.getString(R.string.queue_your_place, title)
         else -> title
     }
+    // TalkBack hears the length in words after the artist, as on a song row.
+    val description = listOfNotNull(label, sub, lengthWords(song?.durationMs ?: 0).ifEmpty { null }, mark, reason).joinToString(", ")
     SwipeToDismissBox(
         state = state,
         enableDismissFromStartToEnd = false,
@@ -1027,7 +1029,7 @@ private fun QueueSongRow(
                     .heightIn(min = ROW)
                     .doubleTapFavourite(song?.let { FavouriteTarget.Song(item.song) }, waiting = tap)
                     .clickable(role = Role.Button, onClick = tap::click)
-                    .semantics(mergeDescendants = true) { contentDescription = listOfNotNull(label, sub, mark, reason).joinToString(", ") }
+                    .semantics(mergeDescendants = true) { contentDescription = description }
                     .padding(start = ScreenPadding, top = 8.dp, bottom = 8.dp),
             ) {
                 Box {
@@ -1051,7 +1053,9 @@ private fun QueueSongRow(
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (mark != null) SuggestedMark(mark, Modifier.padding(end = 6.dp))
-                        Text(sub, style = QueueLine, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(sub, style = QueueLine, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        // The song's length ends the line, as on a song row, so the title keeps its width.
+                        song?.let { SongLength(it.durationMs, Modifier.padding(start = 8.dp), muted) }
                     }
                     if (reason != null) ReasonLine(reason)
                 }

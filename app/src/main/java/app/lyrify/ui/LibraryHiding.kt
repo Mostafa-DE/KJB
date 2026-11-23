@@ -205,8 +205,8 @@ fun HiddenSongsPage() {
 }
 
 /**
- * A hidden song: its cover, title and [line] (its artist), and Unhide, which TalkBack hears with the song's title. Songs
- * held out of suggestions show the same way, with their own [action] (Allow again) and its [words].
+ * A hidden song: its cover, title and [line] (its artist) ended by its length, and Unhide, which TalkBack hears with the
+ * song's title. Songs held out of suggestions show the same way, with their own [action] (Allow again) and its [words].
  */
 @Composable
 internal fun HiddenRow(
@@ -227,7 +227,10 @@ internal fun HiddenRow(
         SongCover(SongArt(song.path, song.ref.mediaStoreId))
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            line?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                line?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)) }
+                SongLength(song.durationMs)
+            }
         }
         Box(Modifier.semantics { contentDescription = unhide }) {
             LyrifyButton(action, onClick = onUnhide, kind = ButtonKind.GHOST, compact = true, modifier = Modifier.clearAndSetSemantics { })

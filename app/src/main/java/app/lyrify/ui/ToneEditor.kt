@@ -368,7 +368,7 @@ fun ToneEditor(song: LedgerEntry, files: ToneFiles, player: TonePlayer, onSaved:
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(vertical = 8.dp),
             ) {
-                EditorSongHeader(song.path, song.title, artistOf(song))
+                EditorSongHeader(song.path, song.title, artistOf(song), song.durationMs)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = ScreenPadding)) {
                     Waveform(
                         peaks = peaks,
@@ -428,9 +428,9 @@ internal suspend fun loadPeaks(context: Context, path: String, durationMs: Long,
     peaks
 }
 
-/** The editors' head: the song's cover, its title (a heading) and its artist, one TalkBack stop. */
+/** The editors' head: the song's cover, its title (a heading), its artist and its length, one TalkBack stop. */
 @Composable
-internal fun EditorSongHeader(path: String, title: String, artist: String) {
+internal fun EditorSongHeader(path: String, title: String, artist: String, durationMs: Long) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -439,7 +439,10 @@ internal fun EditorSongHeader(path: String, title: String, artist: String) {
         SongCover(SongArt(path), size = 64.dp, shape = MaterialTheme.shapes.medium)
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
-            Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                SongLength(durationMs, Modifier.padding(start = 8.dp))
+            }
         }
     }
 }

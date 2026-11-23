@@ -505,7 +505,7 @@ fun <T> SortSheet(title: String, options: List<Pair<T, String>>, selected: T, on
  * found in its lyrics the matching [line] under the artist. While selecting, a tap on the row or on its round check
  * ([onCheck], 48 dp) picks or unpicks it, and a picked row has its own rounded fill ([rowFill]). In a custom order a
  * [handle] comes before "⋯", and TalkBack gets the row's [moves]. A suggested song may carry the suggestion [mark] before
- * its artist and its [reason] in grey under it (suggestions/). The song's length ends the artist's line ([rowLength]).
+ * its artist and its [reason] in grey under it (suggestions/). The song's length ends the artist's line ([SongLength]).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -536,10 +536,8 @@ fun SongRow(
         LyricsMark.PLAIN -> stringResource(R.string.lib_mark_plain)
         LyricsMark.NONE -> null
     }
-    val length = rowLength(song.durationMs)
     // TalkBack says the length in words, "5 minutes 7 seconds".
-    val lengthWords = spokenLength(song.durationMs).map { (words, count) -> pluralStringResource(words, count, count) }.joinToString(" ")
-    val description = songRowWords(title, artist, markWords, note, line?.text, if (marks.playing) stringResource(R.string.lib_playing) else null, mark, reason, lengthWords.ifEmpty { null })
+    val description = songRowWords(title, artist, markWords, note, line?.text, if (marks.playing) stringResource(R.string.lib_playing) else null, mark, reason, lengthWords(song.durationMs).ifEmpty { null })
     val tapLabel = stringResource(if (selecting) R.string.lib_select else R.string.lib_play)
     val holdLabel = if (onLongPress != null) stringResource(R.string.lib_select) else null
     val tap = rememberWaitingTap(onTap)
@@ -609,7 +607,7 @@ fun SongRow(
                         if (marks.lyrics != LyricsMark.NONE) LyricsIcon(Modifier.padding(start = 6.dp))
                     }
                     // The song's length at the row's end, before "⋯": small print in the secondary ink, never wrapped or cut.
-                    if (length != null) Text(length, style = MaterialTheme.typography.bodySmall.tabular(), color = colors.onSurfaceVariant, maxLines = 1, softWrap = false, modifier = Modifier.padding(start = 8.dp))
+                    SongLength(song.durationMs, Modifier.padding(start = 8.dp))
                 }
                 if (line != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
@@ -665,6 +663,22 @@ fun spokenLength(ms: Long): List<Pair<Int, Int>> {
     ).filter { it.second > 0 }
 }
 
+/**
+ * A song's length wherever a song shows, as its row shows it ([rowLength]): small print in [color] (the secondary ink),
+ * never wrapped or cut, which TalkBack says in words ([lengthWords]); nothing for a length unknown. It goes on the line
+ * under the title, so the title keeps its room.
+ */
+@Composable
+fun SongLength(ms: Long, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+    val length = rowLength(ms) ?: return
+    val words = lengthWords(ms)
+    Text(length, style = MaterialTheme.typography.bodySmall.tabular(), color = color, maxLines = 1, softWrap = false, modifier = modifier.semantics { contentDescription = words })
+}
+
+/** A song's length as TalkBack says it ([spokenLength]): "5 minutes 7 seconds"; empty for a length unknown. */
+@Composable
+fun lengthWords(ms: Long): String = spokenLength(ms).map { (words, count) -> pluralStringResource(words, count, count) }.joinToString(" ")
+
 /** The path of the song KJB's own player has loaded; the shell provides it, so its row shows it playing. */
 val LocalPlayingPath = staticCompositionLocalOf<String?> { null }
 
@@ -697,7 +711,7 @@ fun LyricsIcon(modifier: Modifier = Modifier) {
 /**
  * A row that opens something (a folder, an artist, a playlist, a queue): its tile, title, line and a chevron. One
  * TalkBack stop. With [favourite] a second tap soon after the one that opened it makes that a favourite
- * ([doubleTapFavourite]).
+ * ([doubleTapFavourite]). A song's row (a friend's play) ends its line with the song's length, [lengthMs].
  */
 @Composable
 fun NavRow(
@@ -706,12 +720,13 @@ fun NavRow(
     modifier: Modifier = Modifier,
     titleColor: Color = Color.Unspecified,
     description: String? = null,
+    lengthMs: Long = 0,
     favourite: FavouriteTarget? = null,
     lead: @Composable () -> Unit,
     trailing: (@Composable () -> Unit)? = { Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp)) },
     onClick: () -> Unit,
 ) {
-    val words = description ?: listOfNotNull(title, sub).joinToString(", ")
+    val words = description ?: listOfNotNull(title, sub, lengthWords(lengthMs).ifEmpty { null }).joinToString(", ")
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -728,7 +743,12 @@ fun NavRow(
         Box(Modifier.clearAndSetSemantics {}) { lead() }
         Column(Modifier.weight(1f).clearAndSetSemantics {}) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = titleColor, fontWeight = if (titleColor.isSpecified()) FontWeight.SemiBold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (sub != null) Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (sub != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    SongLength(lengthMs, Modifier.padding(start = 8.dp))
+                }
+            }
         }
         trailing?.invoke()
     }

@@ -263,7 +263,7 @@ internal fun NeverPlayedCard(songs: List<Song>, settings: Settings, onSong: (Son
     val name = stringResource(R.string.insights_never_title)
     InsightsCard(name, modifier, action = { ShuffleButton { shuffle(context, songs, NEVER_PLAYED_KEY, name) } }) {
         CardLine(pluralStringResource(R.plurals.insights_never_count, songs.size, formatCount(songs.size)))
-        songs.take(NUDGE_ROWS).forEach { song -> NudgeRow(SongArt(song.path), displayTitle(song, settings.library), song.artist.orEmpty(), null, stringResource(R.string.stats_song_options)) { onSong(song) } }
+        songs.take(NUDGE_ROWS).forEach { song -> NudgeRow(SongArt(song.path), displayTitle(song, settings.library), song.artist.orEmpty(), null, stringResource(R.string.stats_song_options), lengthMs = song.durationMs) { onSong(song) } }
     }
 }
 
@@ -292,7 +292,7 @@ internal fun ForgottenCard(tops: List<Top<Song>>, settings: Settings, onSong: (S
         CardLine(stringResource(R.string.insights_forgotten_text))
         tops.forEach { top ->
             val line = stringResource(R.string.insights_last_played, top.lastPlayedAt?.let { dateText(it) }.orEmpty())
-            NudgeRow(SongArt(top.item.path), displayTitle(top.item, settings.library), line, top.plays, stringResource(R.string.stats_song_options)) { onSong(top.item) }
+            NudgeRow(SongArt(top.item.path), displayTitle(top.item, settings.library), line, top.plays, stringResource(R.string.stats_song_options), lengthMs = top.item.durationMs) { onSong(top.item) }
         }
     }
 }
@@ -302,10 +302,10 @@ private fun ShuffleButton(onClick: () -> Unit) {
     LyrifyButton(stringResource(R.string.lib_shuffle), onClick = onClick, kind = ButtonKind.GHOST, icon = R.drawable.ic_shuffle, compact = true)
 }
 
-/** A row of a nudge: its cover, name and line, its plays at the end when it has some; one TalkBack stop. */
+/** A row of a nudge: its cover, name and line (a song's ended by its length), its plays at the end when it has some; one TalkBack stop. */
 @Composable
-private fun NudgeRow(cover: Any?, title: String, line: String, plays: Int?, openLabel: String, onClick: () -> Unit) {
-    TopRowView(rank = null, title = title, line = line, plays = plays, cover = cover, shape = MaterialTheme.shapes.small, openLabel = openLabel, onClick = onClick)
+private fun NudgeRow(cover: Any?, title: String, line: String, plays: Int?, openLabel: String, lengthMs: Long = 0, onClick: () -> Unit) {
+    TopRowView(rank = null, title = title, line = line, plays = plays, cover = cover, shape = MaterialTheme.shapes.small, openLabel = openLabel, lengthMs = lengthMs, onClick = onClick)
 }
 
 /** A new queue of [songs], shuffled, from Insights ([key]: never played or forgotten favourites, as a list of its own). */

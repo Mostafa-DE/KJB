@@ -214,7 +214,10 @@ fun ForYouInsights(modifier: Modifier = Modifier) {
                 SongCover(SongArt(pick.song.path, pick.song.ref.mediaStoreId), size = 44.dp)
                 Column(Modifier.weight(1f)) {
                     Text(ui.title(pick.song), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(pick.song.artist.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(pick.song.artist.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        SongLength(pick.song.durationMs, Modifier.padding(start = 8.dp))
+                    }
                     if (reasons) ReasonLine(reasonWords(context, pick.reason, ui::title))
                 }
             }
@@ -335,7 +338,10 @@ private fun MoreLikePage(ui: LibraryUi, library: Library, page: Page.MoreLike) {
                 }
                 Column(Modifier.weight(1f)) {
                     Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
-                    if (line.isNotEmpty()) Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (line.isNotEmpty()) Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        if (seed is Seed.OfSong) SongLength(seed.song.durationMs)
+                    }
                 }
             }
         }

@@ -215,6 +215,7 @@ private fun Ticket(me: String, card: Card?) {
                     Column {
                         Text(stringResource(R.string.huddle_ticket_song), style = MaterialTheme.typography.bodySmall, color = BrandLilac.copy(alpha = 0.8f))
                         Text(cardLine(it), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), color = BrandLilac, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (it.kind == CardKind.SONG) SongLength(it.songs.first().durationMs, color = BrandLilac.copy(alpha = 0.8f))
                     }
                 }
             }
@@ -354,6 +355,7 @@ internal fun AcceptInviteSheet(link: String, onDismiss: () -> Unit, onPlay: (Str
                 Column(Modifier.weight(1f)) {
                     Text(stringResource(R.string.huddle_accept_sent, invite.name), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(cardLine(it), style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (it.kind == CardKind.SONG) SongLength(it.songs.first().durationMs)
                     if (found != null && it.kind == CardKind.SONG) HaveChip(found, Modifier.padding(top = 4.dp))
                 }
             }

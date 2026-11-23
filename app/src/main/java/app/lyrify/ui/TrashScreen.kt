@@ -218,8 +218,8 @@ private fun TrashSummary(songs: List<TrashedSong>, onEmpty: () -> Unit) {
 }
 
 /**
- * A song in the phone's trash: its title, then its artist, size and the day the phone deletes it (one TalkBack stop),
- * then Restore and Delete forever, each named with the song for TalkBack.
+ * A song in the phone's trash: its title, then its artist, size and the day the phone deletes it, and its length (one
+ * TalkBack stop), then Restore and Delete forever, each named with the song for TalkBack.
  */
 @Composable
 private fun TrashRow(song: TrashedSong, modifier: Modifier, onRestore: () -> Unit, onDelete: () -> Unit) {
@@ -235,7 +235,10 @@ private fun TrashRow(song: TrashedSong, modifier: Modifier, onRestore: () -> Uni
     ) {
         Column(Modifier.weight(1f).semantics(mergeDescendants = true) {}) {
             Text(song.file.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(facts, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(facts, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                SongLength(song.file.durationMs, Modifier.padding(start = 8.dp))
+            }
         }
         LyrifyButton(stringResource(R.string.dupes_restore), onClick = onRestore, modifier = Modifier.semantics { contentDescription = restore }, kind = ButtonKind.GHOST, compact = true)
         ChromeIconButton(R.drawable.ic_delete, stringResource(R.string.trash_delete_cd, song.file.title), onDelete, glass = false, tint = MaterialTheme.colorScheme.error)

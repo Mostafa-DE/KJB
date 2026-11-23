@@ -355,11 +355,11 @@ private fun SectionHeader(section: Section) {
     }
 }
 
-/** One TalkBack stop: "title, artist, status"; the cover and its badge are decorative. */
+/** One TalkBack stop: "title, artist, status, length"; the cover and its badge are decorative. */
 @Composable
 private fun SongRow(entry: LedgerEntry, modifier: Modifier, @StringRes openLabel: Int, onOpen: () -> Unit) {
     val artist = artistOf(entry)
-    val description = listOf(entry.title, artist, stringResource(entry.status.style.label)).joinToString(", ")
+    val description = listOfNotNull(entry.title, artist, stringResource(entry.status.style.label), lengthWords(entry.durationMs).ifEmpty { null }).joinToString(", ")
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -376,7 +376,10 @@ private fun SongRow(entry: LedgerEntry, modifier: Modifier, @StringRes openLabel
         SongCover(SongArt(entry.path), status = entry.status)
         Column(Modifier.weight(1f)) {
             Text(entry.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                SongLength(entry.durationMs, Modifier.padding(start = 8.dp))
+            }
         }
     }
 }
