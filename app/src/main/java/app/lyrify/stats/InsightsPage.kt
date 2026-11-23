@@ -13,6 +13,7 @@ import java.time.LocalDateTime
 import java.time.YearMonth
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
+import java.time.temporal.TemporalAdjusters
 import java.time.temporal.WeekFields
 import java.util.Locale
 import android.icu.util.Calendar as IcuCalendar
@@ -365,6 +366,14 @@ private const val RECAP_COVERS = 4
 /** Every day you listened: plays that counted on this many days. */
 private const val MIN_DAYS = 2
 
+/** The top artist's run: number 1 this many weeks or months. */
+private const val MIN_LOYALTY = 2
+
+/** The top song's busiest day: this many plays that counted in it. */
+private const val MIN_DAY_PLAYS = 2
+
+private const val DECADE = 10
+
 /**
  * One page's working out, each part once for the cards that share it: [heard], the play log's plays in the period (an
  * import's and the short ones left out), and [books], the book log's.
@@ -392,7 +401,102 @@ private class PageWork(private val data: InsightsData, private val period: PageP
             time = time,
             days = daysOf(),
             clock = clockOf(),
+            artists = topCardOf(tops.artists, MIN_TOP_OTHERS, placesBefore?.artists, { it.name }) { coverOf.byArtist[it.name] }
+                ?.let { card -> card.copy(loyalty = loyaltyOf(card.rows.first().top.item.name, library)) },
+            songs = topCardOf(tops.songs, MIN_TOP_SONGS, placesBefore?.songs, { it.path }) { it }
+                ?.let { card -> card.copy(firstsDay = firstsDayOf(card.rows.first().top.item, library)) },
+            albums = topCardOf(tops.albums, MIN_TOP_OTHERS, placesBefore?.albums, { it.key }) { coverOf.byAlbum[it.key] },
+            taste = tasteOf(library),
         )
+    }
+
+    /** The top lists show from [MIN_TOP_PLAYS] music plays that counted. */
+    private val enough by lazy { music.count { it.counted } >= MIN_TOP_PLAYS }
+
+    /** All of the period before's top lists, to rank against: none for all time, nor with under [MIN_TOP_PLAYS] music plays that counted. */
+    private val placesBefore: Listening? by lazy {
+        val plays = period.before?.let { data.plays.within(it) }?.filter { kinds.of(it) == Kind.MUSIC } ?: return@lazy null
+        listeningOf(songPlaysOf(plays), library).takeIf { plays.count { it.counted } >= MIN_TOP_PLAYS }
+    }
+
+    /** The most played song of each artist and each album in the period, the cover their rows show. */
+    private val coverOf by lazy {
+        val covers = Covers(HashMap(), HashMap())
+        tops.songs.forEach { top ->
+            library?.artistsOf(top.item)?.forEach { covers.byArtist.putIfAbsent(it.name, top.item) }
+            albumKey(top.item)?.let { covers.byAlbum.putIfAbsent(it, top.item) }
+        }
+        covers
+    }
+
+    private class Covers(val byArtist: HashMap<String, Song>, val byAlbum: HashMap<String, Song>)
+
+    /** A top list from its [rows] (at least [min] of them), each with its place in [before] (by [key]) and its [cover]. */
+    private fun <T> topCardOf(rows: List<Top<T>>, min: Int, before: List<Top<T>>?, key: (T) -> String, cover: (T) -> Song?): TopCard<T>? {
+        if (!enough || rows.size < min) return null
+        val places = before?.withIndex()?.associate { (at, top) -> key(top.item) to at + 1 }
+        return TopCard(rows.mapNotNull { top -> cover(top.item)?.let { Ranked(top, places?.get(key(top.item)), it) } }, compared = places != null)
+    }
+
+    /**
+     * How long [first] has been number 1: the weeks or months in a row up to this one, a year's months, or all time's
+     * month it took the lead and kept it; by the phone's calendar, as the periods are.
+     */
+    private fun loyaltyOf(first: String, library: Library): Loyalty? {
+        val music = data.plays.filter { kinds.of(it) == Kind.MUSIC }
+        fun numberOne(plays: List<LoggedPlay>?): String? = plays?.let { listeningOf(songPlaysOf(it), library).artists.firstOrNull()?.item?.name }
+        fun monthOf(play: LoggedPlay): YearMonth = YearMonth.from(dayOf(play.startedAt, zone).date)
+        return when (period.kind) {
+            ListeningPeriod.WEEK -> {
+                val weeks = music.groupBy { dayOf(it.startedAt, zone).date.with(TemporalAdjusters.previousOrSame(calendar.firstDayOfWeek)) }
+                generateSequence(period.firstDay) { it.minusWeeks(1) }.takeWhile { numberOne(weeks[it]) == first }.count().takeIf { it >= MIN_LOYALTY }?.let(Loyalty::Running)
+            }
+            ListeningPeriod.MONTH -> {
+                val months = music.groupBy(::monthOf)
+                generateSequence(YearMonth.from(period.firstDay)) { it.minusMonths(1) }.takeWhile { numberOne(months[it]) == first }.count().takeIf { it >= MIN_LOYALTY }?.let(Loyalty::Running)
+            }
+            ListeningPeriod.YEAR -> {
+                val months = heard.filter { kinds.of(it) == Kind.MUSIC }.groupBy(::monthOf)
+                val of = YearMonth.from(period.lastDay).monthValue
+                (1..of).count { numberOne(months[YearMonth.of(period.firstDay.year, it)]) == first }.takeIf { it >= MIN_LOYALTY }?.let { Loyalty.MonthsOf(it, of) }
+            }
+            ListeningPeriod.ALL_TIME -> {
+                // Each song's plays so far, month by month: the number 1 of all time at the end of each month.
+                val totals = HashMap<String, SongPlays>()
+                var leader: String? = null
+                var since: YearMonth? = null
+                music.groupBy(::monthOf).toSortedMap().forEach { (month, plays) ->
+                    songPlaysOf(plays).forEach { added ->
+                        totals.merge(added.song.path, added) { kept, new -> SongPlays(new.song, kept.count + new.count, listOfNotNull(kept.lastPlayedAt, new.lastPlayedAt).maxOrNull(), kept.heardMs + new.heardMs) }
+                    }
+                    val now = listeningOf(totals.values.toList(), library).artists.firstOrNull()?.item?.name
+                    if (now != leader) since = month
+                    leader = now
+                }
+                since?.takeIf { leader == first }?.let(Loyalty::Since)
+            }
+        }
+    }
+
+    /** The day [song] was played most in the period: from 2 plays that counted. */
+    private fun firstsDayOf(song: Song, library: Library): DayPlays? = music.filter { it.counted && library.resolver.find(it.song)?.path == song.path }
+        .groupingBy(::localDay).eachCount()
+        .maxWithOrNull(compareBy<Map.Entry<LocalDate, Int>> { it.value }.thenBy { it.key })
+        ?.takeIf { it.value >= MIN_DAY_PLAYS }
+        ?.let { DayPlays(song, it.key, it.value) }
+
+    /** Your taste: the genres from 2 of them, the decades and middle year from [MIN_TOP_PLAYS] plays of songs with a year. */
+    private fun tasteOf(library: Library): TasteCard? {
+        if (!enough) return null
+        val genres = genresOf(tops.songs, library).takeIf { it.size >= MIN_TOP_OTHERS }.orEmpty()
+        val years = tops.songs.mapNotNull { top -> top.item.year?.takeIf { it > 0 }?.let { it to top.plays } }.sortedBy { it.first }
+        val dated = years.sumOf { it.second }
+        if (dated < MIN_TOP_PLAYS) return TasteCard(genres, emptyList(), null).takeIf { genres.isNotEmpty() }
+        val byDecade = years.groupBy { it.first / DECADE * DECADE }.mapValues { (_, its) -> its.sumOf { it.second } }
+        val decades = (byDecade.keys.min()..byDecade.keys.max() step DECADE).map { Decade(it, byDecade[it] ?: 0) }
+        var count = 0
+        val middle = years.first { (_, plays) -> count += plays; count * 2 >= dated }.first
+        return TasteCard(genres, decades, middle)
     }
 
     /** Your time: the totals now and the period before's up to the same point, step by step. */

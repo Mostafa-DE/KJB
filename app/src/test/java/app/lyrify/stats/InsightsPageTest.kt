@@ -280,6 +280,104 @@ class InsightsPageTest {
         assertEquals(emptyList<RecapMonth>(), recap(plays, YearMonth.of(2026, 10)).cards.recaps)
     }
 
+    // The top lists
+
+    @Test
+    fun `the top lists rank the music by plays, each with its place in all of the period before and the song whose cover shows it`() {
+        val november = plays(copper, 5, nov(3)) + plays(harbour, 4, nov(4)) + plays(tide, 3, nov(5)) + plays(north, 2, nov(6)) + plays(kite, 1, nov(7))
+        // October: The Lowlands' plays come after the 26th, so only all of October ranks them.
+        val october = plays(harbour, 6, oct(3)) + plays(north, 5, oct(28)) + plays(copper, 2, oct(5))
+
+        val cards = page(november + october).cards
+
+        val songs = shown(cards.songs)
+        assertEquals(true, songs.compared)
+        assertEquals(listOf(Triple(copper, 3, copper), Triple(harbour, 1, harbour), Triple(tide, null, tide), Triple(north, 2, north), Triple(kite, null, kite)), songs.rows.map { Triple(it.top.item, it.before, it.cover) })
+        assertEquals(listOf(5, 4, 3, 2, 1), songs.rows.map { it.top.plays })
+        assertEquals(
+            listOf(Triple("Kestrel", 3, copper), Triple("Mira Solen", 1, harbour), Triple("The Lowlands", 2, north), Triple("Bexley Rowe", null, kite)),
+            shown(cards.artists).rows.map { Triple(it.top.item.name, it.before, it.cover) },
+        )
+        assertEquals(listOf(Triple("Low Sun", 3, copper), Triple("Tidelines", 1, harbour), Triple("Night Drive", 2, north)), shown(cards.albums).rows.map { Triple(it.top.item.title, it.before, it.cover) })
+    }
+
+    @Test
+    fun `the top lists are not compared for all time, nor against a period before with under 10 plays`() {
+        val plays = plays(copper, 5, nov(3)) + plays(harbour, 4, nov(4)) + plays(tide, 3, nov(5)) + plays(harbour, 9, oct(3))
+
+        assertEquals(false, shown(page(plays).cards.songs).compared)
+        assertEquals(listOf(null, null, null), shown(page(plays).cards.songs).rows.map { it.before })
+        assertEquals(false, shown(page(plays + plays(north, 1, oct(4)), ListeningPeriod.ALL_TIME).cards.songs).compared)
+        assertEquals(true, shown(page(plays + plays(north, 1, oct(4))).cards.songs).compared)
+    }
+
+    @Test
+    fun `the top lists need 10 music plays that counted`() {
+        val plays = plays(copper, 4, nov(3)) + plays(harbour, 3, nov(4)) + plays(north, 2, nov(5)) + plays(talk, 5, nov(6))
+
+        assertNull(page(plays).cards.songs)
+        assertNull(page(plays).cards.artists)
+        assertNotNull(page(plays + plays(kite, 1, nov(7))).cards.songs)
+    }
+
+    @Test
+    fun `the top artist's run counts the weeks or months in a row it was number 1`() {
+        // Kestrel leads this week and the two before; Mira Solen led the week before those.
+        val weeks = listOf(nov(24), nov(17), nov(10)).flatMap { plays(copper, 4, it) + plays(harbour, 3, it + HOUR) + plays(north, 3, it + 2 * HOUR) } +
+            plays(harbour, 5, nov(3)) + plays(copper, 1, nov(3) + HOUR)
+
+        assertEquals(Loyalty.Running(3), shown(page(weeks, ListeningPeriod.WEEK).cards.artists).loyalty)
+        // November (Kestrel 16 to Mira Solen's 14) and October: two months.
+        assertEquals(Loyalty.Running(2), shown(page(weeks + plays(copper, 3, nov(26, "08:00")) + plays(copper, 10, oct(5)), ListeningPeriod.MONTH).cards.artists).loyalty)
+        // Number 1 for this week only: no run to tell.
+        assertNull(shown(page(weeks.filter { it.startedAt >= nov(20) } + plays(harbour, 9, nov(18)), ListeningPeriod.WEEK).cards.artists).loyalty)
+    }
+
+    @Test
+    fun `a year's number 1 counts its months, and all time's says since when it leads`() {
+        val year = listOf(1, 2, 4).flatMap { plays(copper, 4, at("2026-%02d-10T12:00+03:00[Asia/Amman]".format(it))) } +
+            plays(harbour, 5, at("2026-03-10T12:00+03:00[Asia/Amman]")) + plays(north, 2, nov(5))
+
+        assertEquals(Loyalty.MonthsOf(3, 11), shown(page(year, ListeningPeriod.YEAR).cards.artists).loyalty)
+
+        // Mira Solen leads in September, Kestrel overtakes her in October and stays ahead.
+        val all = plays(harbour, 5, at("2026-09-10T12:00+03:00[Asia/Amman]")) + plays(copper, 10, oct(10)) + plays(harbour, 3, nov(5)) + plays(north, 2, nov(6))
+        assertEquals(Loyalty.Since(YearMonth.of(2026, 10)), shown(page(all, ListeningPeriod.ALL_TIME).cards.artists).loyalty)
+    }
+
+    @Test
+    fun `the top song's busiest day`() {
+        val plays = plays(copper, 3, nov(10)) + plays(copper, 2, nov(11)) + plays(harbour, 4, nov(12)) + plays(north, 2, nov(13))
+
+        assertEquals(DayPlays(copper, LocalDate.of(2026, 11, 10), 3), shown(page(plays).cards.songs).firstsDay)
+    }
+
+    // Your taste
+
+    @Test
+    fun `your taste has the genres by plays, the plays by decade with the empty ones between, and the middle year`() {
+        val plays = plays(copper, 5, nov(3)) + plays(tide, 3, nov(4)) + plays(harbour, 4, nov(5)) + plays(north, 2, nov(6)) + plays(kite, 1, nov(7))
+
+        val taste = shown(page(plays).cards.taste)
+
+        assertEquals(listOf("Indie" to 8, "Folk" to 5, "Electronic" to 2), taste.genres.map { it.item.name to it.plays })
+        assertEquals(listOf(Decade(1990, 1), Decade(2000, 2), Decade(2010, 12)), taste.decades)
+        assertEquals(2014, taste.middleYear)
+    }
+
+    @Test
+    fun `decades need 10 plays of songs with a year, and the genres 2 genres`() {
+        val untagged = song("Music/Loose/No Tags.mp3", artist = "Bexley Rowe", id = 20)
+        val library = Library.of(listOf(copper, harbour, untagged), Settings())
+        val plays = plays(copper, 5, nov(3)) + plays(harbour, 4, nov(4)) + plays(untagged, 3, nov(5))
+
+        val taste = shown(page(plays, library = library).cards.taste)
+        assertEquals(emptyList<Decade>(), taste.decades)
+        assertNull(taste.middleYear)
+        assertEquals(2, taste.genres.size)
+        assertNull(page(plays(copper, 12, nov(3)) + plays(tide, 1, nov(4)), library = Library.of(listOf(copper, tide), Settings())).cards.taste?.genres?.takeIf { it.isNotEmpty() })
+    }
+
     // Nothing to show
 
     @Test
@@ -293,5 +391,6 @@ class InsightsPageTest {
 
     private companion object {
         const val MINUTE: Long = 60_000
+        const val HOUR: Long = 3_600_000
     }
 }

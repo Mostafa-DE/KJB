@@ -244,7 +244,7 @@ internal fun songPlaysOf(plays: List<LoggedPlay>): List<SongPlays> = plays.group
 }
 
 /** The genres of the top [songs], each song's plays under its genre tag, the most played first. */
-private fun genresOf(songs: List<Top<Song>>, library: Library): List<Top<Genre>> {
+internal fun genresOf(songs: List<Top<Song>>, library: Library): List<Top<Genre>> {
     val collator = Collator.getInstance()
     return songs.mapNotNull { top -> top.item.genre?.trim()?.takeIf(String::isNotEmpty)?.let(library::genre)?.let { top to it } }
         .groupBy { it.second.name }
