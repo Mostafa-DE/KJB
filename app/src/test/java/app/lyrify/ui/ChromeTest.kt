@@ -386,6 +386,15 @@ class ChromeTest {
     }
 
     @Test
+    fun `every device test that draws a bar root's page gives it the navigator its header's Huddle opens with`() {
+        // AppShell provides it to every real page; a device test drawing a root without it would crash in its header.
+        val roots = Regex("""\b(LibraryPage|PlaylistsPage|SearchPage|BooksPage|ToolsScreen)\(|\b(QueuePage|CollectionPage|ListeningPage)\([^\n]*root = true|\b(DownloadsPage|HuddlePage)\(onBack = null""")
+        val tests = java.io.File("src/androidTest/java/app/lyrify").walk().filter { it.extension == "kt" }.associate { it.name to it.readText() }.filterValues { roots.containsMatchIn(it) }
+        assertTrue(tests.keys.toString(), "ToolsScreenDeviceTest.kt" in tests && "M3uScreensDeviceTest.kt" in tests)
+        tests.forEach { (name, text) -> assertTrue(name, "LocalNavigator provides" in text) }
+    }
+
+    @Test
     fun `Tools gets a dot when Check these, Duplicates or the AI need the user`() {
         assertFalse(toolsDot(checks = 0, duplicates = 0, aiAttention = false))
         assertTrue(toolsDot(checks = 3, duplicates = 0, aiAttention = false))
