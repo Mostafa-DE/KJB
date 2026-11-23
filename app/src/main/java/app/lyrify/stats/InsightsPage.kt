@@ -3,7 +3,9 @@ package app.lyrify.stats
 import app.lyrify.library.Album
 import app.lyrify.library.Artist
 import app.lyrify.library.Genre
+import app.lyrify.books.Book
 import app.lyrify.library.Library
+import app.lyrify.library.Playlist
 import app.lyrify.library.Song
 import app.lyrify.suggestions.FriendPlay
 import java.time.DayOfWeek
@@ -113,8 +115,9 @@ fun insightsPageOf(
  * A page's cards in the page's order, each null (or empty) below its minimum: the stories row ([recaps]; on the period
  * pages only), Your time, Every day you listened, Your day on a record, the top artists, songs and albums, Your taste,
  * How you listen, [moments], New to you ([found]), Back again ([comebacks]) and the favourites still quiet ([forgotten]),
- * You and your friends, Read along, New favourites, Your searches, Books and podcasts, Your library, your listening type
- * ([traits]) and Milestones and badges.
+ * You and your friends, Read along, New favourites, Your searches, Where you listen ([outputs]), Top playlists, Books
+ * and podcasts, Your library, your listening type ([traits]) and Milestones and badges. Where you listen and Top
+ * playlists stay null (hidden) until a later lane keeps what they need with each play.
  */
 data class InsightsCards(
     val recaps: List<RecapMonth> = emptyList(),
@@ -134,6 +137,8 @@ data class InsightsCards(
     val lyrics: LyricsCard? = null,
     val favourites: FavouritesCard? = null,
     val searches: SearchesCard? = null,
+    val outputs: OutputsCard? = null,
+    val playlists: PlaylistsCard? = null,
     val spoken: SpokenCard? = null,
     val library: LibraryCard? = null,
     val traits: List<Trait> = emptyList(),
@@ -169,9 +174,21 @@ data class DayHeard(val day: LocalDate, val heardMs: Long)
 
 /**
  * Your day on a record: real minutes by the hour the plays started in ([hours], 24, the local time where each was heard),
- * the hour heard most ([peak]), and the real minutes heard on weekdays and on weekend days ([PhoneCalendar.weekend]).
+ * the hour heard most ([peak]), the real minutes heard on weekdays and on weekend days ([PhoneCalendar.weekend]), in the
+ * morning (6 am to noon), afternoon (noon to 6 pm), evening (6 to 10 pm) and night (10 pm to 6 am), and after 9 pm
+ * ([lateMs], to 4 am: the night owl's time).
  */
-data class ClockCard(val hours: List<Long>, val peak: Int, val weekdaysMs: Long, val weekendMs: Long)
+data class ClockCard(
+    val hours: List<Long>,
+    val peak: Int,
+    val weekdaysMs: Long,
+    val weekendMs: Long,
+    val morningMs: Long,
+    val afternoonMs: Long,
+    val eveningMs: Long,
+    val nightMs: Long,
+    val lateMs: Long,
+)
 
 /**
  * A top list: every row, the most played first, each with its place in the period before when [compared] (not for all
@@ -334,9 +351,27 @@ data class WordCount(val word: String, val times: Int)
 
 /**
  * Books and podcasts in real minutes ([booksMs], [podcastsMs]); the time faster speeds saved ([savedMs]: time heard minus
- * real minutes); the [bookmarks] made and the books [finished] in the period.
+ * real minutes); the [bookmarks] made and the books [finished] in the period; the [book] and the [podcast] episode heard
+ * most, for their covers.
  */
-data class SpokenCard(val booksMs: Long, val podcastsMs: Long, val savedMs: Long, val bookmarks: Int, val finished: Int)
+data class SpokenCard(
+    val booksMs: Long,
+    val podcastsMs: Long,
+    val savedMs: Long,
+    val bookmarks: Int,
+    val finished: Int,
+    val book: Book?,
+    val podcast: Song?,
+)
+
+/**
+ * Where you listen (a later lane keeps the output each play was heard on; null until then): the plays heard on the
+ * phone's [speaker], on [headphones], over [bluetooth] and in the [car].
+ */
+data class OutputsCard(val speaker: Int, val headphones: Int, val bluetooth: Int, val car: Int)
+
+/** Top playlists (a later lane keeps the playlist each play came from; null until then): each one's plays, the most first. */
+data class PlaylistsCard(val rows: List<Top<Playlist>>)
 
 /**
  * Your library: its music ([songs]; books and podcasts left out), their size ([bytes]) and length ([durationMs]), how many

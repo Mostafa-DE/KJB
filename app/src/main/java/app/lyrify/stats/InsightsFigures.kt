@@ -57,9 +57,15 @@ private const val KEPT_DAYS = 3
 private const val QUIET_DAYS = 60
 private const val COMEBACKS_SHOWN = 3
 
-/** Your listening type: three words, each past its bar; night is 9 pm to 4 am. */
-private const val TRAITS_SHOWN = 3
+/** The clock's parts of the day: morning from 6, afternoon from noon, evening from 6 pm, night from 10 pm; late to 4 am. */
+private const val MORNING_FROM = 6
+private const val NOON = 12
+private const val EVENING_FROM = 18
+private const val NIGHT_PART_FROM = 22
 private const val NIGHT_OWL_UNTIL = 4
+
+/** Your listening type: three words, each past its bar; the night owl's time is the clock's late hours. */
+private const val TRAITS_SHOWN = 3
 private const val NIGHT_OWL_BAR = 30
 private const val SHUFFLER_BAR = 20
 private const val ALBUM_LOVER_BAR = 25
@@ -115,11 +121,12 @@ internal class PageWork(
         val time = timeOf().takeIf { shows }
         if (library == null) return InsightsCards(time = time)
         val found = foundOf(library)
+        val clock = clockOf()
         return InsightsCards(
             recaps = if (period.going) recapsOf(library) else emptyList(),
             time = time,
             days = daysOf(),
-            clock = clockOf(),
+            clock = clock,
             artists = topCardOf(tops.artists, MIN_TOP_OTHERS, placesBefore?.artists, { it.name }) { coverOf.byArtist[it.name] }
                 ?.let { card -> card.copy(loyalty = loyaltyOf(card.rows.first().top.item.name, library)) },
             songs = topCardOf(tops.songs, MIN_TOP_SONGS, placesBefore?.songs, { it.path }) { it }
@@ -138,9 +145,9 @@ internal class PageWork(
             lyrics = lyricsOf(),
             favourites = favouritesOf(library),
             searches = searchesOf(),
-            spoken = spokenOf(),
+            spoken = spokenOf(library),
             library = if (period.going) libraryOf(library) else null,
-            traits = traitsOf(found),
+            traits = traitsOf(found, clock),
             milestones = milestonesCardOf(library),
         )
     }
@@ -191,7 +198,7 @@ internal class PageWork(
     }
 
     /** Books and podcasts, from a minute of either: real minutes, the time faster speeds saved, bookmarks and books finished. */
-    private fun spokenOf(): SpokenCard? {
+    private fun spokenOf(library: Library): SpokenCard? {
         val bookPlays = books + heard.filter { kinds.of(it) == Kind.BOOK }
         val podcasts = heard.filter { kinds.of(it) == Kind.PODCAST }
         val booksMs = bookPlays.sumOf { it.realMs }
@@ -204,6 +211,9 @@ internal class PageWork(
             savedMs = (bookPlays + podcasts).sumOf { play -> play.clockMs?.let { (play.heardMs - it).coerceAtLeast(0) } ?: 0 },
             bookmarks = sources.bookmarks.count(::inPeriod),
             finished = sources.finishedBooks.count(::inPeriod),
+            book = bookPlays.groupBy { play -> library.bookOf(songOf(play)?.path ?: play.song.path) }.filterKeys { it != null }
+                .maxByOrNull { (_, its) -> its.sumOf { it.realMs } }?.key,
+            podcast = podcasts.groupBy(::songOf).filterKeys { it != null }.maxByOrNull { (_, its) -> its.sumOf { it.realMs } }?.key,
         )
     }
 
@@ -290,9 +300,9 @@ internal class PageWork(
     }
 
     /** Your listening type: the [TRAITS_SHOWN] strongest words of those past their bar, from [MIN_TOP_PLAYS] music plays; never "explorer" for all time. */
-    private fun traitsOf(found: FoundCard?): List<Trait> {
+    private fun traitsOf(found: FoundCard?, clock: ClockCard?): List<Trait> {
         if (!enough) return emptyList()
-        val night = (heard + books).filter { localTimeOf(it, zone).hour.let { hour -> hour >= NIGHT_FROM || hour < NIGHT_OWL_UNTIL } }.sumOf { it.realMs }
+        val night = clock?.lateMs ?: 0
         val starts = startedPlays.mapNotNull { it.start }
         val top = tops.artists.firstOrNull()
         val shares = listOfNotNull(
@@ -707,7 +717,19 @@ internal class PageWork(
             hours[local.hour] += play.realMs
             if (local.dayOfWeek in calendar.weekend) weekend += play.realMs
         }
-        return ClockCard(hours.toList(), hours.indices.maxBy { hours[it] }, hours.sum() - weekend, weekend)
+        // The hours from one o'clock up to another, round midnight too.
+        fun between(from: Int, until: Int): Long = (from until if (until > from) until else until + HOURS_IN_DAY).sumOf { hours[it % HOURS_IN_DAY] }
+        return ClockCard(
+            hours = hours.toList(),
+            peak = hours.indices.maxBy { hours[it] },
+            weekdaysMs = hours.sum() - weekend,
+            weekendMs = weekend,
+            morningMs = between(MORNING_FROM, NOON),
+            afternoonMs = between(NOON, EVENING_FROM),
+            eveningMs = between(EVENING_FROM, NIGHT_PART_FROM),
+            nightMs = between(NIGHT_PART_FROM, MORNING_FROM),
+            lateMs = between(NIGHT_FROM, NIGHT_OWL_UNTIL),
+        )
     }
 
     /** The stories row: each month with a recap ([recapMonths]) and its most played songs of different albums. */

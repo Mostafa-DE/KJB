@@ -1,6 +1,7 @@
 package app.lyrify.stats
 
 import app.lyrify.library.Library
+import app.lyrify.library.Playlist
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
 import app.lyrify.settings.Settings
@@ -296,7 +297,17 @@ fun fakeInsightsPage(): InsightsPage {
             heardBefore = Steps(Step.DAY, monday.minusWeeks(1), listOf(102L, 131L, 88L, 172L, 0L, 140L, 96L).map { it * 60_000 }),
         ),
         days = DaysCard(Steps(Step.DAY, monday, days), current = 19, longest = Run(19, LocalDate.of(2026, 11, 8)), busiest = DayHeard(monday.plusDays(3), 185 * 60_000)),
-        clock = ClockCard(List(24) { (it + 1) * 600_000L }, peak = 21, weekdaysMs = 420 * 60_000, weekendMs = 168 * 60_000),
+        clock = ClockCard(
+            List(24) { (it + 1) * 600_000L },
+            peak = 21,
+            weekdaysMs = 420 * 60_000,
+            weekendMs = 168 * 60_000,
+            morningMs = 150 * 60_000,
+            afternoonMs = 120 * 60_000,
+            eveningMs = 180 * 60_000,
+            nightMs = 138 * 60_000,
+            lateMs = 241 * 60_000,
+        ),
         artists = TopCard(
             listOf(ranked(kestrel, 31, 101, 1, copper), ranked(mira, 24, 79, 3, harbour), ranked(lowlands, 17, 58, null, drive)),
             compared = true,
@@ -338,7 +349,9 @@ fun fakeInsightsPage(): InsightsPage {
         lyrics = LyricsCard(opened = 21, most = harbour, mostTimes = 6, syncedPlays = 147, plays = 193),
         favourites = FavouritesCard(added = 4, mostPlayed = harbour),
         searches = SearchesCard(17, tapped = 14, played = 12, words = listOf(WordCount("harbour", 3), WordCount("kite", 1)), songs = 9, artists = 4, albums = 1, others = 0),
-        spoken = SpokenCard(booksMs = 65 * 60_000, podcastsMs = 40 * 60_000, savedMs = 18 * 60_000, bookmarks = 2, finished = 0),
+        spoken = SpokenCard(booksMs = 65 * 60_000, podcastsMs = 40 * 60_000, savedMs = 18 * 60_000, bookmarks = 2, finished = 0, book = null, podcast = null),
+        outputs = OutputsCard(speaker = 30, headphones = 110, bluetooth = 40, car = 13),
+        playlists = PlaylistsCard(listOf(Top(Playlist("p-late", "Late Walks", listOf(harbour.ref, copper.ref), createdAt = 1_000), 22, 66 * 60_000, 0))),
         library = LibraryCard(
             songs = 4,
             bytes = 41_600_000,
