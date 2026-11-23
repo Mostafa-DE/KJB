@@ -11,6 +11,7 @@ import app.lyrify.settings.SortSongs
 import app.lyrify.stats.SongPlays
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -276,6 +277,83 @@ class LibraryListsTest {
     fun `TalkBack hears that a row's song is the one playing`() {
         assertEquals("Paper Lantern, Tin Roof, Synced lyrics, Playing", songRowWords("Paper Lantern", "Tin Roof", "Synced lyrics", note = null, line = null, playing = "Playing"))
         assertEquals("Paper Lantern, Tin Roof", songRowWords("Paper Lantern", "Tin Roof", null, note = null, line = null, playing = null))
+    }
+
+    // A song row's length at its end (LN1)
+
+    @Test
+    fun `a row shows its song's length as the player's clock does, and nothing for a length unknown`() {
+        assertEquals("5:07", rowLength(307_000))
+        assertEquals("0:01", rowLength(1_000))
+        assertEquals("59:59", rowLength(3_599_999))
+        assertEquals("1:02:13", rowLength(3_733_000))
+        // MediaStore's 0 for a length it could not read, and under a second, which would say "0:00".
+        assertNull(rowLength(0))
+        assertNull(rowLength(-1))
+        assertNull(rowLength(999))
+    }
+
+    @Test
+    fun `TalkBack hears the length in words after the note, each part but those at none`() {
+        assertEquals(listOf(R.plurals.lib_length_minutes to 5, R.plurals.tones_seconds to 7), spokenLength(307_000))
+        assertEquals(listOf(R.plurals.lib_length_hours to 1, R.plurals.lib_length_minutes to 2, R.plurals.tones_seconds to 13), spokenLength(3_733_000))
+        assertEquals(listOf(R.plurals.lib_length_minutes to 3), spokenLength(180_000))
+        assertEquals(listOf(R.plurals.lib_length_hours to 1, R.plurals.tones_seconds to 5), spokenLength(3_605_000))
+        assertEquals(listOf(R.plurals.tones_seconds to 45), spokenLength(45_900))
+        // A length the row hides is not said either.
+        assertEquals(emptyList<Pair<Int, Int>>(), spokenLength(0))
+        assertEquals(emptyList<Pair<Int, Int>>(), spokenLength(999))
+        assertEquals(emptyList<Pair<Int, Int>>(), spokenLength(-61_000))
+        val strings = File("src/main/res/values").listFiles().orEmpty().filter { it.name.startsWith("strings") }.joinToString("\n") { it.readText() }
+        assertTrue(strings.contains("<item quantity=\"one\">%d hour</item>") && strings.contains("<item quantity=\"other\">%d hours</item>"))
+        assertTrue(strings.contains("<item quantity=\"one\">%d minute</item>") && strings.contains("<item quantity=\"other\">%d minutes</item>"))
+        assertTrue(strings.contains("<item quantity=\"one\">%d second</item>") && strings.contains("<item quantity=\"other\">%d seconds</item>"))
+        assertEquals(
+            "Paper Lantern, Tin Roof, Synced lyrics, 5 minutes 7 seconds",
+            songRowWords("Paper Lantern", "Tin Roof", "Synced lyrics", note = null, line = null, playing = null, length = "5 minutes 7 seconds"),
+        )
+        assertEquals(
+            "Low Water, Mira Solen, 3 days ago, 1 hour 2 minutes 13 seconds, Playing",
+            songRowWords("Low Water", "Mira Solen", null, note = "3 days ago", line = null, playing = "Playing", length = "1 hour 2 minutes 13 seconds"),
+        )
+    }
+
+    @Test
+    fun `the length ends the artist's line before the menu, small and on one line, and the artist gives way first so a note fits too (the wiring, read from the source)`() {
+        // No Compose renderer on the JVM: the format and the words are the tests above.
+        val row = File("src/main/java/app/lyrify/ui/LibraryParts.kt").readText().substringAfter("fun SongRow(").substringBefore("\n}\n")
+        assertTrue(row.contains("val length = rowLength(song.durationMs)"))
+        assertTrue(row.contains("spokenLength(song.durationMs).map { (words, count) -> pluralStringResource(words, count, count) }.joinToString(\" \")"))
+        assertTrue(row.contains("mark, reason, lengthWords.ifEmpty { null })"))
+        // The artist, the note and the lyrics icon share, in a row of their own, what the length leaves; the artist is cut
+        // first, a note never.
+        val shrinking = row.substringAfter("Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {").substringBefore("\n                    }\n")
+        assertTrue(shrinking.contains("modifier = Modifier.weight(1f, fill = false)"))
+        assertTrue(shrinking.contains("if (note != null) Text(stringResource(R.string.lib_after_dot, note)"))
+        assertTrue(shrinking.contains("LyricsIcon(Modifier.padding(start = 6.dp))"))
+        assertFalse(row.contains("listOfNotNull(artist, note)"))
+        // The length after that row, at the line's end before "⋯", unweighted so it is measured first and never cut: the
+        // secondary ink, small print, never wrapped (Grok review: a check by order alone let it slip into the row above).
+        assertFalse(shrinking.contains("Text(length"))
+        val length = row.substringAfter(shrinking).lines().single { "Text(length" in it }
+        assertTrue(length.contains("if (length != null) Text(length, style = MaterialTheme.typography.bodySmall.tabular(), color = colors.onSurfaceVariant, maxLines = 1, softWrap = false"))
+        assertFalse(length.contains("weight("))
+    }
+
+    @Test
+    fun `the length is added once, in the shared song row, and rows with a length or progress of their own keep theirs (read from the source)`() {
+        val ui = File("src/main/java/app/lyrify/ui").listFiles().orEmpty().filter { it.extension == "kt" }
+        val uses = ui.associate { it.name to Regex("""(?<!fun )rowLength\(""").findAll(it.readText()).count() }.filterValues { it > 0 }
+        assertEquals(mapOf("LibraryParts.kt" to 1), uses)
+        // The queue says where a song was left, books where they stand: neither is the shared row, so neither shows a length
+        // on top of its own.
+        val shared = Regex("""\bSongRow\(""")
+        val queue = File("src/main/java/app/lyrify/ui/QueueScreens.kt").readText()
+        assertTrue(queue.contains("R.string.queue_left_at"))
+        assertFalse(shared.containsMatchIn(queue))
+        val books = File("src/main/java/app/lyrify/ui/BooksScreen.kt").readText()
+        assertTrue(books.contains("StatusLines(status)"))
+        assertFalse(shared.containsMatchIn(books))
     }
 
     // Recently added, Recently played and Most played (RP1): their chips, Search in this list, and the songs they show

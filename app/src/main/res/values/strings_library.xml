@@ -48,6 +48,15 @@
         <item quantity="one">%d min</item>
         <item quantity="other">%d min</item>
     </plurals>
+    <!-- TalkBack's words for a song's length on its row, "1 hour 2 minutes 13 seconds" (the seconds are tones_seconds). -->
+    <plurals name="lib_length_hours">
+        <item quantity="one">%d hour</item>
+        <item quantity="other">%d hours</item>
+    </plurals>
+    <plurals name="lib_length_minutes">
+        <item quantity="one">%d minute</item>
+        <item quantity="other">%d minutes</item>
+    </plurals>
     <!-- Two facts on one line, "2 albums · 14 songs". -->
     <string name="lib_after">%1$s · %2$s</string>
     <!-- After a name, " · 3:26". -->

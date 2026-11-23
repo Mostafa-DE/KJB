@@ -128,8 +128,8 @@ class SongRowsDeviceTest {
         compose.waitUntil("Tide Bell last", TIMEOUT_MS) { top("Tide Bell") > top("Low Water") }
     }
 
-    /** A song's row, as TalkBack reads it (its "⋯" says the title too). */
-    private fun row(title: String) = compose.onNodeWithContentDescription("$title, Kit Calloway")
+    /** A song's row, as TalkBack reads it with its length in words (its "⋯" says the title too). */
+    private fun row(title: String) = compose.onNodeWithContentDescription("$title, Kit Calloway, 3 minutes 20 seconds")
 
     @Test
     fun onTheTabPagesASidewaysSwipeOnAHandleTurnsThePageAndAnUprightDragMovesTheSong() {
