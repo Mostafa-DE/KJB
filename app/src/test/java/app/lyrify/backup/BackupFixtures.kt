@@ -22,6 +22,13 @@ import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsSource
 import app.lyrify.data.LyricsStatus
+import app.lyrify.dl.api.AudioQuality
+import app.lyrify.dl.api.DlKind
+import app.lyrify.downloads.DownloadFailure
+import app.lyrify.downloads.DownloadItem
+import app.lyrify.downloads.DownloadSettings
+import app.lyrify.downloads.DownloadState
+import app.lyrify.downloads.DownloadsMemory
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Playlist
@@ -217,10 +224,24 @@ object BackupFixtures {
     /** [books] as a backup keeps them: without the chapters, read again from the files. */
     val booksKept: BookState = books.copy(books = books.books.mapValues { it.value.copy(chapters = null, chaptersStamp = null) })
 
+    /** A download of Paper Lantern by its [key], added [at], where it stands. */
+    fun download(key: String, at: Long, state: DownloadState): DownloadItem =
+        DownloadItem(key, "https://video.example.com/watch?v=$key", DlKind.AUDIO, AudioQuality.MP3_320, null, true, "Paper Lantern", "Kit Calloway", null, 201, at, state)
+
+    /** Settings > Downloads changed; one download waiting (never in a backup), one that failed, Paper Lantern saved; newest first. */
+    val downloads: DownloadsMemory = DownloadsMemory(
+        DownloadSettings(audioQuality = AudioQuality.ORIGINAL, audioFolder = "Music/Saved", warnDuplicates = false),
+        listOf(
+            download("d3", T0 + 3, DownloadState.Queued),
+            download("d2", T0 + 2, DownloadState.Failed(DownloadFailure.OFFLINE)),
+            download("d1", T0 + 1, DownloadState.Done(lantern.path, T0 + 10)),
+        ),
+    )
+
     val snapshot: BackupSnapshot = BackupSnapshot(
         playlists, queues, plays, songState, equalizer, ledger.put(writing), settings,
         repeat = Repeat.ALL, aiLyrics = true, tones = TonesState(mapOf(tone.id to tone)), duplicates = duplicates, coversTags = coversTags,
-        keptApart = keptApart, searches = searches, books = books, bookPlays = bookPlays,
+        keptApart = keptApart, searches = searches, books = books, bookPlays = bookPlays, downloads = downloads,
     )
 
     const val VOLUME_SD: String = "/storage/1A2B-3C4D/"
@@ -311,6 +332,7 @@ class MemoryStores(
     var books: BookState = BookState(),
     /** The book log. */
     val bookLog: FakePlayLog = FakePlayLog(),
+    var downloads: DownloadsMemory = DownloadsMemory(),
 ) : BackupStores {
     private fun <T> change(section: Section, now: T, change: (T) -> T, set: (T) -> Unit): Boolean = (section !in failing).also { if (it) set(change(now)) }
 
@@ -390,4 +412,8 @@ class MemoryStores(
     override suspend fun bookPlays(): List<LoggedPlay>? = bookLog.all()
 
     override suspend fun addBookPlays(plays: List<LoggedPlay>): Boolean = Section.BOOK_PLAYS !in failing && bookLog.putAll(plays)
+
+    override suspend fun downloads(): DownloadsMemory = downloads
+
+    override suspend fun updateDownloads(change: (DownloadsMemory) -> DownloadsMemory) = change(Section.DOWNLOADS, downloads, change) { downloads = it }
 }

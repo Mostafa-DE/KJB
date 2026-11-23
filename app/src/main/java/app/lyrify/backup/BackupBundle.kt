@@ -12,6 +12,9 @@ import app.lyrify.books.BooksJson
 import app.lyrify.data.LedgerJson
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
+import app.lyrify.downloads.DownloadState
+import app.lyrify.downloads.DownloadsJson
+import app.lyrify.downloads.DownloadsMemory
 import app.lyrify.library.PlaylistsJson
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
@@ -96,6 +99,12 @@ enum class Section(val key: String, val version: Int) {
 
     /** The book log (`book-plays.db`, KJB 3.2): the time heard in books, its plays kept as the play log keeps its own. */
     BOOK_PLAYS("bookPlays", 1),
+
+    /**
+     * `downloads.json`: Settings > Downloads and the Downloads page's list, saved and not saved; never one waiting or
+     * under way, which belongs to the run of the phone that made the backup.
+     */
+    DOWNLOADS("downloads", 1),
     ;
 
     /** Its file in the zip. */
@@ -145,8 +154,12 @@ data class BackupSnapshot(
     /** The interaction log, kept with the plays; null when it could not be read. */
     val interactions: List<Interaction>? = null,
     val bookPlays: List<LoggedPlay>? = null,
-    /** Huddle's friends and keys, sealed with the user's backup passphrase (huddle/HuddleStore.kt, HuddleBackup); null without one. */
+    /**
+     * Huddle's friends, keys and history (huddle/HuddleStore.kt, HuddleBackup): sealed with the user's backup passphrase,
+     * plain without one; null when its history could not be read.
+     */
     val huddle: String? = null,
+    val downloads: DownloadsMemory? = null,
 )
 
 /**
@@ -191,7 +204,10 @@ data class BackupContents(
     val books: BookState? = null,
     /** The book log's plays, by path, as the plays are. */
     val bookPlays: List<LoggedPlay>? = null,
-    /** Huddle's part as the backup sealed it, opened only with its passphrase (huddle/HuddleStore.kt, HuddleBackup); null for none. */
+    /**
+     * Huddle's part as the backup holds it, opened at the restore (huddle/HuddleStore.kt, HuddleBackup): with its
+     * passphrase when sealed, as it is when plain; null for none.
+     */
     val huddle: String? = null,
     /** Sections a newer KJB wrote in a form this version cannot read: skipped, and the summary says so. */
     val tooNew: List<Section> = emptyList(),
@@ -199,6 +215,8 @@ data class BackupContents(
     val unknown: Int = 0,
     /** With the plays: the interaction log; none in a backup from before it was kept. */
     val interactions: List<Interaction> = emptyList(),
+    /** Settings > Downloads and the downloads saved and not saved. */
+    val downloads: DownloadsMemory? = null,
 ) {
     /** The sections it holds, in the summary's order. */
     val sections: List<Section> get() = Section.entries.filter(::has)
@@ -218,6 +236,7 @@ data class BackupContents(
         Section.SEARCHES -> searches != null
         Section.BOOKS -> books != null
         Section.BOOK_PLAYS -> bookPlays != null
+        Section.DOWNLOADS -> downloads != null
     }
 }
 
@@ -272,7 +291,8 @@ data class ZipLimits(
  * play log came later still: the plays section in parts ([PART_BYTES] each), the first in `plays.json` as before with
  * the newest plays, the others gzipped beside it (`plays-2.json.gz`, ...) and their count in the manifest, so a KJB
  * without parts restores the newest plays and reads a zip no bigger than it can (each part is small in the zip), and
- * every play comes back here. The book log's section is in parts the same way.
+ * every play comes back here. The book log's section is in parts the same way. The Downloads section came later still, a
+ * section only.
  *
  * Read as untrusted input: only the known entry names are kept, no entry name ever becomes a path, each entry and all of
  * them together are capped unpacked ([ZipLimits]), two entries of one name make it unreadable, and every section is
@@ -285,14 +305,15 @@ object BackupBundle {
     const val SONGS_VERSION: Int = 1
 
     /**
-     * Huddle's part (plan Q3.3): its friends and keys, sealed on the phone with the user's backup passphrase
-     * (huddle/HuddleStore.kt, HuddleBackup), only when one is set. Not a [Section]: it is opened with that passphrase at
-     * the restore, apart from the sections, and names no song. The manifest names it with its version; a KJB without
-     * Huddle neither reads nor keeps it. Version 2 holds Huddle's history too; a KJB of version 1 leaves it, this one
-     * reads both.
+     * Huddle's part (plan Q3.3), in every backup (user 2026-11-23): its friends, keys and history
+     * (huddle/HuddleStore.kt, HuddleBackup), sealed on the phone with the user's backup passphrase when one is set, plain
+     * without. Not a [Section]: it is opened at the restore, apart from the sections (with that passphrase when sealed),
+     * and names no song. The manifest names it with its version; a KJB without Huddle neither reads nor keeps it. Version 2
+     * holds Huddle's history too, and version 3 may be plain; a KJB of an older version leaves a newer one (one of version
+     * 2 would ask for a passphrase a plain part has none of), this one reads them all.
      */
     const val HUDDLE: String = "huddle.json"
-    const val HUDDLE_VERSION: Int = 2
+    const val HUDDLE_VERSION: Int = 3
     const val MIME_TYPE: String = "application/zip"
 
     /**
@@ -335,6 +356,7 @@ object BackupBundle {
             snapshot.searches?.let { add(Section.SEARCHES to SectionJson.searches(it)) }
             snapshot.books?.let { add(Section.BOOKS to BooksJson.encode(bare(it))) }
             parts[Section.BOOK_PLAYS]?.let { add(Section.BOOK_PLAYS to it[0]) }
+            snapshot.downloads?.let { add(Section.DOWNLOADS to DownloadsJson.encode(bare(it))) }
         }
         val byPath = library.associateBy { it.path }
         val songs = named(snapshot, pathOf::get).mapNotNull(byPath::get).map { song ->
@@ -374,10 +396,14 @@ object BackupBundle {
         snapshot.tones?.let { state -> state.tones.values.forEach { add(it.songPath) } }
         snapshot.duplicates?.let { choices -> (choices.notDuplicates + choices.reviewed).forEach { key -> key.split(',').mapNotNull { it.toLongOrNull()?.let(pathOf) }.forEach(::add) } }
         snapshot.coversTags?.let { memory -> memory.albums.forEach { album -> album.songs.forEach { add(it.path) } } }
-        // Hidden songs, so another phone finds them and keeps them hidden.
-        snapshot.settings?.let { settings -> settings.library.hiddenSongs.forEach { add(it.path) } }
+        // Hidden songs and those held out of suggestions, so another phone finds them and keeps them so.
+        snapshot.settings?.let { settings ->
+            settings.library.hiddenSongs.forEach { add(it.path) }
+            (settings.suggestions.never + settings.suggestions.notNow).forEach { add(it.song.path) }
+        }
         snapshot.books?.let { state -> state.books.values.forEach { entry -> addAll(entry.parts + listOfNotNull(entry.partPath)) }; addAll(state.marks.songs + state.marks.notSongs) }
         snapshot.bookPlays?.forEach { add(it.song.path) }
+        snapshot.downloads?.items?.forEach { item -> (item.state as? DownloadState.Done)?.let { add(it.path) } }
     }.distinct()
 
     /** A song as a backup keeps it: by its path only, as a MediaStore id names a file on this phone alone. */
@@ -397,20 +423,27 @@ object BackupBundle {
     /** The books without the chapters read from their files: the phone they come back to reads them again. */
     private fun bare(state: BookState): BookState = state.copy(books = state.books.mapValues { (_, entry) -> entry.copy(chapters = null, chaptersStamp = null) })
 
+    /** The downloads saved and not saved: one waiting or under way belongs to the run of the phone it was asked on. */
+    private fun bare(memory: DownloadsMemory): DownloadsMemory = memory.copy(items = memory.items.filterNot { it.active })
+
     /** The lyrics choices: no write cut short (its entry holds lyrics text), nor what only a newer version could read. */
     private fun bare(state: LedgerState): LedgerState = LedgerState(entries = state.entries.filterValues { it.status != LyricsStatus.WRITING })
 
     /**
      * The settings without Settings > Backup, and Start when connected's devices by their names only: Android links each
-     * device to one phone (Companion Device Manager), so the user picks them again there. Hidden songs without their ids.
-     * With the AI switch, when known.
+     * device to one phone (Companion Device Manager), so the user picks them again there. Hidden songs, and the songs held
+     * out of suggestions, without their ids. With the AI switch, when known.
      */
     private fun settings(settings: Settings, ai: Boolean?): String {
         val bare = settings.copy(
             backup = BackupSettings(),
             playback = settings.playback.copy(connectDevices = emptyList()),
-            // Hidden songs by their paths only, as a MediaStore id names a file on this phone alone.
+            // Hidden songs and held ones by their paths only, as a MediaStore id names a file on this phone alone.
             library = settings.library.copy(hiddenSongs = settings.library.hiddenSongs.map(::bare)),
+            suggestions = settings.suggestions.copy(
+                never = settings.suggestions.never.map { it.copy(song = bare(it.song)) },
+                notNow = settings.suggestions.notNow.map { it.copy(song = bare(it.song)) },
+            ),
         )
         return withKeys(
             SettingsJson.encode(bare),
@@ -576,6 +609,7 @@ object BackupBundle {
         Section.SEARCHES -> SectionJson.searches(text)?.let { contents.copy(searches = it) }
         Section.BOOKS -> BooksJson.decode(text)?.let { contents.copy(books = bare(it)) }
         Section.BOOK_PLAYS -> SectionJson.plays(text)?.let { contents.copy(bookPlays = it.plays) }
+        Section.DOWNLOADS -> jsonObject(text)?.let { contents.copy(downloads = bare(DownloadsJson.decode(text))) }
     }
 
     private fun ledger(text: String): LedgerState? = try {

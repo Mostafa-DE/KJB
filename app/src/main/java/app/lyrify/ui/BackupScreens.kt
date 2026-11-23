@@ -49,6 +49,7 @@ import app.lyrify.backup.MissingSong
 import app.lyrify.backup.RestorePlan
 import app.lyrify.backup.RestoreResult
 import app.lyrify.backup.Section
+import app.lyrify.huddle.HuddleBackup
 import app.lyrify.huddle.HuddleGraph
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -83,6 +84,7 @@ internal fun restoreRows(contents: BackupContents): List<RestoreRow> = listOfNot
     contents.books?.let { RestoreRow(Section.BOOKS, it.books.size, null) },
     // Time in books counts nothing: its count would be of listening sessions.
     contents.bookPlays?.let { RestoreRow(Section.BOOK_PLAYS, null, null) },
+    contents.downloads?.let { RestoreRow(Section.DOWNLOADS, it.items.size, null) },
 )
 
 @StringRes
@@ -101,6 +103,7 @@ internal fun sectionLabel(section: Section): Int = when (section) {
     Section.SEARCHES -> R.string.restore_section_searches
     Section.BOOKS -> R.string.restore_section_books
     Section.BOOK_PLAYS -> R.string.restore_section_bookPlays
+    Section.DOWNLOADS -> R.string.restore_section_downloads
 }
 
 /** Whether a restore brought back all it was asked to: else the summary after it is "Partly restored". */
@@ -125,12 +128,13 @@ private const val SHOWN: Int = 50
 /** What the restore sheet shows: the summary of a picked backup, or, after the restore, what came back and what did not. */
 private sealed interface RestoreSheet {
     /**
-     * [friends]: Huddle's friends ticked, with the [passphrase] they were locked with (memory only, never saved); [wrong]
-     * after one that did not open them.
+     * [friends]: Huddle's friends ticked, with the [passphrase] they were [locked] with, if they were (memory only, never
+     * saved); [wrong] after they did not come back (that passphrase did not open them).
      */
     data class Summary(
         val plan: RestorePlan,
         val chosen: Set<Section>,
+        val locked: Boolean,
         val restoring: Boolean = false,
         val friends: Boolean = plan.contents.huddle != null,
         val passphrase: String = "",
@@ -182,7 +186,12 @@ fun rememberBackupActions(setAutomatic: (Boolean) -> Unit): BackupActions {
                     picked.value = null
                     say(R.string.backup_unreadable, true)
                 }
-                is BackupRead.Read -> sheet.value = RestoreSheet.Summary(Backups.plan(app, read.contents), read.contents.sections.toSet())
+                // Whether Huddle's part is locked, read here off the main thread: the part may be megabytes.
+                is BackupRead.Read -> sheet.value = RestoreSheet.Summary(
+                    Backups.plan(app, read.contents),
+                    read.contents.sections.toSet(),
+                    locked = withContext(Dispatchers.Default) { read.contents.huddle?.let(HuddleBackup::locked) == true },
+                )
             }
         }
     }
@@ -247,7 +256,7 @@ fun rememberBackupActions(setAutomatic: (Boolean) -> Unit): BackupActions {
         onRestore = { summary ->
             sheet.value = summary.copy(restoring = true, wrong = false)
             scope.launch {
-                // Huddle's friends first: a passphrase that does not open them restores nothing yet, and says so.
+                // Huddle's friends first: if they do not come back, nothing is restored yet, and the row says why.
                 val huddle = summary.plan.contents.huddle?.takeIf { summary.friends }
                 val friends = huddle?.let { withContext(NonCancellable + Dispatchers.Default) { HuddleGraph.huddle(app).restore(it, summary.passphrase.toCharArray()) } }
                 if (huddle != null && friends == null) {
@@ -360,6 +369,7 @@ private fun RestoreSheet(state: MutableState<RestoreSheet?>, onRestore: (Restore
                         sheet.friends,
                         sheet.passphrase,
                         sheet.wrong,
+                        locked = sheet.locked,
                         enabled = !sheet.restoring,
                         onCheck = { state.value = sheet.copy(friends = it, wrong = false) },
                         onPassphrase = { state.value = sheet.copy(passphrase = it, wrong = false) },

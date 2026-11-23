@@ -29,6 +29,7 @@ import app.lyrify.books.folderBookId
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
+import app.lyrify.downloads.DownloadsMemory
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Playlist
@@ -522,7 +523,7 @@ class BackupRestoreTest {
             BackupSnapshot(
                 BackupFixtures.playlists, BackupFixtures.queues, BackupFixtures.plays, BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings,
                 repeat = Repeat.OFF, aiLyrics = false, tones = TonesState(), duplicates = DuplicateChoices(), coversTags = CoversTagsMemory(), keptApart = emptySet(), searches = emptyList(),
-                books = BackupFixtures.books, interactions = emptyList(), bookPlays = BackupFixtures.bookPlays,
+                books = BackupFixtures.books, interactions = emptyList(), bookPlays = BackupFixtures.bookPlays, downloads = DownloadsMemory(),
             ),
             stores.snapshot(),
         )

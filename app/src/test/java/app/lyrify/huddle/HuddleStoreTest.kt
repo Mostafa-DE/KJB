@@ -10,7 +10,9 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayOutputStream
 import java.security.SecureRandom
+import java.util.zip.GZIPOutputStream
 
 /**
  * `huddle.json` there and back, the history in plays.db (its SQL on the laptop's SQLite), and the backup's Huddle section:
@@ -153,8 +155,93 @@ class HuddleStoreTest {
     }
 
     @Test
-    fun `without a passphrase there is no Huddle section, history or not`() = runBlocking {
-        assertNull(HuddleBackup.seal(full.copy(backupKey = null), history(cards, plays), random))
+    fun `without a passphrase the friends, their keys and the history go into the backup plain, and come back with no passphrase`() = runBlocking {
+        // Changed on purpose (user 2026-11-23, item 60): Huddle is always in the backup, plain when no passphrase is set.
+        val state = full.copy(backupKey = null, joins = listOf(PendingJoin("join-f9", "accept-data", "out-f9", "in-f9", "ok-f9", "ik-f9", "Rook", card)))
+        val section = HuddleBackup.seal(state, history(cards, plays), random)
+        assertNotNull("always in the backup", section)
+        assertFalse("no passphrase is asked for it", HuddleBackup.locked(section!!))
+        val back = HuddleBackup.open(section, CharArray(0))
+        assertNotNull(back)
+        assertEquals("with their mailboxes and keys", state.friends, back!!.state.friends)
+        assertEquals(state.name, back.state.name)
+        assertEquals(state.invites, back.state.invites)
+        assertEquals(state.joins, back.state.joins)
+        assertEquals(state.plays, back.state.plays)
+        assertEquals(cards.sortedByDescending { it.at }, back.cards)
+        assertEquals(plays, back.plays)
+        assertTrue("what was waiting to go is not restored", back.state.outbox.isEmpty())
+        assertNull("no key comes with it, so a restore keeps the phone's own", back.state.backupKey)
+        assertEquals("a passphrase typed anyway is no matter", back, HuddleBackup.open(section, "correct horse".toCharArray()))
+        // Packed as a sealed one is, so it fits the same room.
+        val sealed = HuddleBackup.seal(state.copy(backupKey = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)), history(cards, plays), random)!!
+        assertTrue("a sealed one asks for its passphrase", HuddleBackup.locked(sealed))
+        assertTrue("${section.length} against ${sealed.length}", section.length <= sealed.length)
+        assertNull("a plain one never came before the history", HuddleBackup.open(section.replace("\"format\":2", "\"format\":1"), CharArray(0)))
+        assertNull(HuddleBackup.open("""{"format":2,"lines":"not packed lines"}""", CharArray(0)))
+    }
+
+    @Test
+    fun `a sealed section given plain lines too opens only with its passphrase, and only to what it sealed`() = runBlocking {
+        // Made by hand: a stranger's lines beside the sealed box never skip the passphrase the restore row asks for.
+        val key = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)
+        val sealed = HuddleBackup.seal(full.copy(backupKey = key), history(cards, plays), random)!!
+        val plain = HuddleBackup.seal(full.copy(backupKey = null, friends = listOf(friend("f7", "Stranger"))), history(), random)!!
+        val both = sealed.dropLast(1) + ""","lines":"${Regex(""""lines":"([^"]*)"""").find(plain)!!.groupValues[1]}"}"""
+        assertTrue(HuddleBackup.locked(both))
+        assertNull(HuddleBackup.open(both, CharArray(0)))
+        assertNull(HuddleBackup.open(both, "correct horses".toCharArray()))
+        val back = HuddleBackup.open(both, "correct horse".toCharArray())!!
+        assertEquals(full.friends, back.state.friends)
+        assertEquals(key, back.state.backupKey)
+    }
+
+    @Test
+    fun `a section that unpacks past what a backup holds opens to nothing, plain or sealed`() = runBlocking {
+        // A few bytes in the zip can unpack to gigabytes: reading stops at the limit, as the play log's parts do.
+        val key = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)
+        val plain = HuddleBackup.seal(full.copy(backupKey = null), history(cards, plays), random)!!
+        val sealed = HuddleBackup.seal(full.copy(backupKey = key), history(cards, plays), random)!!
+        assertNull(HuddleBackup.open(plain, CharArray(0), ZipLimits(partsBytes = 100)))
+        assertNull(HuddleBackup.open(sealed, "correct horse".toCharArray(), ZipLimits(partsBytes = 100)))
+        assertNotNull(HuddleBackup.open(plain, CharArray(0)))
+        assertNotNull(HuddleBackup.open(sealed, "correct horse".toCharArray()))
+    }
+
+    @Test
+    fun `one line past what a backup entry holds stops the reading there, before it is read whole`() {
+        // Made by hand: one endless line would fill the memory before its end was ever counted.
+        val packed = ByteArrayOutputStream()
+        GZIPOutputStream(packed).bufferedWriter().use { out ->
+            out.appendLine(HuddleJson.encode(HuddleState(name = "Wren")))
+            out.appendLine("x".repeat(4_096))
+        }
+        val section = """{"format":2,"lines":"${HuddleCrypto.encode(packed.toByteArray())}"}"""
+        assertEquals("a line it cannot read is left out", "Wren", HuddleBackup.open(section, CharArray(0))?.state?.name)
+        assertNull(HuddleBackup.open(section, CharArray(0), ZipLimits(entryBytes = 1_024)))
+    }
+
+    @Test
+    fun `a restore brings back the joins the phone is not making yet, once each`() {
+        // A join whose answer was lost, sent again as it was from the new phone, makes the same friend on both phones.
+        val join = PendingJoin("join-f9", "accept-data", "out-f9", "in-f9", "ok-f9", "ik-f9", "Rook", card)
+        val mine = PendingJoin("join-f8", "accept-mine", "out-f8", "in-f8", "ok-f8", "ik-f8", "Kai", null)
+        val phone = HuddleState(name = "Wren", joins = listOf(mine))
+        val backup = full.copy(outbox = emptyList(), backupKey = null, joins = listOf(join, mine.copy(data = "accept-older")))
+        val restored = phone.restored(backup, null)
+        assertEquals(listOf(mine, join), restored.joins)
+        assertEquals("once each", restored, restored.restored(backup, null))
+    }
+
+    @Test
+    fun `a plain backup's restore keeps the phone's own passphrase key, and a sealed one's key replaces it`() {
+        val mine = BackupKey("salt-1", 1_000, "key-1")
+        val phone = HuddleState(name = "Wren", backupKey = mine)
+        val backup = full.copy(outbox = emptyList(), backupKey = null)
+        assertEquals(mine, phone.restored(backup, null).backupKey)
+        assertNull(HuddleState().restored(backup, null).backupKey)
+        val theirs = BackupKey("salt-2", 1_000, "key-2")
+        assertEquals(theirs, phone.restored(backup, theirs).backupKey)
     }
 
     @Test

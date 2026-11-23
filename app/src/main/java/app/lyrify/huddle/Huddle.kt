@@ -491,20 +491,22 @@ class Huddle(
         server.deleteInvite(invite.owner) && forget(listOf(invite))
     }
 
-    /** The backup's Huddle section now, the history with it ([HuddleBackup.seal]); null without a backup passphrase. */
+    /**
+     * The backup's Huddle section now, the history with it ([HuddleBackup.seal]): sealed with the backup passphrase, plain
+     * without one; null when the history cannot be read.
+     */
     suspend fun backupSection(): String? = HuddleBackup.seal(now(), moved(), random)
 
     /**
-     * Restores a backup's Huddle [section] opened with [passphrase] into what this phone has: its history first (each card
-     * and play once, so a restore made twice adds nothing), then the rest ([restored]), its key kept for the next backups.
-     * How many friends it holds, or null when the passphrase does not open it (or it could not be written). Slow, as
-     * [HuddleBackup.open]: off the main thread.
+     * Restores a backup's Huddle [section] into what this phone has, opened with [passphrase] when it is sealed (a plain
+     * one needs none): its history first (each card and play once, so a restore made twice adds nothing), then the rest
+     * ([restored]), a sealed one's key kept for the next backups. How many friends it holds, or null when the passphrase
+     * does not open it (or it could not be read or written). Slow, as [HuddleBackup.open]: off the main thread.
      */
     suspend fun restore(section: String, passphrase: CharArray): Int? {
         val backup = HuddleBackup.open(section, passphrase) ?: return null
-        val key = backup.state.backupKey ?: return null
         if (!keep(backup.cards, backup.plays)) return null
-        return backup.state.friends.size.takeIf { storage.change { it.restored(backup.state, key) } }
+        return backup.state.friends.size.takeIf { storage.change { it.restored(backup.state, backup.state.backupKey) } }
     }
 
     /**
@@ -524,8 +526,8 @@ class Huddle(
     }
 
     /**
-     * The backup passphrase: kept as its key only ([HuddleBackup.newKey]), so each backup from now holds your friends,
-     * sealed. False for one shorter than [HuddleBackup.PASSPHRASE_MIN]. Slow on purpose: off the main thread.
+     * The backup passphrase: kept as its key only ([HuddleBackup.newKey]), so each backup from now holds your friends and
+     * keys sealed with it. False for one shorter than [HuddleBackup.PASSPHRASE_MIN]. Slow on purpose: off the main thread.
      */
     suspend fun setPassphrase(passphrase: CharArray): Boolean {
         if (passphrase.size < HuddleBackup.PASSPHRASE_MIN) return false

@@ -30,6 +30,8 @@ import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerState
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
+import app.lyrify.downloads.Downloads
+import app.lyrify.downloads.DownloadsMemory
 import app.lyrify.dupes.duplicates
 import app.lyrify.huddle.HuddleGraph
 import app.lyrify.library.LibraryGraph
@@ -264,6 +266,14 @@ class AppBackupStores(context: Context) : BackupStores {
     override suspend fun bookPlays(): List<LoggedPlay>? = StatsGraph.bookLog(app).all()
 
     override suspend fun addBookPlays(plays: List<LoggedPlay>): Boolean = StatsGraph.bookLog(app).putAll(plays)
+
+    /** Read once for the screens if they have not yet; one that cannot be read starts over, as Downloads does. */
+    override suspend fun downloads(): DownloadsMemory {
+        Downloads.load(app)
+        return Downloads.state.first { it.loaded }.let { DownloadsMemory(it.settings, it.items) }
+    }
+
+    override suspend fun updateDownloads(change: (DownloadsMemory) -> DownloadsMemory): Boolean = Downloads.change(app, change)
 }
 
 /** Making a backup of the app and reading one back. The log gets counts and section names only. */
@@ -271,11 +281,14 @@ object Backups {
     /** A backup of every store now, as the zip's bytes. */
     suspend fun make(context: Context): ByteArray = withContext(Dispatchers.IO) {
         val app = context.applicationContext
-        // Huddle's friends only with a backup passphrase, sealed with it (huddle/HuddleStore.kt, HuddleBackup).
+        // Huddle always: sealed with the backup passphrase, plain without one (huddle/HuddleStore.kt, HuddleBackup).
         val snapshot = AppBackupStores(app).snapshot().copy(huddle = HuddleGraph.huddle(app).backupSection())
         val songs = library(app)?.all.orEmpty()
         val bytes = ByteArrayOutputStream().also { BackupBundle.write(snapshot, songs, BuildConfig.VERSION_NAME, System.currentTimeMillis(), it) }.toByteArray()
-        val read = listOfNotNull(snapshot.playlists, snapshot.queues, snapshot.plays, snapshot.songState, snapshot.equalizer, snapshot.ledger, snapshot.settings, snapshot.tones, snapshot.duplicates, snapshot.coversTags, snapshot.searches, snapshot.books)
+        val read = listOfNotNull(
+            snapshot.playlists, snapshot.queues, snapshot.plays, snapshot.songState, snapshot.equalizer, snapshot.ledger, snapshot.settings, snapshot.tones,
+            snapshot.duplicates, snapshot.coversTags, snapshot.searches, snapshot.books, snapshot.bookPlays, snapshot.downloads, snapshot.huddle,
+        )
         Log.i(LOG_TAG, "backup: ${bytes.size} bytes, ${read.size} stores read, ${songs.size} songs listed")
         bytes
     }

@@ -1522,7 +1522,6 @@ class HuddleTest {
         val (wren, wrenState) = phone("Wren")
         val (juniper, _) = phone("Juniper")
         friends(wren, juniper)
-        assertNull("no passphrase, no Huddle in backups", wren.backupSection())
         wrenState.change { it.copy(backupKey = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)) }
         val section = wren.backupSection()!!
         val (newPhone, newState) = phone()
@@ -1537,6 +1536,32 @@ class HuddleTest {
         advanceTimeBy(Huddle.UNDO_MS + 1)
         juniper.sync()
         assertEquals("the friend hears from the restored phone", listOf(song), juniper.cards().map { it.card })
+    }
+
+    @Test
+    fun `a backup made without a passphrase brings the friends and the history back on a new phone, no passphrase asked, and the friend hears from it`() = runTest {
+        // Changed on purpose (user 2026-11-23, item 60): before, a phone without a passphrase kept Huddle out of its backups.
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper, song)
+        juniper.played(bell, now + testScheduler.currentTime)
+        wren.sync()
+        val section = wren.backupSection()
+        assertNotNull("Huddle is always in the backup", section)
+        assertFalse(HuddleBackup.locked(section!!))
+        val (newPhone, newState) = phone()
+        assertEquals(1, newPhone.restore(section, CharArray(0)))
+        assertEquals(wrenState.now.friends, newState.now.friends)
+        assertEquals("Wren", newState.now.name)
+        assertNull("no passphrase came with it", newState.now.backupKey)
+        assertEquals(wren.thread(juniperOnWren.id, 0, 10), newPhone.thread(juniperOnWren.id, 0, 10))
+        assertEquals(listOf(bell), newPhone.friendPlays(juniperOnWren.id, 0, 10).map { it.song })
+        val hello = Card(CardKind.SONG, listOf(bell), note = "from the new phone")
+        newPhone.send(newState.now.friends.single().id, hello)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        juniper.sync()
+        // Beside the invite's card, sent at the same test time.
+        assertEquals("the friend hears from the restored phone", setOf(song, hello), juniper.cards().map { it.card }.toSet())
     }
 
     @Test

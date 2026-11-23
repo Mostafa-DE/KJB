@@ -48,18 +48,17 @@
     <string name="huddle_name_text">Friends see this name. You can change it here.</string>
     <string name="huddle_save">Save</string>
 
-    <!-- The backup passphrase. -->
-    <string name="huddle_backup">Keep friends in backups</string>
-    <string name="huddle_backup_off">Set a passphrase, so a new phone keeps your friends</string>
-    <string name="huddle_backup_on">On. Your backups hold your friends, locked with your passphrase</string>
+    <!-- The backup passphrase: backups always hold your friends; it locks them. -->
+    <string name="huddle_backup_off">Off. Anyone with your backup file can read your friends and keys</string>
+    <string name="huddle_backup_on">On. Backups lock your friends and keys</string>
     <string name="huddle_passphrase_title">Backup passphrase</string>
-    <string name="huddle_passphrase_text">Your backups will hold your friends, locked with this passphrase. You need it to bring them back on a new phone. KJB can\'t show it to you again.</string>
+    <string name="huddle_passphrase_text">Locks your friends and their keys in your backups. Without one, anyone with the backup file can read them. You need it to bring them back on a new phone. KJB can\'t show it to you again.</string>
     <string name="huddle_passphrase_field">Passphrase</string>
     <string name="huddle_passphrase_again">Passphrase again</string>
     <string name="huddle_passphrase_short">At least 8 characters</string>
     <string name="huddle_passphrase_differ">The two don\'t match</string>
     <string name="huddle_passphrase_set">Set</string>
-    <string name="huddle_passphrase_saved">Your backups now keep your friends</string>
+    <string name="huddle_passphrase_saved">Your backups now lock your friends</string>
 
     <!-- What leaves your phone. -->
     <string name="huddle_privacy_title">What leaves your phone</string>
@@ -125,9 +124,10 @@
     <string name="huddle_you">You</string>
     <string name="huddle_already">You\'re already friends with %1$s</string>
 
-    <!-- Restore: the backup's friends, with the passphrase. -->
+    <!-- Restore: the backup's friends, with the passphrase when they were locked with one. -->
     <string name="huddle_restore_row">Huddle friends</string>
     <string name="huddle_restore_wrong">That passphrase doesn\'t open your Huddle friends. Try again, or untick Huddle friends.</string>
+    <string name="huddle_restore_failed">Couldn\'t bring back your Huddle friends. Try again, or untick Huddle friends.</string>
     <string name="huddle_restore_one_phone">Bring them back on one phone only: two phones with the same friends would take each other\'s songs.</string>
 
     <!-- Your name, asked before anything else the first time; never removed, only changed. -->
