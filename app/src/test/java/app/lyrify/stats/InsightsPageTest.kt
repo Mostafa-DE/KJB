@@ -277,6 +277,17 @@ class InsightsPageTest {
     }
 
     @Test
+    fun `the clock has the morning, afternoon, evening and night, and the time after 9 pm`() {
+        val plays = plays(kite, 2, nov(3, "07:00")) + plays(kite, 2, nov(3, "13:00")) + plays(kite, 2, nov(3, "19:00")) +
+            plays(kite, 2, nov(3, "21:30")) + plays(kite, 2, nov(3, "23:00"))
+
+        val clock = shown(page(plays).cards.clock)
+
+        assertEquals(listOf(240_000L, 240_000L, 480_000L, 240_000L), listOf(clock.morningMs, clock.afternoonMs, clock.eveningMs, clock.nightMs))
+        assertEquals(480_000L, clock.lateMs)
+    }
+
+    @Test
     fun `the clock needs 10 plays that counted`() {
         assertNull(page(plays(kite, 9, nov(3))).cards.clock)
     }
@@ -652,10 +663,16 @@ class InsightsPageTest {
         val podcast = play(talk, nov(5), heardMs = 20 * MINUTE, clockMs = 10 * MINUTE)
         val book = bookPlay(nov(6), heardMs = 90 * MINUTE, clockMs = 60 * MINUTE)
         val sources = PageSources(bookmarks = listOf(nov(3), nov(4), oct(1)), finishedBooks = listOf(nov(10), oct(20)))
+        // The book's part in the library, so its cover shows.
+        val withBook = Library.of(listOf(copper, harbour, talk, song("Audiobooks/Salt Road/part 1.m4b", artist = "Wren Aster", album = "Salt Road", id = 30)), Settings())
 
-        val page = page(listOf(podcast), books = listOf(book), sources = sources)
+        val page = page(listOf(podcast), books = listOf(book), sources = sources, library = withBook)
 
-        assertEquals(SpokenCard(booksMs = 60 * MINUTE, podcastsMs = 10 * MINUTE, savedMs = 40 * MINUTE, bookmarks = 2, finished = 1), page.cards.spoken)
+        assertEquals(
+            SpokenCard(booksMs = 60 * MINUTE, podcastsMs = 10 * MINUTE, savedMs = 40 * MINUTE, bookmarks = 2, finished = 1, book = withBook.bookOf(saltRoad.path), podcast = talk),
+            page.cards.spoken,
+        )
+        assertNotNull(withBook.bookOf(saltRoad.path))
         assertEquals(2, shown(page(plays(copper, 10, oct(5)) + plays(copper, 2, nov(3)), sources = sources).cards.milestones).booksFinished)
         assertNull(page(plays(copper, 3, nov(3)), sources = sources).cards.spoken)
     }
