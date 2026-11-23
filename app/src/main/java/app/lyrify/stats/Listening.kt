@@ -218,6 +218,22 @@ class PlayStats(
     /** [month]'s recap: its insights, set against the month before. */
     suspend fun recap(month: YearMonth, now: Long, zone: ZoneId): Insights = insights(monthPeriod(month, zone), monthPeriod(month.minusMonths(1), zone), now, zone)
 
+    /** The Insights page of [period] as of [now], in the phone's [calendar] ([phoneCalendar]), set against the period before. */
+    suspend fun page(period: ListeningPeriod, now: Long, calendar: PhoneCalendar): InsightsPage {
+        val bounds = periodOf(period, now, calendar.zone, calendar.firstDayOfWeek)
+        return page(period, bounds, previousPeriod(period, bounds, calendar.zone, calendar.firstDayOfWeek), now, calendar)
+    }
+
+    /** [month]'s recap as a page (its story), set against the month before. */
+    suspend fun page(month: YearMonth, now: Long, calendar: PhoneCalendar): InsightsPage =
+        page(ListeningPeriod.MONTH, monthPeriod(month, calendar.zone), monthPeriod(month.minusMonths(1), calendar.zone), now, calendar)
+
+    private suspend fun page(kind: ListeningPeriod, bounds: Period?, before: Period?, now: Long, calendar: PhoneCalendar): InsightsPage {
+        val logs = logs()
+        val library = library()
+        return withContext(compute) { insightsPageOf(logs ?: InsightsData(emptyList()), kind, bounds, before, now, calendar, library) }
+    }
+
     /** The months with a recap ([recapMonths]), the latest first. */
     suspend fun recaps(now: Long, zone: ZoneId): List<YearMonth> {
         val plays = logs()?.plays.orEmpty()
