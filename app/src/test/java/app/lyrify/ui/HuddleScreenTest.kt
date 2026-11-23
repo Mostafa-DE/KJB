@@ -320,6 +320,14 @@ class HuddleScreenTest {
     }
 
     @Test
+    fun `What leaves your phone says each song you play goes with a small picture of its cover`() {
+        assertTrue(
+            "so each song you play goes to them too, with a small picture of its cover, unless you stop sharing with them or listen privately." in
+                File("src/main/res/values/strings_huddle.xml").readText(),
+        )
+    }
+
+    @Test
     fun `a paused friend is paused for 10 minutes after the pause, still, and a stopped one leaves at once`() {
         val wren = friend("f1", "Wren")
         val now = 10_000_000L
