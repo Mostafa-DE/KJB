@@ -194,7 +194,7 @@ class HuddleClientTest {
         assertEquals("25000", opened[0].json().string("wait"))
         assertEquals(40_000, opened[0].readTimeout)
         assertEquals("an old server answered at once: the wait is waited out here", 25_000L, testScheduler.currentTime)
-        assertEquals(mapOf(box to listOf(Posted(3, "YQ"))), huddle.inbox(listOf(box), waitMs = 25_000))
+        assertEquals(mapOf(box to listOf(Posted(3, "YQ", now))), huddle.inbox(listOf(box), waitMs = 25_000))
         assertEquals("something came: at once", 25_000L, testScheduler.currentTime)
         assertEquals(emptyMap<String, List<Posted>>(), huddle.inbox(listOf(box)))
         assertNull("no wait asked", opened[2].json()["wait"])
@@ -208,7 +208,7 @@ class HuddleClientTest {
             Answer(200, """{"now":1,"mailboxes":[{"mailbox":"$box","messages":[{"id":"3","kind":"card","data":"YQ","sentAt":1},{"id":"x","kind":"card","data":"Yg","sentAt":1}],"more":true},{"mailbox":"$other","messages":[],"more":false}]}"""),
             Answer(200, """{"now":2,"mailboxes":[{"mailbox":"$box","messages":[{"id":"9","kind":"play","data":"Yw","sentAt":2}],"more":false}]}"""),
         )
-        assertEquals(mapOf(box to listOf(Posted(3, "YQ"), Posted(9, "Yw"))), huddle.inbox(listOf(box, other)))
+        assertEquals(mapOf(box to listOf(Posted(3, "YQ", now), Posted(9, "Yw", now))), huddle.inbox(listOf(box, other)))
         val first = opened[0].json()["mailboxes"] as JsonArray
         assertEquals(listOf(box, other), first.map { (it as JsonObject).string("mailbox") })
         assertNull((first[0] as JsonObject)["after"])
@@ -218,12 +218,25 @@ class HuddleClientTest {
     }
 
     @Test
+    fun `the inbox asks each box after the seq given, and dates a message by the server's clock on this phone's`() = runTest {
+        // The server's clock is 2 minutes behind this phone's: the now it got a minute ago is a minute old all the same.
+        now = 1_700_000_120_000L
+        val huddle = client(
+            Answer(200, """{"now":1700000000000,"mailboxes":[{"mailbox":"$box","messages":[{"id":"8","kind":"now","data":"YQ","sentAt":1699999940000}],"more":false},{"mailbox":"$other","messages":[],"more":false}]}"""),
+        )
+        assertEquals(mapOf(box to listOf(Posted(8, "YQ", now - 60_000))), huddle.inbox(listOf(box, other), after = mapOf(box to 7L)))
+        val asked = opened[0].json()["mailboxes"] as JsonArray
+        assertEquals("7", (asked[0] as JsonObject).string("after"))
+        assertNull((asked[1] as JsonObject)["after"])
+    }
+
+    @Test
     fun `a later inbox page that gets no answer keeps the pages read, as the server already let their plays go`() = runTest {
         val huddle = client(
             Answer(200, """{"now":1,"mailboxes":[{"mailbox":"$box","messages":[{"id":"3","kind":"play","data":"YQ","sentAt":1}],"more":true}]}"""),
             Answer(0, fails = true),
         )
-        assertEquals(mapOf(box to listOf(Posted(3, "YQ"))), huddle.inbox(listOf(box)))
+        assertEquals(mapOf(box to listOf(Posted(3, "YQ", now))), huddle.inbox(listOf(box)))
     }
 
     @Test
@@ -231,7 +244,7 @@ class HuddleClientTest {
         val huddle = client(
             Answer(200, """{"now":1,"mailboxes":[{"mailbox":"$box","messages":[{"id":"3","kind":"card","sentAt":1}],"more":false},{"mailbox":"$other","messages":[{"id":"4","kind":"card","data":"YQ","sentAt":1}],"more":false}]}"""),
         )
-        assertEquals(mapOf(other to listOf(Posted(4, "YQ"))), huddle.inbox(listOf(box, other)))
+        assertEquals(mapOf(other to listOf(Posted(4, "YQ", now))), huddle.inbox(listOf(box, other)))
     }
 
     @Test

@@ -277,8 +277,9 @@ entries; `0` is fine and safe to retry).
   heard, a now at once at each play, pause, resume, skip, seek and stop (several within half a second go as the newest),
   and every minute while the song plays. A now is kept in memory only: one a friend's server did not answer is sent
   to that friend again after 2 s, 5 s and 15 s while it is the newest, and after that the next change or heartbeat
-  replaces it. A friend who saw your last song is told it stopped when the next one is not shared (a book, a podcast)
-  or the queue ends.
+  replaces it. A friend who saw your last song is told it stopped when the next one is not shared (a book, a podcast),
+  when the queue ends, and when "Listen privately" is turned on. A pause on a song friends did not see playing (one
+  KJB opened with, the queue's first waiting after it ended) is not sent.
 - A friend shows as playing while their newest now says playing, is at most 150 s old (two heartbeats missed) and their
   song has not ended more than 30 s ago; paused for 10 minutes after the pause; stopped at once. A now's age is the
   server's (`now` less its `sentAt`), so a phone clock that is off changes nothing. The server keeps every now for 10

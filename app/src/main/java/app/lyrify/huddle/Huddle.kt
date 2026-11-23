@@ -23,8 +23,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
-/** A message waiting in a mailbox: the server's [seq] in it (its message id), and the sealed [data] (base64url). */
-data class Posted(val seq: Long, val data: String)
+/**
+ * A message waiting in a mailbox: the server's [seq] in it (its message id), the sealed [data] (base64url), and [at] when
+ * the server got it, on this phone's clock (from the server's own clock, so a phone clock that is off changes nothing).
+ */
+data class Posted(val seq: Long, val data: String, val at: Long)
 
 /** How an invite stands on the server. */
 sealed interface InviteStatus {
@@ -60,10 +63,10 @@ interface HuddleServer {
     suspend fun send(box: String, kind: Kind, data: String): PostAnswer
 
     /**
-     * The messages waiting in [boxes], by box (a box without any is left out), oldest first. With [waitMs] and none
-     * waiting, it answers once one lands in a box, or empty after [waitMs].
+     * The messages waiting in [boxes], by box (a box without any is left out), oldest first, each box's only [after] its
+     * seq there. With [waitMs] and none waiting, it answers once one lands in a box, or empty after [waitMs].
      */
-    suspend fun inbox(boxes: List<String>, waitMs: Long = 0): Map<String, List<Posted>>?
+    suspend fun inbox(boxes: List<String>, after: Map<String, Long> = emptyMap(), waitMs: Long = 0): Map<String, List<Posted>>?
 
     /** Deletes each box's messages up to its seq. */
     suspend fun ack(upTo: Map<String, Long>): Boolean
@@ -114,8 +117,9 @@ sealed interface Accepted {
  *   the friend's key for their mailbox; what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play
  *   within a day only. A card or a play without an answer is tried again after each of [RETRY_MS]'s waits, one set of
  *   tries at a time, started over for one that joined them.
- * - What your player does now ([listening]) goes to each friend at once, never stored and never tried again; friends'
- *   nows are kept in memory only ([HuddleState.live]).
+ * - What your player does now ([listening]) goes to each friend at once, never stored: one without an answer goes again
+ *   after each of [NOW_RETRY_MS]'s waits while it is the newest. Friends' nows are kept in memory only
+ *   ([HuddleState.live]); each friend's mailbox is read on from where this run of KJB got to ([readTo]).
  * - A play or a now goes only to friends you share plays with ([Friend.sharePlays], on from the join), never while you
  *   listen privately.
  * - Names are one per friend list: a newcomer whose name another friend goes by shows under a stand-in ([Friend.taken])
@@ -154,6 +158,19 @@ class Huddle(
 
     /** One now at a time, so a friend's server keeps the newest. */
     private val nowLock = Mutex()
+
+    /** The newest now told ([listening]): a stop takes it back when there is none of yours to share. Under [nowLock]. */
+    private var shown: Message.Now? = null
+
+    /**
+     * Each friend's mailbox as far as this run of KJB read it, by box: its last seq. A read asks only what came after, so
+     * a friend's now (on the server until a newer one) answers a held read once; KJB started again reads all that waits.
+     */
+    private val readTo = ConcurrentHashMap<String, Long>()
+
+    /** The sync [syncWhileInFront] runs, its inbox read held: KJB back in front waits for it, never holding a second. */
+    @Volatile
+    private var holding: Job? = null
 
     /** The links of the invite tickets shown in this run ([ticketLink]), by the ticket's id. */
     private val tickets = ConcurrentHashMap<String, String>()
@@ -331,24 +348,42 @@ class Huddle(
     /**
      * Your player is in [state] at [positionMs], [at] (a play, a pause, a resume, a skip, a seek, a stop, or a minute
      * playing): after [NOW_GAP_MS], when nothing newer came (a burst of skips goes as its last), each friend you share
-     * plays with gets it at once, side by side, unless you listen privately. [songOf] gives what plays and whether it is a
-     * favourite, read only then; null for none to share (a book). Never stored and never tried again: the next one
-     * replaces it, and a friend lets a "playing" go 150 s after the last. Called in the player's order.
+     * plays with gets it at once, side by side. [songOf] gives what plays and whether it is a favourite, read only then;
+     * null for none to share (a book, a podcast): then, as while you listen privately, a friend who saw your last song
+     * sees it stop, and nothing more. Never stored: one without an answer goes again to the friends it missed after each
+     * of [NOW_RETRY_MS]'s waits while it is the newest, then the next change or heartbeat replaces it (and a friend lets
+     * a "playing" go 150 s after the last). Called in the player's order.
      */
     fun listening(state: NowState, positionMs: Long, at: Long, songOf: suspend () -> Pair<CardSong, Boolean>?) {
         val told = nows.incrementAndGet()
         scope.launch {
             delay(NOW_GAP_MS)
-            nowLock.withLock {
-                if (nows.get() != told) return@withLock
-                val (song, favourite) = songOf() ?: return@withLock
-                val now = clock()
-                val held = now()
-                if (held.privateUntil?.let { now < it } == true) return@withLock
-                val message = Message.Now(newId(MESSAGE_ID_BYTES), at, song, state, positionMs, favourite)
-                val outs = held.friends.filter { it.sharePlays }.mapNotNull { outgoing(it, message, Kind.NOW, notBefore = now) }
-                val missed = coroutineScope { outs.map { out -> async { server.send(out.box, Kind.NOW, out.data) } }.awaitAll() }.count { it == PostAnswer.NO_ANSWER }
-                if (missed > 0) log("huddle: now not sent to $missed (no_answer)")
+            if (nows.get() != told) return@launch
+            val now = clock()
+            // Read outside the lock: a song read late (the library still being read) never holds up a newer now.
+            val yours = if (now().privateUntil?.let { now < it } == true) null else songOf()
+            val message = nowLock.withLock {
+                if (nows.get() != told) return@launch
+                (
+                    yours?.let { (song, favourite) -> Message.Now(newId(MESSAGE_ID_BYTES), at, song, state, positionMs, favourite) }
+                        ?: shown?.takeIf { it.state != NowState.STOPPED }?.copy(id = newId(MESSAGE_ID_BYTES), at = at, state = NowState.STOPPED)
+                        ?: return@launch
+                    ).also { shown = it }
+            }
+            // The friends it reached, by id: a try again goes to the others.
+            val reached = HashSet<String>()
+            for (wait in listOf(0L) + NOW_RETRY_MS) {
+                delay(wait)
+                val missed = nowLock.withLock {
+                    // A newer one replaces it.
+                    if (nows.get() != told) return@launch
+                    val to = now().friends.filter { it.sharePlays && it.id !in reached }
+                    val answers = coroutineScope { to.map { friend -> async { outgoing(friend, message, Kind.NOW, notBefore = clock())?.let { server.send(it.box, Kind.NOW, it.data) } } }.awaitAll() }
+                    to.zip(answers).forEach { (friend, answer) -> if (answer != PostAnswer.NO_ANSWER) reached += friend.id }
+                    answers.count { it == PostAnswer.NO_ANSWER }
+                }
+                if (missed == 0) return@launch
+                log("huddle: now not sent to $missed (no_answer)")
             }
         }
     }
@@ -402,6 +437,7 @@ class Huddle(
             )
         }
         if (!kept) return false
+        live.update { it - friendId }
         flush()
         server.dropBoxes(listOf(friend.inBox))
         return true
@@ -427,8 +463,13 @@ class Huddle(
         return backup.friends.size.takeIf { storage.change { it.restored(backup, key) } }
     }
 
-    /** Listen privately until [until] (wall-clock millis; [HuddleState.FOREVER] until turned back on), or no longer (null). */
-    suspend fun listenPrivately(until: Long?): Boolean = withContext(NonCancellable) { storage.change { it.copy(privateUntil = until) } }
+    /**
+     * Listen privately until [until] (wall-clock millis; [HuddleState.FOREVER] until turned back on), or no longer (null).
+     * Turned on, a friend who saw your last song sees it stop ([listening]).
+     */
+    suspend fun listenPrivately(until: Long?): Boolean = withContext(NonCancellable) {
+        storage.change { it.copy(privateUntil = until) }.also { kept -> if (kept && until != null) listening(NowState.STOPPED, 0, clock()) { null } }
+    }
 
     /** The friend [friendId] who joined your invite was greeted ("<name> joined your Huddle!"): never again. */
     suspend fun celebrated(friendId: String): Boolean = withContext(NonCancellable) { storage.change { it.copy(joined = it.joined - friendId) } }
@@ -453,14 +494,15 @@ class Huddle(
      * soon as one answers, so a friend's play or pause shows in a second (in Library, on the player and the Now bar too);
      * without friends every [FAST_MS]. A sync without an answer is tried again after each of [RETRY_MS]'s waits from its
      * end, then each hour until one answers. Each sync is a job of its own in [scope], so one under way runs on when KJB
-     * goes.
+     * goes, and KJB back in front waits for its answer before asking again ([holding]).
      */
     fun syncWhileInFront(): Job = scope.launch {
+        holding?.join()
         // Syncs in a row without an answer (or that broke off): the next waits the step of RETRY_MS they reached.
         var failed = 0
         while (true) {
             var answered = false
-            scope.launch { answered = sync(WAIT_MS) }.join()
+            scope.launch { answered = sync(WAIT_MS) }.also { holding = it }.join()
             failed = if (answered) 0 else failed + 1
             val wait = when {
                 failed > 0 -> RETRY_MS.getOrNull(failed - 1) ?: HOUR_MS
@@ -598,15 +640,16 @@ class Huddle(
     /**
      * Friends' mailboxes, the read held up to [waitMs]: each message opened with its friend's key, kept once, then
      * acknowledged; a goodbye removes the friend, a now goes to [live] only. One that does not open is read again at
-     * [NOT_OPENED_RETRIES] syncs, unacknowledged with what came after it, then acknowledged too. Plays and nows go from
-     * the server once read: a box of only those asks no acknowledgement. False when the server did not answer, the
-     * acknowledgement included.
+     * [NOT_OPENED_RETRIES] syncs, unacknowledged with what came after it, then acknowledged too. A play goes from the
+     * server once read and a now stays until a newer one: a box of only those asks no acknowledgement. Each box is read
+     * after where this run got to ([readTo]), once kept. False when the server did not answer, the acknowledgement
+     * included.
      */
     private suspend fun fetch(waitMs: Long): Boolean {
         val friends = now().friends
         if (friends.isEmpty()) return true
         // Held outside the lock: a card, a play or a now of yours goes meanwhile, and Undo answers at once.
-        val posted = server.inbox(friends.map { it.inBox }, waitMs) ?: run {
+        val posted = server.inbox(friends.map { it.inBox }, readTo, waitMs) ?: run {
             log("huddle: inbox not read (no_answer)")
             return false
         }
@@ -615,6 +658,8 @@ class Huddle(
             // Nothing new and no count of messages that did not open to start over: only plays past their time go.
             if (posted.isEmpty() && friends.none { it.notOpenedReads > 0 }) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
             val upTo = HashMap<String, Long>()
+            // By box: the seq this read got to, the next read's cursor once kept.
+            val through = HashMap<String, Long>()
             val read = ArrayList<Pair<String, Message>>()
             // By friend: their Friend.notOpenedReads after this read.
             val notOpened = HashMap<String, Int>()
@@ -627,11 +672,12 @@ class Huddle(
                 val key = HuddleCrypto.decode(friend.inKey)
                 // A box that does not open (another key, sealed for the other way, changed, a newer KJB's): its seq.
                 val closed = ArrayList<Long>()
-                // Plays and nows go from the server once read: only a box with anything else is acknowledged.
+                // A play goes from the server once read, a now when a newer one comes: only a box with anything else is acknowledged.
                 var acks = false
                 for (one in box) {
                     val message = key?.let { HuddleCrypto.decode(one.data)?.let { data -> HuddleCrypto.open(key, data, friend.inBox.encodeToByteArray()) } }?.let(Messages::decode)
-                    if (message == null) closed += one.seq else read += friend.id to message
+                    // A now as of when the server got it: as old as the server says, whatever either phone's clock says.
+                    if (message == null) closed += one.seq else read += friend.id to ((message as? Message.Now)?.copy(at = one.at) ?: message)
                     if (message !is Message.Play && message !is Message.Now) acks = true
                 }
                 val reads = if (closed.isEmpty()) 0 else friend.notOpenedReads + 1
@@ -639,11 +685,11 @@ class Huddle(
                 // Let go, it stays past NOT_OPENED_RETRIES until the server takes the acknowledgement, so a lost one goes again.
                 notOpened[friend.id] = reads
                 if (again) kept += closed.size else dropped += closed.size
-                // Read again: acknowledged only up to the first that did not open, so it and what came after it wait.
-                if (acks) (if (again) box.lastOrNull { it.seq < closed.first() } else box.lastOrNull())?.let { upTo[friend.inBox] = it.seq }
+                // Read again: acknowledged and read on only up to the first that did not open, so it and what came after it wait.
+                val last = (if (again) box.lastOrNull { it.seq < closed.first() } else box.lastOrNull())?.seq ?: continue
+                through[friend.inBox] = last
+                if (acks) upTo[friend.inBox] = last
             }
-            // A friend's now shows live, in memory only, as of when it was told (never later than now).
-            live.update { held -> (held + read.mapNotNull { (id, message) -> (message as? Message.Now)?.let { id to it.copy(at = minOf(it.at, now)) } }).filterKeys { id -> friends.any { it.id == id } } }
             if (kept > 0) log("huddle: inbox kept $kept that did not open, to read again (not_opened)")
             if (dropped > 0) log("huddle: inbox dropped $dropped that did not open (not_opened)")
             // Whether what came asks for an answer (a name taken in your list, or free again): it goes in this sync.
@@ -657,8 +703,13 @@ class Huddle(
                 log("huddle: inbox not kept (not_written)")
                 return false
             }
+            // A friend's now shows live, in memory only; one who left (a goodbye in this read, or removed meanwhile) goes.
+            val here = now().friends.mapTo(HashSet()) { it.id }
+            live.update { held -> (held + read.mapNotNull { (id, message) -> (message as? Message.Now)?.let { id to it } }).filterKeys { it in here } }
             val acknowledged = upTo.isEmpty() || server.ack(upTo)
             if (!acknowledged) log("huddle: inbox not acknowledged (no_answer)")
+            // Read on past what was kept, and acknowledged where it had to be: one whose acknowledgement got no answer is read again.
+            through.filterKeys { acknowledged || it !in upTo }.forEach { (box, seq) -> readTo.merge(box, seq) { old, new -> maxOf(old, new) } }
             // What was let go is gone: the next one that does not open gets its reads again.
             if (acknowledged && dropped > 0) storage.change { state -> state.copy(friends = state.friends.map { if (it.notOpenedReads > NOT_OPENED_RETRIES) it.copy(notOpenedReads = 0) else it }) }
             read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> friends.firstOrNull { it.id == id } }.forEach { gone ->
@@ -745,6 +796,9 @@ class Huddle(
 
         /** Your nows within this of each other go as the last of them: a burst of skips, a pause and a play. */
         const val NOW_GAP_MS: Long = 500
+
+        /** After a now without an answer, the waits before each new try to the friends it missed: 2 s, 5 s, 15 s. */
+        private val NOW_RETRY_MS: List<Long> = listOf(2_000L, 5_000L, 15_000L)
         const val HOUR_MS: Long = 60 * 60_000L
         private const val DAY_MS: Long = 24 * HOUR_MS
         private const val MONTH_MS: Long = 30 * DAY_MS

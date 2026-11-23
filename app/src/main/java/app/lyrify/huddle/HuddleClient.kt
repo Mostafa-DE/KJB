@@ -1,6 +1,7 @@
 package app.lyrify.huddle
 
 import app.lyrify.backup.SectionJson.jsonObject
+import app.lyrify.backup.SectionJson.long
 import app.lyrify.backup.SectionJson.text
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -74,7 +75,7 @@ class HuddleClient(
         }
     }
 
-    override suspend fun inbox(boxes: List<String>, waitMs: Long): Map<String, List<Posted>>? {
+    override suspend fun inbox(boxes: List<String>, after: Map<String, Long>, waitMs: Long): Map<String, List<Posted>>? {
         val began = clock()
         val read = LinkedHashMap<String, MutableList<Posted>>()
         // The server lets plays go as it hands them out: once a page came, what was read is kept, and the next sync asks again.
@@ -82,8 +83,9 @@ class HuddleClient(
         // Held on the server only by the first call, and only when one call asks every box.
         var wait = if (boxes.distinct().size <= MAX_IDS) waitMs else 0
         for (chunk in boxes.distinct().chunked(MAX_IDS)) {
-            // Each box's cursor ("after") while the server has more for it; a box is asked again only then.
-            var asking: Map<String, String?> = chunk.associateWith { null }
+            // Each box's cursor ("after"): the seq it was read to, then the server's last while it has more for it; a box is
+            // asked again only then.
+            var asking: Map<String, String?> = chunk.associateWith { after[it]?.toString() }
             repeat(MAX_PAGES) {
                 if (asking.isEmpty()) return@repeat
                 val ask = JsonArray(asking.map { (box, after) -> JsonObject(buildMap { put(MAILBOX, JsonPrimitive(box)); after?.let { put(AFTER, JsonPrimitive(it)) } }) })
@@ -91,6 +93,7 @@ class HuddleClient(
                 wait = 0
                 val pages = json?.get(MAILBOXES) as? JsonArray ?: return read.takeIf { answered }
                 answered = true
+                val serverNow = json.long(NOW)
                 val more = HashMap<String, String?>()
                 for (element in pages) {
                     val one = element as? JsonObject ?: continue
@@ -98,7 +101,9 @@ class HuddleClient(
                     val messages = (one[MESSAGES] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
                     messages.forEach { message ->
                         val seq = message.text(ID)?.toLongOrNull() ?: return@forEach
-                        message.text(DATA)?.let { read.getOrPut(box) { ArrayList() } += Posted(seq, it) }
+                        // Its age by the server's own clock, so a phone clock that is off changes nothing.
+                        val ageMs = serverNow?.let { now -> message.long(SENT_AT)?.let { now - it } }?.coerceAtLeast(0) ?: 0
+                        message.text(DATA)?.let { read.getOrPut(box) { ArrayList() } += Posted(seq, it, clock() - ageMs) }
                     }
                     if ((one[MORE] as? JsonPrimitive)?.content == "true") more[box] = messages.lastOrNull()?.text(ID) ?: asking[box]
                 }
@@ -259,6 +264,8 @@ class HuddleClient(
         private const val ACKS = "acks"
         private const val UP_TO = "upTo"
         private const val WAIT = "wait"
+        private const val NOW = "now"
+        private const val SENT_AT = "sentAt"
         private const val ERROR = "error"
     }
 }
