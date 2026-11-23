@@ -701,9 +701,6 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
         BuiltInList.NOT_PLAYED -> SourceKind.NOT_PLAYED
         else -> SourceKind.RECENTLY_ADDED
     }
-    val notes = songs.associate { song ->
-        song.path to rowPlays?.get(song.path)?.let { p -> if (list == BuiltInList.MOST_PLAYED) playsNote(p.count) else lastPlayedText(p.lastPlayedAt) }
-    }
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null && shown != null) { songList ->
         item(key = "hero", contentType = "hero") {
@@ -739,14 +736,14 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
             item(key = "empty", contentType = "empty") {
                 if (words.isNotBlank() && rows.orEmpty().isNotEmpty()) {
                     EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match), rowMotion(reduced), action = stringResource(R.string.search_clear), onAction = { words = "" })
-                } else if (list == BuiltInList.NOT_PLAYED) {
-                    EmptyState(EmptyArt.Glyph, stringResource(R.string.lib_not_played_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_not_played_empty))
+                } else if (list == BuiltInList.NOT_PLAYED && library.songs.any { !it.isPodcast }) {
+                    EmptyState(EmptyArt.Glyph, stringResource(R.string.lib_not_played_empty_title), rowMotion(reduced), text = stringResource(if (period == ListPeriod.ALL_TIME) R.string.lib_not_played_empty else R.string.lib_not_played_empty_period))
                 } else {
-                    EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(if (list == BuiltInList.RECENTLY_ADDED) R.string.lib_added_empty else R.string.lib_played_empty))
+                    EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(if (list == BuiltInList.RECENTLY_PLAYED || list == BuiltInList.MOST_PLAYED) R.string.lib_played_empty else R.string.lib_added_empty))
                 }
             }
         }
-        songRows(songList, note = { notes[it.path] })
+        songRows(songList, note = { song -> rowPlays?.get(song.path)?.let { p -> if (list == BuiltInList.MOST_PLAYED) playsNote(p.count) else lastPlayedText(p.lastPlayedAt) } })
     }
     if (sorting) ListSortSheet(list.songList, order, R.string.lib_sort_never_played_first, onOrder) { sorting = false }
 }
@@ -801,15 +798,16 @@ internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
     val placed = remember(favourites, entryKeys) { listedEntries(favourites.songPlaces.zip(favourites.songs), entryKeys) }
     val sorted = rememberInOrder(placed, order, ui.settings.library) { it.song }.orEmpty()
     var words by rememberSaveable { mutableStateOf("") }
-    // The rows Search in this list leaves, found off the main thread as on the period lists; while nothing is typed all
-    // of them at once, so a drag in the custom order moves the rows as it goes.
+    // The rows Search in this list leaves, found off the main thread as on the period lists (the rows before shown
+    // meanwhile; none before the first, as a search kept over a turn of the phone is worked out again). While nothing is
+    // typed all of them at once, so a drag in the custom order moves the rows as it goes.
     val found by produceState<List<ListedEntry>?>(null, sorted, words, ui.settings.library) {
-        value = if (words.isBlank()) null else withContext(Dispatchers.Default) {
+        value = if (words.isBlank()) sorted else withContext(Dispatchers.Default) {
             val kept = findInList(sorted.map { it.song }, words, ui.settings.library).mapTo(HashSet()) { it.path }
             sorted.filter { it.song.path in kept }
         }
     }
-    val entries = found.takeIf { words.isNotBlank() } ?: sorted
+    val entries = if (words.isBlank()) sorted else found.orEmpty()
     val songs = remember(entries) { entries.map { it.song } }
     val actions = rememberSongActions()
     val rows = rememberLazyListState()
@@ -840,7 +838,7 @@ internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
             ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = if (sorted.isEmpty()) null else sortChip(order, R.string.lib_sort_custom), onSort = { sorting = true }, gutter = 0.dp)
         }
     }
-    SongPageFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under || heroUnder, backdrop, ui, root = root) }) { list, padding ->
+    SongPageFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under || heroUnder, backdrop, ui, root = root) }, loaded = words.isBlank() || found != null) { list, padding ->
         val bottom = PaddingValues(bottom = padding.calculateBottomPadding() + 16.dp)
         if (tabs.isEmpty()) {
             LazyColumn(Modifier.fillMaxSize(), state = rows, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
@@ -852,7 +850,7 @@ internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
                     null -> item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_favorite), stringResource(R.string.lib_fav_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_fav_empty)) }
                     FavouritesTab.SONGS -> {
                         item(key = "find", contentType = "find") { FindInListField(words, { words = it }, rowMotion(reduced)) }
-                        if (words.isNotBlank() && songs.isEmpty()) {
+                        if (words.isNotBlank() && found?.isEmpty() == true) {
                             item(key = "no match", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match), rowMotion(reduced), action = stringResource(R.string.search_clear), onAction = { words = "" }) }
                         }
                         songRows(list, keys = entries.map { it.key }, reorder = reorder)
@@ -872,7 +870,7 @@ internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
                         when (tab) {
                             FavouritesTab.SONGS -> {
                                 item(key = "find", contentType = "find") { FindInListField(words, { words = it }, rowMotion(reduced)) }
-                                if (words.isNotBlank() && songs.isEmpty()) {
+                                if (words.isNotBlank() && found?.isEmpty() == true) {
                                     item(key = "no match", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match), rowMotion(reduced), action = stringResource(R.string.search_clear), onAction = { words = "" }) }
                                 }
                                 songRows(list, keys = entries.map { it.key }, reorder = reorder)

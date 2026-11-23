@@ -115,9 +115,10 @@
     <string name="lib_played_empty">Play some music and it shows here.</string>
     <!-- Recently added with nothing in its period: every period ends today, so a new song shows. -->
     <string name="lib_added_empty">New songs on your phone show here.</string>
-    <!-- Not played with no song left in its period: true of every period, as a new song shows until it is played. -->
+    <!-- Not played with every song played: all time, and a chip of days (Past 15 days and the others). -->
     <string name="lib_not_played_empty_title">You\'ve played every song</string>
     <string name="lib_not_played_empty">New songs show here until you play them.</string>
+    <string name="lib_not_played_empty_period">Songs you haven\'t played in this time show here.</string>
     <!-- The period chips of Recently added, Recently played, Most played and Not played: today and the days before it. -->
     <plurals name="lib_past_days">
         <item quantity="one">Past day</item>

@@ -341,6 +341,22 @@ class LibraryListsTest {
         val strings = File("src/main/res/values/strings_library.xml").readText()
         assertTrue(strings.contains("""<string name="lib_not_played_empty_title">You\'ve played every song</string>"""))
         assertTrue(strings.contains("""<string name="lib_sort_never_played_first">Never played first</string>"""))
+        // Grok review: "You've played every song" only where there are songs (else the other lists' "No songs yet"), and a
+        // chip's own line, as a song not played in its days shows there too.
+        assertTrue(page.contains("list == BuiltInList.NOT_PLAYED && library.songs.any { !it.isPodcast }"))
+        assertTrue(page.contains("if (period == ListPeriod.ALL_TIME) R.string.lib_not_played_empty else R.string.lib_not_played_empty_period"))
+        assertTrue(page.contains("if (list == BuiltInList.RECENTLY_PLAYED || list == BuiltInList.MOST_PLAYED) R.string.lib_played_empty else R.string.lib_added_empty"))
+        assertTrue(strings.contains("""<string name="lib_not_played_empty_period">Songs you haven\'t played in this time show here.</string>"""))
+    }
+
+    @Test
+    fun `a period list words each row's note as the row is shown, never every song's at each key typed (the wiring, read from the source)`() {
+        // Grok review: Not played over a chip holds most of the library, and the notes were all worked out on the main thread
+        // at each recomposition, each letter typed in Search in this list among them.
+        val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText().substringAfter("private fun BuiltInPage(").substringBefore("\n}\n")
+        assertFalse(page.contains("songs.associate"))
+        assertTrue(page.contains("songRows(songList, note = { song -> rowPlays?.get(song.path)?.let { p -> if (list == BuiltInList.MOST_PLAYED) playsNote(p.count) else lastPlayedText(p.lastPlayedAt) } })"))
+        assertTrue(File("src/main/java/app/lyrify/ui/LibraryParts.kt").readText().contains("note: (@Composable (Song) -> String?)? = null,"))
     }
 
     @Test
