@@ -210,8 +210,8 @@ fun AppShell(
     val barOnScreen = slot == BottomSlot.BAR_AND_DOCK && bar != NowBarShows.Hidden
     val chromeStill = rememberChromeStill(slot != BottomSlot.NONE, state.views, barOnScreen, reduced)
     val dot = toolsDot(checks, dupes.badge, aiAttention(ai, aiWaiting))
-    // The bar's Huddle item pings while a friend plays now, and every header's Huddle with it (LocalDockBar); read only
-    // where the dot shows, so nothing else redraws.
+    // The bar's Huddle item pings while a friend plays now, and every header's Huddle shows it too (LocalDockBar); read
+    // only where they show, so nothing else redraws.
     val huddleLive = rememberHuddleLive()
     // Hide while scrolling: never during the tour or for TalkBack; back on another item, page or Library tab, on a
     // selection or the keyboard (a full-screen view over it leaves it as it is, so the player closes into the bar where it is).
@@ -320,7 +320,7 @@ fun AppShell(
                             friend = { NowBarFriend(it.title, it.artist) },
                         )
                     },
-                    dock = { Dock(items, state.tab, display.dockStyle, dot = dot, onSelect = nav::select, live = huddleLive.value) },
+                    dock = { Dock(items, state.tab, display.dockStyle, dot = dot, onSelect = nav::select, live = huddleLive.value.playing.isNotEmpty()) },
                 )
             }
             // The views a back swipe from a page goes back to dim under it as the page does over a view.

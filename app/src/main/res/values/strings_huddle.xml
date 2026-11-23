@@ -241,5 +241,13 @@
     <string name="huddle_on_artist">%1$s is playing %2$s too</string>
     <!-- The bar's Huddle item, for TalkBack while a friend plays now. -->
     <string name="huddle_live_dot">a friend is playing</string>
+    <!-- The headers' Huddle, for TalkBack after "Huddle": before a name is picked, one friend playing now ("Huddle, Wren is
+         playing now"), several. -->
+    <string name="huddle_header_not_joined">not joined yet</string>
+    <string name="huddle_header_playing">%1$s is playing now</string>
+    <plurals name="huddle_header_playing_count">
+        <item quantity="one">%d friend playing now</item>
+        <item quantity="other">%d friends playing now</item>
+    </plurals>
     <string name="huddle_joined_sharing_off">Off. %1$s doesn\'t see what you play. Songs still go both ways</string>
 </resources>

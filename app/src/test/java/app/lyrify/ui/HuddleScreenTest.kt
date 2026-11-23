@@ -207,10 +207,26 @@ class HuddleScreenTest {
     fun `the bar's Huddle has its live dot while a friend still here plays now`() {
         val now = 10_000_000L
         val wren = friend("f1", "Wren")
-        assertFalse(huddleDot(HuddleState(friends = listOf(wren)), now))
-        assertTrue(huddleDot(HuddleState(friends = listOf(wren), plays = listOf(FriendPlay("f1", now - 60_000, lantern))), now))
-        assertFalse(huddleDot(HuddleState(friends = listOf(wren), plays = listOf(FriendPlay("f1", now - 600_000, lantern))), now))
-        assertFalse(huddleDot(HuddleState(plays = listOf(FriendPlay("f1", now - 60_000, lantern))), now))
+        assertFalse(huddleLive(HuddleState(friends = listOf(wren)), now).playing.isNotEmpty())
+        assertTrue(huddleLive(HuddleState(friends = listOf(wren), plays = listOf(FriendPlay("f1", now - 60_000, lantern))), now).playing.isNotEmpty())
+        assertFalse(huddleLive(HuddleState(friends = listOf(wren), plays = listOf(FriendPlay("f1", now - 600_000, lantern))), now).playing.isNotEmpty())
+        assertFalse(huddleLive(HuddleState(plays = listOf(FriendPlay("f1", now - 60_000, lantern))), now).playing.isNotEmpty())
+    }
+
+    @Test
+    fun `the headers' Huddle knows whether a name is picked and who plays now, by the names you see, the latest first`() {
+        val now = 10_000_000L
+        assertEquals(HuddleLive(joined = false), huddleLive(HuddleState(), now))
+        val wren = friend("f1", "Wren", rename = "Wrennie")
+        val state = HuddleState(
+            name = "Kai",
+            friends = listOf(wren, friend("f2", "Juniper"), friend("f3", "Rook")),
+            plays = listOf(FriendPlay("f1", now - 60_000, lantern), FriendPlay("f2", now - 30_000, bell), FriendPlay("f3", now - 900_000, bell)),
+        )
+        assertEquals(HuddleLive(joined = true, playing = listOf("Juniper", "Wrennie")), huddleLive(state, now))
+        assertEquals(HuddleLive(joined = true), huddleLive(state, now + 900_000))
+        // A play from someone no longer a friend counts for nothing.
+        assertEquals(HuddleLive(joined = true), huddleLive(HuddleState(name = "Kai", plays = listOf(FriendPlay("f9", now - 60_000, lantern))), now))
     }
 
     @Test

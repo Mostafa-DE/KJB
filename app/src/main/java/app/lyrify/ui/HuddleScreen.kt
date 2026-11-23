@@ -240,8 +240,16 @@ fun nameGate(state: HuddleState): NameGate? = when {
     else -> null
 }
 
-/** The bar's Huddle has its live dot: a friend still here is playing now. */
-fun huddleDot(state: HuddleState, now: Long): Boolean = friendsNow(state, now).any { it.playing }
+/**
+ * What the bar's Huddle item and the headers' Huddle show: whether a name is picked ([joined]; the headers' plus until
+ * then), and the friends still here playing now by the names you see, those begun last first ([playing]; the bar's live
+ * dot, the headers' bars, their count, TalkBack's name).
+ */
+data class HuddleLive(val joined: Boolean = true, val playing: List<String> = emptyList())
+
+/** [HuddleLive] for [state] at [now] ([friendsNow]). */
+fun huddleLive(state: HuddleState, now: Long): HuddleLive =
+    HuddleLive(joined = state.name != null, playing = friendsNow(state, now).filter { it.playing }.map { it.friend.shownName })
 
 /** Whether Library's [tab] leads with the friends row: the tab Library [opensOn], once there is a friend. */
 fun friendsRowShows(tab: LibraryTab, opensOn: LibraryTab, state: HuddleState): Boolean = tab == opensOn && state.friends.isNotEmpty()

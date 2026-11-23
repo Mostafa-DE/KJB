@@ -1,12 +1,15 @@
 package app.lyrify.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.StartOffset
 import androidx.compose.animation.core.StartOffsetType
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -36,6 +39,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,21 +50,30 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.VectorPath
+import androidx.compose.ui.graphics.vector.toPath
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -210,21 +223,116 @@ private fun MailBadge(gap: Color, modifier: Modifier) {
 }
 
 /**
- * The moving bars that mean "playing now": four bars rising and falling each at its own pace, still at their resting
- * heights when motion is off. Decorative.
+ * The moving bars that mean "playing now": [count] bars (four, or three in the headers' Huddle) rising and falling each
+ * at its own pace, still at their resting heights when motion is off. [gap]: the ground they stand on, kept as a thin
+ * ring round each, so they read cut out of what is under them. Decorative.
  */
 @Composable
-internal fun Equaliser(color: Color, modifier: Modifier = Modifier) {
+internal fun Equaliser(color: Color, modifier: Modifier = Modifier, count: Int = EQ_MS.size, gap: Color? = null) {
     val motion = if (huddleMoves()) rememberInfiniteTransition(label = "equaliser") else null
-    val bars = EQ_MS.indices.map { at ->
+    val bars = (0 until count).map { at ->
         motion?.animateFloat(0.2f, 1f, infiniteRepeatable(tween(EQ_MS[at], easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(EQ_OFFSET_MS[at], StartOffsetType.FastForward)), label = "bar")
     }
     Canvas(modifier.clearAndSetSemantics {}) {
-        val gap = size.width * 0.12f
-        val width = (size.width - gap * (bars.size - 1)) / bars.size
+        val space = size.width * 0.12f
+        val width = (size.width - space * (bars.size - 1)) / bars.size
+        val ring = EQ_GAP.toPx()
         bars.forEachIndexed { at, bar ->
             val height = size.height * (bar?.value ?: EQ_STILL[at])
-            drawRoundRect(color, Offset(at * (width + gap), size.height - height), Size(width, height), CornerRadius(1.dp.toPx()))
+            gap?.let { drawRoundRect(it, Offset(at * (width + space) - ring, size.height - height - ring), Size(width + ring * 2, height + ring * 2), CornerRadius(1.dp.toPx() + ring)) }
+            drawRoundRect(color, Offset(at * (width + space), size.height - height), Size(width, height), CornerRadius(1.dp.toPx()))
+        }
+    }
+}
+
+/**
+ * Huddle in the headers, the glyph the user picked (2026-11-23): two friends huddled round a note ([R.drawable.ic_huddle])
+ * in Search and Tools' glass circle, the note cut out of them. While a friend plays now the note gives way to three coral
+ * bars ([Equaliser]) and a coral ring pulses out round the circle; several playing, their count ([CountBadge]); before a
+ * name is picked, a small ink plus. With Remove animations, and on a root that is not showing, the bars rest and the
+ * ring sits still round the circle. It reads the shell's one state ([LocalDockBar]), as the bar's dot does; its whole
+ * look is here, so another can take its place without touching the pages.
+ */
+@Composable
+internal fun HuddleButton(onClick: () -> Unit) {
+    val live = LocalDockBar.current.huddleLive?.value ?: HuddleLive()
+    val reduced = LocalReducedMotion.current
+    val brand = LocalBrandColors.current
+    val chrome = LocalChromeColors.current
+    // What the glyph's note and bars and the badges are cut out of: the glass circle's colour, as CountBadge's ring.
+    val ground = MaterialTheme.colorScheme.surfaceContainer
+    // The note gives way to the bars, and the ring comes, on one spring; at once with Remove animations.
+    val lit by animateFloatAsState(if (live.playing.isNotEmpty()) 1f else 0f, motion(Motion.indicator, reduced), label = "huddle live")
+    // The count a leaving badge keeps showing.
+    val count = remember { Kept(2) }
+    if (live.playing.size > 1) count.value = live.playing.size
+    val glyph = ImageVector.vectorResource(R.drawable.ic_huddle)
+    val parts = remember(glyph) { glyph.root.filterIsInstance<VectorPath>().associate { it.name to it.pathData.toPath() } }
+    Box {
+        // The ring, under the circle, and its clock only while a friend plays (or the ring fades).
+        if (lit > 0f) {
+            val pulse = if (huddleMoves()) rememberInfiniteTransition(label = "huddle ring").animateFloat(0f, 1f, infiniteRepeatable(tween(RING_PULSE_MS, easing = RingPulse)), label = "pulse") else null
+            Canvas(Modifier.matchParentSize()) {
+                val width = 1.5.dp.toPx()
+                drawCircle(
+                    brand.highlight,
+                    (RING.toPx() - width) / 2 * (pulse?.value?.let { 0.92f + 0.44f * it } ?: 1f),
+                    alpha = lit.coerceIn(0f, 1f) * (pulse?.value?.let { 0.8f * (1f - it) } ?: 0.6f),
+                    style = Stroke(width),
+                )
+            }
+        }
+        ChromeIconButton(
+            dockItemName(
+                stringResource(R.string.huddle_title),
+                if (!live.joined) stringResource(R.string.huddle_header_not_joined) else null,
+                when (live.playing.size) {
+                    0 -> null
+                    1 -> stringResource(R.string.huddle_header_playing, live.playing.single())
+                    else -> pluralStringResource(R.plurals.huddle_header_playing_count, live.playing.size, live.playing.size)
+                },
+            ),
+            onClick,
+        ) {
+            val ink = LocalContentColor.current
+            val unit = GLYPH / glyph.viewportWidth
+            Box(Modifier.size(GLYPH)) {
+                Canvas(Modifier.matchParentSize()) {
+                    scale(size.width / glyph.viewportWidth, pivot = Offset.Zero) {
+                        drawPath(parts.getValue("friends"), ink)
+                        val note = parts.getValue("note")
+                        val shown = 1f - lit.coerceIn(0f, 1f)
+                        if (shown > 0f) {
+                            scale(0.3f + 0.7f * shown, pivot = note.getBounds().bottomCenter) {
+                                drawPath(note, ground, shown, Stroke(GLYPH_CUT, join = StrokeJoin.Round))
+                                drawPath(note, ink, shown)
+                            }
+                        }
+                    }
+                }
+                if (lit > 0f) {
+                    Equaliser(
+                        brand.highlight,
+                        Modifier
+                            .offset(unit * GLYPH_BARS.left, unit * GLYPH_BARS.top)
+                            .size(unit * GLYPH_BARS.width, unit * GLYPH_BARS.height)
+                            .graphicsLayer {
+                                scaleY = lit
+                                transformOrigin = TransformOrigin(0.5f, 1f)
+                            },
+                        count = 3,
+                        gap = ground,
+                    )
+                }
+            }
+        }
+        AnimatedVisibility(!live.joined, Modifier.align(Alignment.TopEnd).offset(x = 2.dp, y = (-1).dp), enter = badgeIn(reduced), exit = badgeOut(reduced)) {
+            Box(contentAlignment = Alignment.Center, modifier = Modifier.clearAndSetSemantics {}.background(ground, CircleShape).padding(2.dp).background(chrome.action, CircleShape).size(18.dp)) {
+                Icon(painterResource(R.drawable.ic_add), contentDescription = null, tint = chrome.onAction, modifier = Modifier.size(12.dp))
+            }
+        }
+        AnimatedVisibility(live.joined && live.playing.size > 1, Modifier.align(Alignment.TopEnd).offset(x = 5.dp, y = (-2).dp), enter = badgeIn(reduced), exit = badgeOut(reduced)) {
+            CountBadge(count.value)
         }
     }
 }
@@ -568,6 +676,26 @@ private const val NUDGE_MS = 2_400
 private val EQ_MS = intArrayOf(700, 900, 600, 850)
 private val EQ_OFFSET_MS = intArrayOf(0, 300, 500, 200)
 private val EQ_STILL = floatArrayOf(0.45f, 1f, 0.7f, 0.35f)
+
+/** The ring kept round each bar with a gap: as wide as the headers' glyph keeps its note clear of the friends. */
+private val EQ_GAP = 0.65.dp
+
+/** The headers' Huddle glyph's size in its circle, as an icon's. */
+private val GLYPH = 22.dp
+
+/** How far the note's cut reaches round it, on the glyph's 24 grid: 0.7 each side (the mockup's 1.4 knock-out stroke). */
+private const val GLYPH_CUT = 1.4f
+
+/** Where the three bars stand in place of the note, on the glyph's 24 grid (the mockup's). */
+private val GLYPH_BARS = Rect(8.9f, 7f, 15.15f, 21.2f)
+
+/**
+ * The live ring round the glass circle: still, this size at 60%; moving, it pulses from 92% to 136% of it, fading from
+ * 80%, every [RING_PULSE_MS] on [RingPulse] (the mockup's).
+ */
+private val RING = 44.dp
+private const val RING_PULSE_MS = 2_200
+private val RingPulse = CubicBezierEasing(0.2f, 0.6f, 0.4f, 1f)
 
 private val CardName = display(17, 22, weight = 650)
 private val CardTitle = display(21, 26, -0.01, weight = 700)

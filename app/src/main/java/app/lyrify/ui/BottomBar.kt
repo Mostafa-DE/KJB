@@ -184,16 +184,16 @@ private val DockItemSetting.on: Boolean get() = shown || tab == DockTab.LIBRARY
 
 /**
  * The bar as the shell shows it ([LocalDockBar]): its [items] in order, whether Tools has its dot ([toolsDot]), what
- * the phone offers now ([offered]: KJB Downloads installed, a book in the library), and whether Huddle's dot pings, a
- * friend playing now ([huddleLive]: the shell's one state, which the dock and every header read where the dot shows, so
- * nothing else redraws; null outside the shell).
+ * the phone offers now ([offered]: KJB Downloads installed, a book in the library), and Huddle's live state, a friend
+ * playing now ([huddleLive]: the shell's one state, which the dock's dot and every header's Huddle read where they show,
+ * so nothing else redraws; null outside the shell).
  */
 @Stable
 data class DockBar(
     val items: List<DockTab> = DOCK_TABS,
     val toolsDot: Boolean = false,
     val offered: DockOffers = DockOffers(downloads = false, books = false),
-    val huddleLive: State<Boolean>? = null,
+    val huddleLive: State<HuddleLive>? = null,
 ) {
     fun offers(tab: DockTab): Boolean = offered.offers(tab)
 }
