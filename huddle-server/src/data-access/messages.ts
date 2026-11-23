@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gt, inArray, lte, or, sql } from "drizzle-orm"
+import { and, asc, count, desc, eq, gt, inArray, lte, ne, or, sql } from "drizzle-orm"
 import { db, storageKey } from "@/db"
 import { messages, type messageKinds } from "@/db/schema"
 import { LIMITS } from "@/lib/limits"
@@ -86,7 +86,8 @@ export async function sendMessage(mailbox: string, kind: MessageKind, data: stri
 
 /**
  * Live messages of each asked mailbox after its cursor, oldest first, within the per-mailbox and per-answer limits.
- * Plays and nows are deleted as they are handed out, each to one call only; cards and profiles wait for an ack.
+ * Plays are deleted as they are handed out, each to one call only; cards and profiles wait for an ack; a now goes to
+ * every read until a newer one replaces it or it expires, so a read without a cursor finds what each friend does now.
  */
 export async function readInbox(asked: Array<{ mailbox: string; after?: string }>, now: Date) {
   let budget = LIMITS.inboxBytes
@@ -124,10 +125,8 @@ export async function readInbox(asked: Array<{ mailbox: string; after?: string }
     answers.push({ mailbox, rows: handed, more })
   }
 
-  // A play or a now goes to the call whose delete removed it; another call reading it at the same moment leaves it out.
-  const handedOnce = answers.flatMap((answer) =>
-    answer.rows.filter((row) => row.kind === "play" || row.kind === "now").map((row) => row.id),
-  )
+  // A play goes to the call whose delete removed it; another call reading it at the same moment leaves it out.
+  const handedOnce = answers.flatMap((answer) => answer.rows.filter((row) => row.kind === "play").map((row) => row.id))
   const claimed = new Set(
     handedOnce.length === 0
       ? []
@@ -136,18 +135,24 @@ export async function readInbox(asked: Array<{ mailbox: string; after?: string }
   return answers.map(({ mailbox, rows, more }) => ({
     mailbox,
     messages: rows
-      .filter((row) => (row.kind !== "play" && row.kind !== "now") || claimed.has(row.id))
+      .filter((row) => row.kind !== "play" || claimed.has(row.id))
       .map((row) => ({ id: String(row.id), kind: row.kind, data: row.data, sentAt: row.sentAt.getTime() })),
     more,
   }))
 }
 
-/** Deletes, per mailbox, every message up to and including `upTo`; answers how many went. */
+/**
+ * Deletes, per mailbox, every message up to and including `upTo` but the now, which stays the newest until a newer one
+ * or its expiry; answers how many went.
+ */
 export async function ackMessages(acks: Array<{ mailbox: string; upTo: string }>) {
   const deleted = await db
     .delete(messages)
     .where(
-      or(...acks.map(({ mailbox, upTo }) => and(eq(messages.mailboxHash, storageKey(mailbox)), lte(messages.id, Number(upTo))))),
+      and(
+        ne(messages.kind, "now"),
+        or(...acks.map(({ mailbox, upTo }) => and(eq(messages.mailboxHash, storageKey(mailbox)), lte(messages.id, Number(upTo))))),
+      ),
     )
   return deleted.rowCount ?? 0
 }

@@ -117,7 +117,7 @@ describe("the built server", () => {
     expect(sent.headers.get("x-content-type-options")).toBe("nosniff")
   })
 
-  it("holds an inbox read until a now lands, and hands that now out once", async () => {
+  it("holds an inbox read until a now lands, then hands that now to a read without a cursor only", async () => {
     const mailbox = randomId()
     const began = Date.now()
     let answered = false
@@ -128,12 +128,14 @@ describe("the built server", () => {
     const answer = await reading
     const tookMs = Date.now() - began
     const again = await post("/api/v1/messages/inbox", { mailboxes: [{ mailbox }] })
+    const past = await post("/api/v1/messages/inbox", { mailboxes: [{ mailbox, after: sent.body.id }] })
 
     expect(heldWhileEmpty).toBe(true)
     expect(sent.status).toBe(201)
     expect(answer.body.mailboxes[0].messages).toEqual([{ id: sent.body.id, kind: "now", data: "bm93", sentAt: expect.any(Number) }])
     expect(tookMs).toBeLessThan(3_000)
-    expect(again.body.mailboxes[0].messages).toEqual([])
+    expect(again.body.mailboxes[0].messages.map((message: { id: string }) => message.id)).toEqual([sent.body.id])
+    expect(past.body.mailboxes[0].messages).toEqual([])
   })
 
   it("answers API errors as JSON", async () => {

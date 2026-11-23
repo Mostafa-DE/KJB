@@ -380,19 +380,43 @@ describe("POST /api/v1/messages/inbox", () => {
     expect(nextMonth.mailboxes[0].messages).toEqual([])
   })
 
-  it("hands a now out once, as a play, and drops it after 10 minutes", async () => {
+  it("hands the newest now to every read, to a read after it only a newer one, and drops it after 10 minutes", async () => {
     const mailbox = randomId()
     const now = await send(mailbox, "now")
 
     const first = await inbox(mailbox)
     const second = await inbox(mailbox)
-    await send(mailbox, "now")
+    const past = await inbox({ mailbox, after: now.id })
+    const newer = await send(mailbox, "now")
+    const next = await inbox({ mailbox, after: now.id })
     advanceClock(10 * MINUTE_MS + 1000)
     const later = await inbox(mailbox)
 
     expect(first.mailboxes[0].messages.map((message) => message.id)).toEqual([now.id])
-    expect(second.mailboxes[0].messages).toEqual([])
+    expect(second.mailboxes[0].messages.map((message) => message.id)).toEqual([now.id])
+    expect(past.mailboxes[0].messages).toEqual([])
+    expect(next.mailboxes[0].messages.map((message) => message.id)).toEqual([newer.id])
     expect(later.mailboxes[0].messages).toEqual([])
+  })
+
+  it("holds a read whose cursor is past the newest now, and answers it with the next now", async () => {
+    const mailbox = randomId()
+    const seen = await send(mailbox, "now")
+    let answered = false
+    const reading = (async () => {
+      const began = Date.now()
+      const answer = await call(handleInbox, { mailboxes: [{ mailbox, after: seen.id }], wait: 5_000 })
+      answered = true
+      return { ...answer, tookMs: Date.now() - began }
+    })()
+    await sleep(300)
+    const heldPastIt = !answered
+    const newer = await send(mailbox, "now")
+    const answer = await reading
+
+    expect(heldPastIt).toBe(true)
+    expect(answer.tookMs).toBeLessThan(2_000)
+    expect(answer.body.mailboxes[0].messages.map((message: { id: string }) => message.id)).toEqual([newer.id])
   })
 
   it("holds a read with wait until a message lands in one of its mailboxes, then answers with it", async () => {
@@ -490,9 +514,9 @@ describe("POST /api/v1/messages/inbox", () => {
     }
   })
 
-  it("reads nothing for a phone already gone, so plays and nows wait for its next read", async () => {
+  it("reads nothing for a phone already gone, so its plays wait for its next read", async () => {
     const mailbox = randomId()
-    const now = await send(mailbox, "now")
+    const play = await send(mailbox, "play")
     const gone = new AbortController()
     gone.abort()
 
@@ -500,7 +524,7 @@ describe("POST /api/v1/messages/inbox", () => {
     const next = await inbox(mailbox)
 
     expect(answer.body.mailboxes[0].messages).toEqual([])
-    expect(next.mailboxes[0].messages.map((message) => message.id)).toEqual([now.id])
+    expect(next.mailboxes[0].messages.map((message) => message.id)).toEqual([play.id])
   })
 
   it("counts held reads in their own window per address, and past it answers at once", async () => {
@@ -551,6 +575,18 @@ describe("POST /api/v1/messages/ack", () => {
     expect(again.body).toEqual({ deleted: 0 })
     expect(answer.mailboxes[0].messages.map((message) => message.id)).toEqual([c.id])
     expect(answer.mailboxes[1].messages).toEqual([])
+  })
+
+  it("never deletes a now: it stays the newest until a newer one or its 10 minutes", async () => {
+    const mailbox = randomId()
+    const now = await send(mailbox, "now")
+    const card = await send(mailbox, "card")
+
+    const acked = await call(handleAck, { acks: [{ mailbox, upTo: card.id }] })
+    const answer = await inbox(mailbox)
+
+    expect(acked.body).toEqual({ deleted: 1 })
+    expect(answer.mailboxes[0].messages.map((message) => message.id)).toEqual([now.id])
   })
 
   it("deletes nothing through a wrong mailbox id", async () => {

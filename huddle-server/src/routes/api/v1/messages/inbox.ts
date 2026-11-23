@@ -44,7 +44,7 @@ export const handleInbox = apiRoute(
       : null
     try {
       for (;;) {
-        // A phone already gone gets nothing read: plays and nows go once read, so they wait for its next read.
+        // A phone already gone gets nothing read: plays go once read, so they wait for its next read.
         if (signal.aborted) {
           return json(200, { now: Date.now(), mailboxes: mailboxes.map(({ mailbox }) => ({ mailbox, messages: [], more: false })) })
         }
@@ -54,7 +54,7 @@ export const handleInbox = apiRoute(
         if (!stop || left <= 0 || read.some((entry) => entry.messages.length > 0 || entry.more)) {
           return json(200, { now: now.getTime(), mailboxes: read })
         }
-        // Woken by a send, the time up or the phone gone; a play or a now another read took first means a read again.
+        // Woken by a send, the time up or the phone gone; a play another read took first means a read again.
         if (!landed) {
           await new Promise<void>((resolve) => {
             const timer = setTimeout(done, left)

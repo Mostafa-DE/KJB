@@ -155,7 +155,7 @@ Message kinds and how long the server keeps them:
 | `card` | A song, album or playlist, with an optional note | 65,536 bytes | Until acknowledged or deleted; 30 days at most |
 | `profile` | The sender's display name | 4,096 bytes | Until acknowledged; 30 days at most. A new profile replaces an unread older one in the same mailbox |
 | `play` | One live listening event | 2,048 bytes | Until the first `inbox` call returns it (then deleted at once); 24 hours at most. A mailbox keeps its newest 500 plays; older ones are dropped |
-| `now` | What the sender's player does now (playing, paused or stopped, where in the song), sent at each change and every minute while it plays | 2,048 bytes | Until the first `inbox` call returns it (then deleted at once); 10 minutes at most. A new now replaces the one waiting in the same mailbox |
+| `now` | What the sender's player does now (playing, paused or stopped, where in the song), sent at each change and every minute while it plays | 2,048 bytes | Until a new now replaces it in the same mailbox; 10 minutes at most. Every `inbox` call gets it, and neither a read nor `ack` deletes it |
 
 A mailbox holds at most 200 cards and profiles together, and at most 4 MiB of their data. A send above either limit
 gets `409 mailbox_full` (show "Your friend's inbox is full. They need to open KJB."). Plays and nows never fill a
@@ -220,8 +220,10 @@ when its wait ends gets nothing read, so no play is handed to a closed connectio
 - At most 100 messages per mailbox and about 1 MiB of data per response. `more: true` means there is more: call again
   with `after` set to the last id you got (or without `after` if that mailbox returned nothing this time). Once an
   answer is full, the mailboxes after it come back with no messages, and `more` says whether any wait.
-- Plays and nows in the answer are deleted on the server as they are returned, and each goes to one call only: two
-  calls at the same moment never both get it. Cards and profiles stay until `ack`.
+- Plays in the answer are deleted on the server as they are returned, and each goes to one call only: two calls at
+  the same moment never both get it. Cards and profiles stay until `ack`. A now stays the newest until a newer one
+  replaces it or its 10 minutes pass: a read without `after` finds what each friend does now (a phone just opened), and
+  a read with `after` at the last id it got finds only a newer one, so a held read with it waits for the next change.
 - `now` is the server's clock, for showing "2 minutes ago" correctly on a phone whose clock is off.
 
 ### `POST /api/v1/messages/ack`
@@ -233,7 +235,8 @@ After the phone has stored what it read.
 ```
 
 Up to 64 entries, each mailbox at most once. Deletes every message in that mailbox with an id up to and including
-`upTo`. `200 {"deleted": 3}` (the total over all entries; `0` is fine and safe to retry).
+`upTo`, except a now (it stays the newest until a newer one replaces it). `200 {"deleted": 3}` (the total over all
+entries; `0` is fine and safe to retry).
 
 ### `POST /api/v1/messages/delete`
 
@@ -258,20 +261,28 @@ Up to 64 entries, each mailbox at most once. Deletes every message in that mailb
 ## How the phones poll
 
 - While KJB is in front, on any page: a check when it comes to the front, and from then on one held read always open
-  (`inbox` with `wait` 25,000), the next one asked as soon as one answers. A friend's play, pause, skip or stop reaches
+  (`inbox` with `wait` 25,000), the next one asked as soon as one answers. Each read asks `after` the last id this run
+  of KJB got from each mailbox (the first asks without, so it finds each friend's newest now at once), and only one is
+  held at a time, also when KJB comes back to the front while one is held. A friend's play, pause, skip or stop reaches
   the screen within about a second. A check asks only what there is to ask: `invites/status` for each invite still
   waiting, `messages/send` for what waits to go, then one `messages/inbox` call for every friend's incoming mailbox.
   Without friends, a check every 30 seconds.
 - KJB not in front: no checks in v1 (no push, no background work). Plays and nows still go from the player as they
   happen, screen off or not.
 - After `inbox`: store, then one `messages/ack` call up to the last message read in each mailbox that returned a card,
-  a profile or one that does not open. Plays and nows are gone once read and need no ack.
+  a profile or one that does not open. Plays and nows need no ack: a play is gone once read, and a now stays until a
+  newer one replaces it.
 - Sending: one `messages/send` per friend (each friend has their own mailbox and their own sealed copy). Plays and nows
   go to the friends the user shares with, unless "Listen privately" is on. A play goes once 10 s of the song were
   heard, a now at once at each play, pause, resume, skip, seek and stop (several within half a second go as the newest),
-  and every minute while the song plays. A now is not stored on the phone and not sent again: the next one replaces it.
+  and every minute while the song plays. A now is kept in memory only: one a friend's server did not answer is sent
+  to that friend again after 2 s, 5 s and 15 s while it is the newest, and after that the next change or heartbeat
+  replaces it. A friend who saw your last song is told it stopped when the next one is not shared (a book, a podcast)
+  or the queue ends.
 - A friend shows as playing while their newest now says playing, is at most 150 s old (two heartbeats missed) and their
-  song has not ended more than 30 s ago; paused for 10 minutes after the pause; stopped at once.
+  song has not ended more than 30 s ago; paused for 10 minutes after the pause; stopped at once. A now's age is the
+  server's (`now` less its `sentAt`), so a phone clock that is off changes nothing. The server keeps every now for 10
+  minutes whatever it says, as it cannot read it; the phone applies those times.
 - Failures: a `502`, or a `503` without the server's own error, is Railway restarting: that call is tried once more
   after 3 s. A check without an answer (network error, `5xx`) is tried again after 30 s, 2 min and 10 min, then every
   hour until one answers, and back to every 30 s. A card or play without an answer is sent again after 30 s, 2 min
