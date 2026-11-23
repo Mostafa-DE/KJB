@@ -661,6 +661,7 @@ fun sourceLabel(resources: Resources, source: QueueSource): String = when (sourc
     SourceKind.MOST_PLAYED -> resources.getString(R.string.lib_most_played)
     SourceKind.RECENTLY_PLAYED -> resources.getString(R.string.lib_recently_played)
     SourceKind.RECENTLY_ADDED -> resources.getString(R.string.lib_recently_added)
+    SourceKind.NOT_PLAYED -> resources.getString(R.string.lib_not_played)
     SourceKind.OPENED -> resources.getString(R.string.open_queue)
     SourceKind.SUGGESTIONS -> source.name
     SourceKind.SONGS -> source.name.ifEmpty { resources.getString(R.string.library_tab_songs) }

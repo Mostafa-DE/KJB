@@ -498,6 +498,21 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun `Not played starts on all time in its own order, and keeps the chip and the order it was left on`() {
+        val library = Settings().library
+        assertEquals(ListPeriod.ALL_TIME, library.periodOf(SongList.NOT_PLAYED))
+        assertEquals(ListSort.OWN, library.sortOf(SongList.NOT_PLAYED))
+
+        val picked = Settings(library = LibrarySettings(listSorts = mapOf(SongList.NOT_PLAYED to ListSort(SortSongs.TITLE, reversed = true)), listPeriods = mapOf(SongList.NOT_PLAYED to ListPeriod.DAYS_60)))
+        val read = SettingsJson.decode(SettingsJson.encode(picked))!!.library
+        assertEquals(ListPeriod.DAYS_60, read.periodOf(SongList.NOT_PLAYED))
+        assertEquals(ListSort(SortSongs.TITLE, reversed = true), read.sortOf(SongList.NOT_PLAYED))
+        // Put back in its own order, it is kept there.
+        val own = Settings(library = LibrarySettings(listSorts = mapOf(SongList.NOT_PLAYED to ListSort.OWN)))
+        assertEquals(mapOf(SongList.NOT_PLAYED to ListSort.OWN), SettingsJson.decode(SettingsJson.encode(own))!!.library.listSorts)
+    }
+
+    @Test
     fun `a chip stored for a page without chips, or one this version does not know, is left out`() {
         val text = """{"library":{"listPeriods":{"ALBUM":"DAYS_15","RECENTLY_ADDED":"DAYS_7","MOST_PLAYED":60,"RADIO":"ALL_TIME","RECENTLY_PLAYED":"DAYS_365"}}}"""
         assertEquals(mapOf(SongList.RECENTLY_PLAYED to ListPeriod.DAYS_365), SettingsJson.decode(text)!!.library.listPeriods)

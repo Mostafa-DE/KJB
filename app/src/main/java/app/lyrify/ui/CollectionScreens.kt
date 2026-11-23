@@ -86,6 +86,7 @@ import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
 import app.lyrify.library.displayTitle
+import app.lyrify.library.notPlayed
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.search.fold
 import app.lyrify.player.QueueSource
@@ -654,24 +655,24 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
 }
 
 /**
- * Most played (with an Insights button beside its sort), Recently played, or Recently added: its period chips (each
- * list keeps the one it was left on, [ListPeriod]) and Search in this list over its header and songs. The hero's line,
- * the header, Shuffle and Play all go by the songs shown: the chip's, those the search leaves.
+ * Most played (with an Insights button beside its sort), Recently played, Recently added, or Not played: its period chips
+ * (each list keeps the one it was left on, [ListPeriod]) and Search in this list over its header and songs. The hero's
+ * line, the header, Shuffle and Play all go by the songs shown: the chip's, those the search leaves.
  */
 @Composable
 private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
     val context = LocalContext.current
     val nav = LocalNavigator.current
     val change = rememberSettingsChange()
-    val keyboard = LocalSoftwareKeyboardController.current
     val title = stringResource(list.words)
     val (order, onOrder) = rememberListSort(ui, list.songList)
     val period = ui.settings.library.periodOf(list.songList)
     var sorting by rememberSaveable { mutableStateOf(false) }
     var words by rememberSaveable { mutableStateOf("") }
-    // Most played and Recently played bring each song's plays in the period, which their order goes by; Recently added
-    // reads every song's when sorted by them. Each song with its plays, for the note after the artist: "12 plays", or
-    // when it was played last. Read again on each play logged, so the list follows it, and as the day turns.
+    // Most played and Recently played bring each song's plays in the period, which their order goes by, and Not played
+    // each song's of all time (none: never played); Recently added reads every song's when sorted by them. Each song with
+    // its plays, for the note after the artist: "12 plays", or when it was played last. Read again on each play logged,
+    // so the list follows it, and as the day turns.
     val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
     val today = rememberToday()
     val rows by produceState<List<Pair<Song, SongPlays?>>?>(null, library, list, written, period, today) {
@@ -681,7 +682,8 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
         value = when (list) {
             BuiltInList.MOST_PLAYED -> found(plays.mostPlayed(PLAYED_LIST_SIZE, since))
             BuiltInList.RECENTLY_PLAYED -> found(plays.recentlyPlayed(RECENTLY_PLAYED_SIZE, since))
-            // Off the main thread: over all time it is the whole library.
+            // Off the main thread: over all time each may be the whole library.
+            BuiltInList.NOT_PLAYED -> withContext(Dispatchers.Default) { notPlayed(plays, library, since) }
             else -> withContext(Dispatchers.Default) { recentlyAdded(library, since).map { it to null } }
         }
     }
@@ -696,17 +698,16 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
     val kind = when (list) {
         BuiltInList.MOST_PLAYED -> SourceKind.MOST_PLAYED
         BuiltInList.RECENTLY_PLAYED -> SourceKind.RECENTLY_PLAYED
+        BuiltInList.NOT_PLAYED -> SourceKind.NOT_PLAYED
         else -> SourceKind.RECENTLY_ADDED
-    }
-    val notes = songs.associate { song ->
-        song.path to rowPlays?.get(song.path)?.let { p -> if (list == BuiltInList.MOST_PLAYED) playsNote(p.count) else lastPlayedText(p.lastPlayedAt) }
     }
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null && shown != null) { songList ->
         item(key = "hero", contentType = "hero") {
             Box(rowMotion(reduced)) {
                 FavouritesHead(title, songsMeta(songs, hours = true), list) {
-                    ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = sortChip(order, R.string.lib_sort_title), onSort = { sorting = true }, gutter = 0.dp) {
+                    // The own order's name: of these lists only Not played has one.
+                    ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = sortChip(order, R.string.lib_sort_never_played_first), onSort = { sorting = true }, gutter = 0.dp) {
                         // Most played's way to Insights: a small button beside the sort, not a card above the songs (user 2026-11-22).
                         if (list == BuiltInList.MOST_PLAYED) HeaderButton(R.drawable.ic_bar_chart, stringResource(R.string.insights_open), enabled = true, primary = false, label = false) { nav.open(Page.Listening) }
                     }
@@ -730,29 +731,39 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
                 }
             }
         }
-        item(key = "find", contentType = "find") {
-            LyrifySearchField(
-                words,
-                { words = it },
-                stringResource(R.string.lib_find_in_list),
-                rowMotion(reduced).fillMaxWidth().padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp),
-                onSearch = { keyboard?.hide() },
-            ) {
-                if (words.isNotEmpty()) ChromeIconButton(R.drawable.ic_close, stringResource(R.string.search_clear), { words = "" }, glass = false, size = 36.dp)
-            }
-        }
+        item(key = "find", contentType = "find") { FindInListField(words, { words = it }, rowMotion(reduced)) }
         if (rows != null && shown != null && songs.isEmpty()) {
             item(key = "empty", contentType = "empty") {
                 if (words.isNotBlank() && rows.orEmpty().isNotEmpty()) {
                     EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match), rowMotion(reduced), action = stringResource(R.string.search_clear), onAction = { words = "" })
+                } else if (list == BuiltInList.NOT_PLAYED && library.songs.any { !it.isPodcast }) {
+                    EmptyState(EmptyArt.Glyph, stringResource(R.string.lib_not_played_empty_title), rowMotion(reduced), text = stringResource(if (period == ListPeriod.ALL_TIME) R.string.lib_not_played_empty else R.string.lib_not_played_empty_period))
                 } else {
-                    EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(if (list == BuiltInList.RECENTLY_ADDED) R.string.lib_added_empty else R.string.lib_played_empty))
+                    EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(if (list == BuiltInList.RECENTLY_PLAYED || list == BuiltInList.MOST_PLAYED) R.string.lib_played_empty else R.string.lib_added_empty))
                 }
             }
         }
-        songRows(songList, note = { notes[it.path] })
+        songRows(songList, note = { song -> rowPlays?.get(song.path)?.let { p -> if (list == BuiltInList.MOST_PLAYED) playsNote(p.count) else lastPlayedText(p.lastPlayedAt) } })
     }
-    if (sorting) ListSortSheet(list.songList, order, R.string.lib_sort_title, onOrder) { sorting = false }
+    if (sorting) ListSortSheet(list.songList, order, R.string.lib_sort_never_played_first, onOrder) { sorting = false }
+}
+
+/**
+ * Search in this list's field, on the period lists and over Favourites' songs: Clear while words are typed, and Search
+ * puts the keyboard away; [modifier] is its place in the list.
+ */
+@Composable
+private fun FindInListField(words: String, onWords: (String) -> Unit, modifier: Modifier) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    LyrifySearchField(
+        words,
+        onWords,
+        stringResource(R.string.lib_find_in_list),
+        modifier.fillMaxWidth().padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp),
+        onSearch = { keyboard?.hide() },
+    ) {
+        if (words.isNotEmpty()) ChromeIconButton(R.drawable.ic_close, stringResource(R.string.search_clear), { onWords("") }, glass = false, size = 36.dp)
+    }
 }
 
 /**
@@ -771,7 +782,8 @@ fun findInList(songs: List<Song>, words: String, settings: LibrarySettings): Lis
  * The tabs' pages follow the finger left and right and each keeps its place ([TabPages]); the compact head ([FavouritesHead])
  * scrolls away above them, and then the tabs stay under the top bar ([CollapsingTabs]). One kind alone shows without tabs, and
  * nothing at all the empty state. It reopens on the tab used last (kept in settings.json), or on the first with
- * something while that one is empty.
+ * something while that one is empty. Songs starts with Search in this list, as the period lists do: the head's line,
+ * Shuffle and Play go by the songs it leaves, and the custom order's handles wait until it is cleared.
  */
 @Composable
 internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
@@ -784,11 +796,23 @@ internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
     var sorting by rememberSaveable { mutableStateOf(false) }
     // Each song with its entry's key, carried wherever the sort puts it: the rows and their keys are one list ([listedEntries]).
     val placed = remember(favourites, entryKeys) { listedEntries(favourites.songPlaces.zip(favourites.songs), entryKeys) }
-    val entries = rememberInOrder(placed, order, ui.settings.library) { it.song }.orEmpty()
+    val sorted = rememberInOrder(placed, order, ui.settings.library) { it.song }.orEmpty()
+    var words by rememberSaveable { mutableStateOf("") }
+    // The rows Search in this list leaves, found off the main thread as on the period lists (the rows before shown
+    // meanwhile; none before the first, as a search kept over a turn of the phone is worked out again). While nothing is
+    // typed all of them at once, so a drag in the custom order moves the rows as it goes.
+    val found by produceState<List<ListedEntry>?>(null, sorted, words, ui.settings.library) {
+        value = if (words.isBlank()) sorted else withContext(Dispatchers.Default) {
+            val kept = findInList(sorted.map { it.song }, words, ui.settings.library).mapTo(HashSet()) { it.path }
+            sorted.filter { it.song.path in kept }
+        }
+    }
+    val entries = if (words.isBlank()) sorted else found.orEmpty()
     val songs = remember(entries) { entries.map { it.song } }
     val actions = rememberSongActions()
     val rows = rememberLazyListState()
-    val reorder = rememberSongReorder(rows, ordered, { entries.map { it.place } }) { shown -> actions.arrangeFavourites(shown) }.takeIf { order.reorders }
+    // A drag among the songs a search leaves would move the ones it hides.
+    val reorder = rememberSongReorder(rows, ordered, { entries.map { it.place } }) { shown -> actions.arrangeFavourites(shown) }.takeIf { order.reorders && words.isBlank() }
     val others = FavouritesTab.entries.filter { it != FavouritesTab.SONGS }.sumOf { favourites.count(it) }
     var picked by rememberSaveable { mutableStateOf<FavouritesTab?>(null) }
     val shown = favourites.shown(picked ?: ui.settings.nav.favouritesTab)
@@ -811,10 +835,10 @@ internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
     }
     val hero: @Composable (PageSongs) -> Unit = { list ->
         FavouritesHead(favouritesHeadTitle(title, root), songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }) {
-            ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = if (songs.isEmpty()) null else sortChip(order, R.string.lib_sort_custom), onSort = { sorting = true }, gutter = 0.dp)
+            ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = if (sorted.isEmpty()) null else sortChip(order, R.string.lib_sort_custom), onSort = { sorting = true }, gutter = 0.dp)
         }
     }
-    SongPageFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under || heroUnder, backdrop, ui, root = root) }) { list, padding ->
+    SongPageFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under || heroUnder, backdrop, ui, root = root) }, loaded = words.isBlank() || found != null) { list, padding ->
         val bottom = PaddingValues(bottom = padding.calculateBottomPadding() + 16.dp)
         if (tabs.isEmpty()) {
             LazyColumn(Modifier.fillMaxSize(), state = rows, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
@@ -824,7 +848,13 @@ internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
                 }
                 when (shown) {
                     null -> item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_favorite), stringResource(R.string.lib_fav_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_fav_empty)) }
-                    FavouritesTab.SONGS -> songRows(list, keys = entries.map { it.key }, reorder = reorder)
+                    FavouritesTab.SONGS -> {
+                        item(key = "find", contentType = "find") { FindInListField(words, { words = it }, rowMotion(reduced)) }
+                        if (words.isNotBlank() && found?.isEmpty() == true) {
+                            item(key = "no match", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match), rowMotion(reduced), action = stringResource(R.string.search_clear), onAction = { words = "" }) }
+                        }
+                        songRows(list, keys = entries.map { it.key }, reorder = reorder)
+                    }
                     else -> favouriteRows(shown, favourites, library, reduced)
                 }
             }
@@ -838,7 +868,13 @@ internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
                 TabPages(pager, Modifier.fillMaxSize(), swipe = !list.selection.active) { tab ->
                     LazyColumn(Modifier.fillMaxSize(), state = if (tab == FavouritesTab.SONGS) rows else rememberLazyListState(), contentPadding = bottom) {
                         when (tab) {
-                            FavouritesTab.SONGS -> songRows(list, keys = entries.map { it.key }, reorder = reorder)
+                            FavouritesTab.SONGS -> {
+                                item(key = "find", contentType = "find") { FindInListField(words, { words = it }, rowMotion(reduced)) }
+                                if (words.isNotBlank() && found?.isEmpty() == true) {
+                                    item(key = "no match", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match), rowMotion(reduced), action = stringResource(R.string.search_clear), onAction = { words = "" }) }
+                                }
+                                songRows(list, keys = entries.map { it.key }, reorder = reorder)
+                            }
                             else -> favouriteRows(tab, favourites, library, reduced)
                         }
                     }

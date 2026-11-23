@@ -41,6 +41,7 @@ class LibraryTreeTest {
         favourites: List<SongRef> = emptyList(),
         mostPlayed: List<Song> = emptyList(),
         recentlyPlayed: List<Song> = emptyList(),
+        notPlayed: List<Song> = emptyList(),
         found: Found? = null,
         lib: Library = library,
     ) = TreeData(
@@ -51,6 +52,7 @@ class LibraryTreeTest {
         favourites = favourites,
         mostPlayed = mostPlayed,
         recentlyPlayed = recentlyPlayed,
+        notPlayed = notPlayed,
         now = now,
         found = listOfNotNull(found).associateBy { it.query },
     ) { it.name ?: it.source.name }
@@ -160,6 +162,21 @@ class LibraryTreeTest {
             ),
             sources,
         )
+    }
+
+    @Test
+    fun `the car's Not played comes after Recently added, holds the app's songs in order and plays as the app's own list`() {
+        val data = data(notPlayed = listOf(ember, harbour[3]))
+        assertEquals(listOf(LibraryTree.SHUFFLE_ALL, LibraryTree.RECENTLY_ADDED, LibraryTree.NOT_PLAYED), children(LibraryTree.PLAYLISTS, data).filter { it.group == LibraryTree.BUILT_FOR_YOU }.map { it.id })
+        assertEquals(listOf(ember.path, harbour[3].path), children(LibraryTree.NOT_PLAYED, data).map { it.song!!.path })
+        // BuiltInPage plays it as its BuiltInList name, with no name.
+        val source = QueueSource(SourceKind.NOT_PLAYED, BuiltInList.NOT_PLAYED.name, "")
+        assertEquals(TreePlay.FromList(listOf(ember.ref, harbour[3].ref), 1, source), LibraryTree.play(children(LibraryTree.NOT_PLAYED, data)[1].id, data))
+        assertTrue(LibraryTree.isList(LibraryTree.NOT_PLAYED))
+        // A car showing it hears when one of its covers changes.
+        assertEquals(2, LibraryTree.showing(setOf(ember.path), data)[LibraryTree.NOT_PLAYED])
+        // Empty, it is left out, as the other Built for you lists are.
+        assertFalse(LibraryTree.NOT_PLAYED in children(LibraryTree.PLAYLISTS, data()).map { it.id })
     }
 
     // Albums, as a grid

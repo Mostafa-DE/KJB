@@ -322,6 +322,44 @@ class LibraryListsTest {
     }
 
     @Test
+    fun `Not played is a list with chips like the others, with its own songs, queue and empty words, in Library and Search after Recently added (the wiring, read from the source)`() {
+        // Its songs are notPlayed's (PlaylistsTest, ListeningTest), the page's head, chips and search the other lists' own.
+        val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText().substringAfter("private fun BuiltInPage(").substringBefore("\n}\n")
+        assertTrue(page.contains("BuiltInList.NOT_PLAYED -> withContext(Dispatchers.Default) { notPlayed(plays, library, since) }"))
+        assertTrue(page.contains("BuiltInList.NOT_PLAYED -> SourceKind.NOT_PLAYED"))
+        assertTrue(page.contains("R.string.lib_not_played_empty_title"))
+        // Its own order is named in the head's chip and the sort sheet (only Not played has one among these lists).
+        assertEquals(2, Regex("""R\.string\.lib_sort_never_played_first""").findAll(page).count())
+        // Library's Built for you and the lists Search finds count it over its chip, after Recently added.
+        val library = File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()
+        assertTrue(library.indexOf("BuiltInRow(BuiltInList.RECENTLY_ADDED, added)") < library.indexOf("BuiltInRow(BuiltInList.NOT_PLAYED, unplayed)"))
+        assertTrue(library.contains("notPlayed(Lyrify.plays(context), library, sinceOf(ui.settings.library.periodOf(SongList.NOT_PLAYED)"))
+        val search = File("src/main/java/app/lyrify/ui/SearchScreen.kt").readText()
+        assertTrue(search.contains("BuiltInList.NOT_PLAYED to notPlayed(plays, library, sinceOf(settings.periodOf(SongList.NOT_PLAYED)"))
+        // An imported playlist never takes its name.
+        assertTrue(File("src/main/java/app/lyrify/ui/ImportScreens.kt").readText().contains("R.string.lib_recently_added, R.string.lib_not_played)"))
+        val strings = File("src/main/res/values/strings_library.xml").readText()
+        assertTrue(strings.contains("""<string name="lib_not_played_empty_title">You\'ve played every song</string>"""))
+        assertTrue(strings.contains("""<string name="lib_sort_never_played_first">Never played first</string>"""))
+        // Grok review: "You've played every song" only where there are songs (else the other lists' "No songs yet"), and a
+        // chip's own line, as a song not played in its days shows there too.
+        assertTrue(page.contains("list == BuiltInList.NOT_PLAYED && library.songs.any { !it.isPodcast }"))
+        assertTrue(page.contains("if (period == ListPeriod.ALL_TIME) R.string.lib_not_played_empty else R.string.lib_not_played_empty_period"))
+        assertTrue(page.contains("if (list == BuiltInList.RECENTLY_PLAYED || list == BuiltInList.MOST_PLAYED) R.string.lib_played_empty else R.string.lib_added_empty"))
+        assertTrue(strings.contains("""<string name="lib_not_played_empty_period">Songs you haven\'t played in this time show here.</string>"""))
+    }
+
+    @Test
+    fun `a period list words each row's note as the row is shown, never every song's at each key typed (the wiring, read from the source)`() {
+        // Grok review: Not played over a chip holds most of the library, and the notes were all worked out on the main thread
+        // at each recomposition, each letter typed in Search in this list among them.
+        val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText().substringAfter("private fun BuiltInPage(").substringBefore("\n}\n")
+        assertFalse(page.contains("songs.associate"))
+        assertTrue(page.contains("songRows(songList, note = { song -> rowPlays?.get(song.path)?.let { p -> if (list == BuiltInList.MOST_PLAYED) playsNote(p.count) else lastPlayedText(p.lastPlayedAt) } })"))
+        assertTrue(File("src/main/java/app/lyrify/ui/LibraryParts.kt").readText().contains("note: (@Composable (Song) -> String?)? = null,"))
+    }
+
+    @Test
     fun `album cards carry a tag a device test finds them by, never their album's name`() {
         // UiAutomator sees a Compose test tag only as a resource id, and only where the tree asks for that.
         val card = File("src/main/java/app/lyrify/ui/LibraryParts.kt").readText().substringAfter("fun AlbumCard(").substringBefore("\n}\n")

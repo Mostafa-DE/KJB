@@ -267,7 +267,7 @@ fun LazyListScope.songRows(
     shown: List<Song> = list.songs,
     offset: Int = 0,
     place: (Int) -> SheetPlace = { SheetPlace.List },
-    note: ((Song) -> String?)? = null,
+    note: (@Composable (Song) -> String?)? = null,
     keys: List<Any> = songRowKeys(shown),
     reorder: SongReorder? = null,
     tour: Boolean = false,
