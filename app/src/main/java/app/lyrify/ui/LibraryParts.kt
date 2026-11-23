@@ -505,7 +505,7 @@ fun <T> SortSheet(title: String, options: List<Pair<T, String>>, selected: T, on
  * found in its lyrics the matching [line] under the artist. While selecting, a tap on the row or on its round check
  * ([onCheck], 48 dp) picks or unpicks it, and a picked row has its own rounded fill ([rowFill]). In a custom order a
  * [handle] comes before "⋯", and TalkBack gets the row's [moves]. A suggested song may carry the suggestion [mark] before
- * its artist and its [reason] in grey under it (suggestions/).
+ * its artist and its [reason] in grey under it (suggestions/). The song's length ends the artist's line ([rowLength]).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -536,7 +536,10 @@ fun SongRow(
         LyricsMark.PLAIN -> stringResource(R.string.lib_mark_plain)
         LyricsMark.NONE -> null
     }
-    val description = songRowWords(title, artist, markWords, note, line?.text, if (marks.playing) stringResource(R.string.lib_playing) else null, mark, reason)
+    val length = rowLength(song.durationMs)
+    // TalkBack says the length in words, "5 minutes 7 seconds".
+    val lengthWords = spokenLength(song.durationMs).map { (words, count) -> pluralStringResource(words, count, count) }.joinToString(" ")
+    val description = songRowWords(title, artist, markWords, note, line?.text, if (marks.playing) stringResource(R.string.lib_playing) else null, mark, reason, lengthWords.ifEmpty { null })
     val tapLabel = stringResource(if (selecting) R.string.lib_select else R.string.lib_play)
     val holdLabel = if (onLongPress != null) stringResource(R.string.lib_select) else null
     val tap = rememberWaitingTap(onTap)
@@ -588,19 +591,25 @@ fun SongRow(
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Only the song playing has the green dot.
-                    RowMark(playing, reduced) { PlayingDot(Modifier.padding(end = 6.dp)) }
-                    if (mark != null) SuggestedMark(mark, Modifier.padding(end = 6.dp))
-                    Text(
-                        listOfNotNull(artist, note).joinToString(" · "),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = colors.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false),
-                    )
-                    // A song with lyrics, synced or plain: the lyrics icon right after its artist.
-                    if (marks.lyrics != LyricsMark.NONE) LyricsIcon(Modifier.padding(start = 6.dp))
+                    // The artist gives way first, so a note ("3 days ago") and the length after it always show whole.
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        // Only the song playing has the green dot.
+                        RowMark(playing, reduced) { PlayingDot(Modifier.padding(end = 6.dp)) }
+                        if (mark != null) SuggestedMark(mark, Modifier.padding(end = 6.dp))
+                        Text(
+                            artist,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (note != null) Text(stringResource(R.string.lib_after_dot, note), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        // A song with lyrics, synced or plain: the lyrics icon right after its artist.
+                        if (marks.lyrics != LyricsMark.NONE) LyricsIcon(Modifier.padding(start = 6.dp))
+                    }
+                    // The song's length at the row's end, before "⋯": small print in the secondary ink, never wrapped or cut.
+                    if (length != null) Text(length, style = MaterialTheme.typography.bodySmall.tabular(), color = colors.onSurfaceVariant, maxLines = 1, softWrap = false, modifier = Modifier.padding(start = 8.dp))
                 }
                 if (line != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
@@ -634,11 +643,27 @@ fun SongRow(
 }
 
 /**
- * What TalkBack says for a song's row: its title, artist, lyrics, note and lyrics line, ([playing]) that it plays, and a
- * suggestion's [mark] and [reason].
+ * What TalkBack says for a song's row: its title, artist, lyrics, note, [length] in words and lyrics line, ([playing]) that
+ * it plays, and a suggestion's [mark] and [reason].
  */
-fun songRowWords(title: String, artist: String, lyrics: String?, note: String?, line: String?, playing: String?, mark: String? = null, reason: String? = null): String =
-    listOfNotNull(title, artist, lyrics, note, line, playing, mark, reason).joinToString(", ")
+fun songRowWords(title: String, artist: String, lyrics: String?, note: String?, line: String?, playing: String?, mark: String? = null, reason: String? = null, length: String? = null): String =
+    listOfNotNull(title, artist, lyrics, note, length, line, playing, mark, reason).joinToString(", ")
+
+/**
+ * A song's length at the end of its row, as the player's time labels show it ([clock]): "5:07", "1:02:13" from an hour.
+ * None when the length is unknown (MediaStore's 0), or under a second, which would read "0:00".
+ */
+fun rowLength(ms: Long): String? = if (ms < 1_000) null else clock(ms)
+
+/** A song's length as TalkBack says it on its row, each part's plural and count, those at none left out: "5 minutes 7 seconds". */
+fun spokenLength(ms: Long): List<Pair<Int, Int>> {
+    val seconds = (ms / 1_000).toInt()
+    return listOf(
+        R.plurals.lib_length_hours to seconds / 3_600,
+        R.plurals.lib_length_minutes to seconds / 60 % 60,
+        R.plurals.tones_seconds to seconds % 60,
+    ).filter { it.second > 0 }
+}
 
 /** The path of the song KJB's own player has loaded; the shell provides it, so its row shows it playing. */
 val LocalPlayingPath = staticCompositionLocalOf<String?> { null }
