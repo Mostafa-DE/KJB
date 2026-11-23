@@ -124,10 +124,10 @@ sealed interface Accepted {
  *   the friend's key for their mailbox; what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play
  *   within a day only. A card or a play without an answer is tried again after each of [RETRY_MS]'s waits, one set of
  *   tries at a time, started over for one that joined them.
- * - What your player does now ([listening]) goes to each friend at once, never stored, a song's cover with the first that
- *   plays it: one without an answer goes again after each of [NOW_RETRY_MS]'s waits while it is the newest. Friends' nows
- *   are kept in memory only ([HuddleState.live]); each friend's mailbox is read on from where this run of KJB got to
- *   ([readTo]).
+ * - What your player does now ([listening]) goes to each friend at once, never stored, a song's cover once it kept playing
+ *   [COVER_AFTER_MS]: one without an answer goes again after each of [NOW_RETRY_MS]'s waits while it is the newest.
+ *   Friends' nows are kept in memory only ([HuddleState.live]); each friend's mailbox is read on from where this run of
+ *   KJB got to ([readTo]).
  * - A play or a now goes only to friends you share plays with ([Friend.sharePlays], on from the join), never while you
  *   listen privately.
  * - Names are one per friend list: a newcomer whose name another friend goes by shows under a stand-in ([Friend.taken])
@@ -198,9 +198,9 @@ class Huddle(
     private var shown: Message.Now? = null
 
     /**
-     * The song your nows play and its cover's read ([listening]): a read of none once a now carried it, so the song's next
-     * nows carry none; none after a stop, so the song playing again brings it again, and after a read that found nothing
-     * now, so the song's next now that plays reads it again. Under [nowLock].
+     * The song your nows play and its cover's read, started once the song kept playing [COVER_AFTER_MS] ([listening]): a
+     * read of none once a now carried it, so the song's next nows carry none. None for another song; after a stop, so the
+     * song playing again brings it again; and after a read that found nothing now, so it is read again. Under [nowLock].
      */
     private var songCover: Pair<CardSong, Deferred<CoverFound<ByteArray>?>>? = null
 
@@ -399,37 +399,25 @@ class Huddle(
      * null for none to share (a book, a podcast): then, as while you listen privately, a friend who saw your last song
      * sees it stop, and nothing more. Never stored: one without an answer goes again to the friends it missed after each
      * of [NOW_RETRY_MS]'s waits while it is the newest, then the next change or heartbeat replaces it (and a friend lets
-     * a "playing" go 150 s after the last). A song that starts playing brings its cover ([Message.Now.cover]), read once
-     * with [coverOf] ([CoverFound.NoArt] for none; null when it could not be read now, as for a read that throws, and read
-     * again with the song's next now that plays); its now waits [COVER_WAIT_MS] for it at most, and one read later goes
-     * with the song's next now that plays. Called in the player's order.
+     * a "playing" go 150 s after the last). A song's cover ([Message.Now.cover]) goes once the song kept playing
+     * [COVER_AFTER_MS] with nothing newer told, so a song skipped sooner sends none: read once then with [coverOf]
+     * ([CoverFound.NoArt] for none; null when it could not be read now, as for a read that throws, and read again once the
+     * song keeps playing [COVER_AFTER_MS] from its next now that plays), and one read within [COVER_WAIT_MS] goes at once
+     * with a now of its own; one read later goes with the song's next now that plays. Called in the player's order.
      */
-    fun listening(state: NowState, positionMs: Long, at: Long, coverOf: suspend () -> CoverFound<ByteArray>? = { CoverFound.NoArt }, songOf: suspend () -> Pair<CardSong, Boolean>?) {
-        val told = nows.incrementAndGet()
+    fun listening(state: NowState, positionMs: Long, at: Long, coverOf: suspend () -> CoverFound<ByteArray>? = { CoverFound.NoArt }, songOf: suspend () -> Pair<CardSong, Boolean>?) =
+        tell(nows.incrementAndGet(), state, positionMs, at, coverOf, songOf)
+
+    /** Tells friends the now numbered [told] ([listening]): the player's, or its song's cover's own. */
+    private fun tell(told: Long, state: NowState, positionMs: Long, at: Long, coverOf: suspend () -> CoverFound<ByteArray>?, songOf: suspend () -> Pair<CardSong, Boolean>?) {
         scope.launch {
             delay(NOW_GAP_MS)
             if (nows.get() != told) return@launch
             val now = clock()
             // Read outside the lock: a song read late (the library still being read) never holds up a newer now.
             val yours = if (now().privateUntil?.let { now < it } == true) null else songOf()
-            // The song's cover, read once whatever nows come meanwhile, and waited for outside the lock too. A now told since
-            // reads its own song's: this one starts none.
-            val read = yours?.takeIf { state == NowState.PLAYING }?.let { (song) ->
-                nowLock.withLock {
-                    if (nows.get() != told) return@launch
-                    songCover?.takeIf { it.first == song } ?: (
-                        song to scope.async {
-                            // Whatever a read throws fails that read only, never the song's nows: as one not read now.
-                            try {
-                                coverOf()
-                            } catch (e: Throwable) {
-                                log("huddle: cover not read (${e.javaClass.simpleName})")
-                                null
-                            }
-                        }
-                        ).also { songCover = it }
-                }.second
-            }
+            // The song's cover, once read for it ([songCover]), waited for outside the lock.
+            val read = yours?.takeIf { state == NowState.PLAYING }?.let { (song) -> nowLock.withLock { songCover?.takeIf { it.first == song } }?.second }
             val found = read?.let { withTimeoutOrNull(COVER_WAIT_MS) { it.await() } }
             val message = nowLock.withLock {
                 if (nows.get() != told) return@launch
@@ -441,10 +429,32 @@ class Huddle(
                     next.state == NowState.STOPPED -> songCover = null
                     // Carried: the song's next nows carry none.
                     next.cover != null -> songCover = next.song to CompletableDeferred<CoverFound<ByteArray>?>(CoverFound.NoArt)
-                    // Not read now (not a song without one): the song's next now that plays reads it again.
-                    read?.isCompleted == true && read.await() == null -> songCover = null
+                    // Not read now (not a song without one), or another song: read once the song keeps playing.
+                    read?.isCompleted == true && read.await() == null || songCover?.first != next.song -> songCover = null
                 }
                 next
+            }
+            // The song kept playing COVER_AFTER_MS (this now waited NOW_GAP_MS of it) with nothing newer told, its cover not
+            // read yet: read now, and one found goes with a now of its own.
+            if (message.state == NowState.PLAYING) {
+                scope.launch {
+                    delay(COVER_AFTER_MS - NOW_GAP_MS)
+                    val cover = nowLock.withLock {
+                        if (nows.get() != told || songCover?.first == message.song) return@launch
+                        scope.async {
+                            // Whatever a read throws fails that read only, never the song's nows: as one not read now.
+                            try {
+                                coverOf()
+                            } catch (e: Throwable) {
+                                log("huddle: cover not read (${e.javaClass.simpleName})")
+                                null
+                            }
+                        }.also { songCover = message.song to it }
+                    }
+                    if (withTimeoutOrNull(COVER_WAIT_MS) { cover.await() } is CoverFound.Own && nows.compareAndSet(told, told + 1)) {
+                        tell(told + 1, state, positionMs + COVER_AFTER_MS, at + COVER_AFTER_MS, coverOf, songOf)
+                    }
+                }
             }
             // The friends it reached, by id: a try again goes to the others.
             val reached = HashSet<String>()
@@ -987,8 +997,11 @@ class Huddle(
         /** Your nows within this of each other go as the last of them: a burst of skips, a pause and a play. */
         const val NOW_GAP_MS: Long = 500
 
-        /** How long a now that plays a new song waits for its cover; one read later goes with the song's next now that plays. */
+        /** How long a now waits for its song's cover read; one read later goes with the song's next now that plays. */
         const val COVER_WAIT_MS: Long = 300
+
+        /** A song's cover goes once it kept playing this long: a song skipped sooner sends none. */
+        const val COVER_AFTER_MS: Long = 5_000
 
         /**
          * After a now without an answer, the waits before each new try to the friends it missed: 2 s, 5 s, 15 s, 30 s, 60 s,
