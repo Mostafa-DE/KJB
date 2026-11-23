@@ -325,13 +325,19 @@ class LibraryListsTest {
         assertTrue(row.contains("val length = rowLength(song.durationMs)"))
         assertTrue(row.contains("spokenLength(song.durationMs).map { (words, count) -> pluralStringResource(words, count, count) }.joinToString(\" \")"))
         assertTrue(row.contains("mark, reason, lengthWords.ifEmpty { null })"))
-        // The artist, the note and the lyrics icon share what the length leaves; the artist is cut first, a note never.
-        val line = row.substringAfter("Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {")
-        assertTrue(line.contains("modifier = Modifier.weight(1f, fill = false)"))
-        assertTrue(line.contains("if (note != null) Text(stringResource(R.string.lib_after_dot, note)"))
+        // The artist, the note and the lyrics icon share, in a row of their own, what the length leaves; the artist is cut
+        // first, a note never.
+        val shrinking = row.substringAfter("Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {").substringBefore("\n                    }\n")
+        assertTrue(shrinking.contains("modifier = Modifier.weight(1f, fill = false)"))
+        assertTrue(shrinking.contains("if (note != null) Text(stringResource(R.string.lib_after_dot, note)"))
+        assertTrue(shrinking.contains("LyricsIcon(Modifier.padding(start = 6.dp))"))
         assertFalse(row.contains("listOfNotNull(artist, note)"))
-        // The length after them, at the row's end before "⋯": the secondary ink, small print, never wrapped.
-        assertTrue(line.indexOf("LyricsIcon(") < line.indexOf("if (length != null) Text(length, style = MaterialTheme.typography.bodySmall.tabular(), color = colors.onSurfaceVariant, maxLines = 1, softWrap = false"))
+        // The length after that row, at the line's end before "⋯", unweighted so it is measured first and never cut: the
+        // secondary ink, small print, never wrapped (Grok review: a check by order alone let it slip into the row above).
+        assertFalse(shrinking.contains("Text(length"))
+        val length = row.substringAfter(shrinking).lines().single { "Text(length" in it }
+        assertTrue(length.contains("if (length != null) Text(length, style = MaterialTheme.typography.bodySmall.tabular(), color = colors.onSurfaceVariant, maxLines = 1, softWrap = false"))
+        assertFalse(length.contains("weight("))
     }
 
     @Test
