@@ -143,18 +143,16 @@ object HuddleGraph {
         val app = context.applicationContext
         return SharedPlays({ path, at -> scope.launch { shared(app, path)?.let { (song, favourite) -> huddle(app).played(song, at, favourite) } } }) { path, state, positionMs, at ->
             huddle(app).listening(state, positionMs, at, coverOf = {
-                // Read as the notification reads it, cut square: none for a song without a cover of its own, or one not read now.
-                val song = (LibraryGraph.repository(app).state.value as? LibraryState.Ready)?.library?.song(path)
-                val found = song?.let {
+                // Read as the notification reads it, cut square: NoArt for a song without a cover of its own, null for one not read now.
+                (LibraryGraph.repository(app).state.value as? LibraryState.Ready)?.library?.song(path)?.let { song ->
                     withContext(Dispatchers.IO) {
-                        CarCovers.read<CoverFound<ByteArray>>(app, coverUri(CarCovers.uris(app), it), { own ->
+                        CarCovers.read<CoverFound<ByteArray>>(app, coverUri(CarCovers.uris(app), song), { own ->
                             val square = ThumbnailUtils.extractThumbnail(own, Messages.COVER_PX, Messages.COVER_PX)
                             Messages.cover { quality -> ByteArrayOutputStream().also { out -> square.compress(Bitmap.CompressFormat.JPEG, quality, out) }.toByteArray() }
                                 ?.let { jpeg -> CoverFound.Own(jpeg) } ?: CoverFound.NoArt
                         }) { CoverFound.NoArt }
                     }
                 }
-                (found as? CoverFound.Own)?.cover
             }) { shared(app, path) }
         }
     }
