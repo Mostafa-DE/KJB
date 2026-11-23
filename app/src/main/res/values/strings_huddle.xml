@@ -49,10 +49,10 @@
     <string name="huddle_save">Save</string>
 
     <!-- The backup passphrase: backups always hold your friends; it locks them. -->
-    <string name="huddle_backup_off">Off. Backups hold your friends and keys readable</string>
+    <string name="huddle_backup_off">Off. Anyone with your backup file can read your friends and keys</string>
     <string name="huddle_backup_on">On. Backups lock your friends and keys</string>
     <string name="huddle_passphrase_title">Backup passphrase</string>
-    <string name="huddle_passphrase_text">Locks your friends and their keys in your backups. Without one, a backup holds them readable. You need it to bring them back on a new phone. KJB can\'t show it to you again.</string>
+    <string name="huddle_passphrase_text">Locks your friends and their keys in your backups. Without one, anyone with the backup file can read them. You need it to bring them back on a new phone. KJB can\'t show it to you again.</string>
     <string name="huddle_passphrase_field">Passphrase</string>
     <string name="huddle_passphrase_again">Passphrase again</string>
     <string name="huddle_passphrase_short">At least 8 characters</string>

@@ -129,8 +129,10 @@ class BackupScreensTest {
         val screens = File("src/main/java/app/lyrify/ui/BackupScreens.kt").readText()
         val huddle = File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText()
         // The passphrase field only for friends locked with one; a plain part restores as it is, and says so if it cannot.
-        assertTrue(screens.contains("remember(contents) { contents.huddle?.let(HuddleBackup::locked) == true }"))
-        assertTrue(screens.contains("locked = locked,"))
+        // Whether it is locked is read with the backup, off the main thread: the part may be megabytes.
+        assertTrue(screens.contains("withContext(Dispatchers.Default) { read.contents.huddle?.let(HuddleBackup::locked) == true }"))
+        assertFalse(screens.contains("remember(contents) { contents.huddle?.let(HuddleBackup::locked)"))
+        assertTrue(screens.contains("locked = sheet.locked,"))
         assertTrue(huddle.contains("if (checked && locked) PassphraseField("))
         assertTrue(huddle.contains("if (wrong) Text(stringResource(if (locked) R.string.huddle_restore_wrong else R.string.huddle_restore_failed)"))
         // Huddle is always in backups: the row is the passphrase's, and says what it locks.
@@ -139,9 +141,10 @@ class BackupScreensTest {
             .associate { it.groupValues[1] to it.groupValues[2].replace("\\'", "'") }
         assertFalse(texts.containsKey("huddle_backup"))
         assertEquals("On. Backups lock your friends and keys", texts["huddle_backup_on"])
-        assertEquals("Off. Backups hold your friends and keys readable", texts["huddle_backup_off"])
+        // Plainly what it does: it locks them; without it, the file holds them readable.
+        assertEquals("Off. Anyone with your backup file can read your friends and keys", texts["huddle_backup_off"])
         assertEquals(
-            "Locks your friends and their keys in your backups. Without one, a backup holds them readable. You need it to bring them back on a new phone. KJB can't show it to you again.",
+            "Locks your friends and their keys in your backups. Without one, anyone with the backup file can read them. You need it to bring them back on a new phone. KJB can't show it to you again.",
             texts["huddle_passphrase_text"],
         )
         assertEquals("Your backups now lock your friends", texts["huddle_passphrase_saved"])

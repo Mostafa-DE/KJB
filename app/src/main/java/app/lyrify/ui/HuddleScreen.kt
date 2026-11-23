@@ -415,8 +415,8 @@ private fun NewNameDialog(state: HuddleState, onDone: () -> Unit) {
 /**
  * Huddle's page (Mix 2 of the approved mockup): your name first of all, the first time ([NameGate]); then Listen
  * privately, Listening now (each friend playing as a big card, then Invite), Sent to you (what friends sent as postcards,
- * the newest first), the friends not playing, and the invites waiting. Its "⋯" holds Paste invite, Your name, Keep friends
- * in backups and What leaves your phone. With no friend yet, an empty card invites, and an example postcard shows what
+ * the newest first), the friends not playing, and the invites waiting. Its "⋯" holds Paste invite, Your name, Backup
+ * passphrase and What leaves your phone. With no friend yet, an empty card invites, and an example postcard shows what
  * a song from a friend looks like. On the bar ([onBack] null) it is a root; from Tools it has Back.
  */
 @Composable

@@ -128,12 +128,13 @@ private const val SHOWN: Int = 50
 /** What the restore sheet shows: the summary of a picked backup, or, after the restore, what came back and what did not. */
 private sealed interface RestoreSheet {
     /**
-     * [friends]: Huddle's friends ticked, with the [passphrase] they were locked with, if they were (memory only, never
+     * [friends]: Huddle's friends ticked, with the [passphrase] they were [locked] with, if they were (memory only, never
      * saved); [wrong] after they did not come back (that passphrase did not open them).
      */
     data class Summary(
         val plan: RestorePlan,
         val chosen: Set<Section>,
+        val locked: Boolean,
         val restoring: Boolean = false,
         val friends: Boolean = plan.contents.huddle != null,
         val passphrase: String = "",
@@ -185,7 +186,12 @@ fun rememberBackupActions(setAutomatic: (Boolean) -> Unit): BackupActions {
                     picked.value = null
                     say(R.string.backup_unreadable, true)
                 }
-                is BackupRead.Read -> sheet.value = RestoreSheet.Summary(Backups.plan(app, read.contents), read.contents.sections.toSet())
+                // Whether Huddle's part is locked, read here off the main thread: the part may be megabytes.
+                is BackupRead.Read -> sheet.value = RestoreSheet.Summary(
+                    Backups.plan(app, read.contents),
+                    read.contents.sections.toSet(),
+                    locked = withContext(Dispatchers.Default) { read.contents.huddle?.let(HuddleBackup::locked) == true },
+                )
             }
         }
     }
@@ -333,8 +339,6 @@ private fun RestoreSheet(state: MutableState<RestoreSheet?>, onRestore: (Restore
         is RestoreSheet.Summary -> {
             val contents = sheet.plan.contents
             val rows = remember(contents) { restoreRows(contents) }
-            // Read once: the part may be megabytes.
-            val locked = remember(contents) { contents.huddle?.let(HuddleBackup::locked) == true }
             val missing = remember(sheet.plan, sheet.chosen) { sheet.plan.missing(sheet.chosen) }
             LyrifySheet(
                 onDismiss = { if (!sheet.restoring) onClose() },
@@ -365,7 +369,7 @@ private fun RestoreSheet(state: MutableState<RestoreSheet?>, onRestore: (Restore
                         sheet.friends,
                         sheet.passphrase,
                         sheet.wrong,
-                        locked = locked,
+                        locked = sheet.locked,
                         enabled = !sheet.restoring,
                         onCheck = { state.value = sheet.copy(friends = it, wrong = false) },
                         onPassphrase = { state.value = sheet.copy(passphrase = it, wrong = false) },
