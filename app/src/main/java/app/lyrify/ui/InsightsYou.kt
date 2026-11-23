@@ -103,7 +103,7 @@ import kotlinx.coroutines.flow.first
  * songs back again after a quiet spell, and the favourites still quiet with Shuffle.
  */
 @Composable
-internal fun NewToYou(found: FoundCard?, comebacks: List<Comeback>, forgotten: List<Top<Song>>, period: PagePeriod, settings: Settings, onOpen: (Page) -> Unit, onSong: (SongRef) -> Unit) {
+internal fun NewToYou(found: FoundCard?, comebacks: List<Comeback>, forgotten: List<Top<Song>>, period: PagePeriod, settings: Settings, onSong: (SongRef) -> Unit) {
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
     val insights = if (LocalDarkTheme.current) DarkInsights else LightInsights

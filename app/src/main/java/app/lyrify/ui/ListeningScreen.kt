@@ -165,6 +165,35 @@ private fun InsightsPage(onBack: (() -> Unit)?, onOpen: (Page) -> Unit) {
     SongSheetsHost(sheets)
 }
 
+/** A card of the Insights page, in the page's order ([insightsCardsOf]). */
+enum class InsightsCardKind { STORIES, TIME, EMPTY, FOR_YOU, DAYS, CLOCK, ARTISTS, SONGS, ALBUMS, TASTE, HOW, MOMENTS, FOUND, FRIENDS, LYRICS, SEARCHES, SPOKEN, LIBRARY, TRAITS, MILESTONES, PRIVATE }
+
+/**
+ * The cards [cards] shows, in the page's order (the approved mockup's), each only with enough behind it: no empty boxes.
+ * With no time in the period, the empty state stands in for your time and For you.
+ */
+fun insightsCardsOf(cards: InsightsCards): List<InsightsCardKind> = buildList {
+    if (cards.time != null || cards.recaps.isNotEmpty()) add(InsightsCardKind.STORIES)
+    if (cards.time != null) addAll(listOf(InsightsCardKind.TIME, InsightsCardKind.FOR_YOU)) else add(InsightsCardKind.EMPTY)
+    if (cards.days != null) add(InsightsCardKind.DAYS)
+    if (cards.clock != null) add(InsightsCardKind.CLOCK)
+    if (cards.artists?.rows.orEmpty().isNotEmpty()) add(InsightsCardKind.ARTISTS)
+    if (cards.songs?.rows.orEmpty().isNotEmpty()) add(InsightsCardKind.SONGS)
+    if (cards.albums?.rows.orEmpty().isNotEmpty()) add(InsightsCardKind.ALBUMS)
+    if (cards.taste != null) add(InsightsCardKind.TASTE)
+    if (cards.how != null) add(InsightsCardKind.HOW)
+    if (cards.moments.isNotEmpty()) add(InsightsCardKind.MOMENTS)
+    if (cards.found != null || cards.comebacks.isNotEmpty() || cards.forgotten.isNotEmpty()) add(InsightsCardKind.FOUND)
+    if (cards.friends?.matches.orEmpty().isNotEmpty()) add(InsightsCardKind.FRIENDS)
+    if (cards.lyrics != null || cards.favourites != null) add(InsightsCardKind.LYRICS)
+    if (cards.searches != null) add(InsightsCardKind.SEARCHES)
+    if (cards.spoken != null) add(InsightsCardKind.SPOKEN)
+    if (cards.library != null) add(InsightsCardKind.LIBRARY)
+    if (cards.traits.isNotEmpty()) add(InsightsCardKind.TRAITS)
+    if (cards.milestones != null) add(InsightsCardKind.MILESTONES)
+    add(InsightsCardKind.PRIVATE)
+}
+
 /**
  * The page's cards in the mockup's order, each only when its period has enough of it, each arriving as it scrolls in
  * ([Arriving]): the stories row, your time, For you, every day you listened, your day on a record, the top artists,
@@ -185,44 +214,43 @@ private fun LazyListScope.insightsCards(
 ) {
     val cards = page.cards
     val period = page.period
-    fun card(key: String, content: @Composable () -> Unit) = item(key = key, contentType = key) {
-        Arriving(key, list, arrived, period.kind, rowMotion(reduced).padding(top = 12.dp)) { content() }
-    }
-    if (cards.time != null || cards.recaps.isNotEmpty()) item(key = "stories", contentType = "stories") { StoriesRow(page, rowMotion(reduced)) }
-    val time = cards.time
-    if (time == null) {
-        item(key = "empty", contentType = "empty") {
-            EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), rowMotion(reduced), text = stringResource(R.string.stats_empty_text))
-        }
-    } else {
-        card("time") { YourTime(time, period) { onPicture(Picture.SUMMARY) } }
-        item(key = "for you", contentType = "for you") { ForYouInsights(rowMotion(reduced)) }
-    }
-    cards.days?.let { days -> card("days") { EveryDay(days, period) } }
-    cards.clock?.let { clock -> card("clock") { DayOnARecord(clock) } }
-    cards.artists?.takeIf { it.rows.isNotEmpty() }?.let { artists -> card("artists") { TopArtists(artists, period, onOpen) } }
-    cards.songs?.takeIf { it.rows.isNotEmpty() }?.let { songs -> card("songs") { TopSongs(songs, settings, onOpen, onSong) } }
-    cards.albums?.takeIf { it.rows.isNotEmpty() }?.let { albums -> card("albums") { TopAlbums(albums, onOpen) { onPicture(Picture.ALBUMS) } } }
-    cards.taste?.let { taste -> card("taste") { YourTaste(taste) } }
-    cards.how?.let { how -> card("how") { HowYouListen(how, settings, onSong) } }
-    if (cards.moments.isNotEmpty()) card("moments") { Moments(cards.moments, settings) }
-    if (cards.found != null || cards.comebacks.isNotEmpty() || cards.forgotten.isNotEmpty()) {
-        card("found") { NewToYou(cards.found, cards.comebacks, cards.forgotten, period, settings, onOpen, onSong) }
-    }
-    cards.friends?.takeIf { it.matches.isNotEmpty() }?.let { friends -> card("friends") { YouAndFriends(friends, settings) } }
-    if (cards.lyrics != null || cards.favourites != null) card("lyrics") { ReadAlongAndHearts(cards.lyrics, cards.favourites, period, settings) }
-    cards.searches?.let { searches -> card("searches") { YourSearches(searches) } }
-    cards.spoken?.let { spoken -> card("spoken") { BooksAndPodcasts(spoken) } }
-    cards.library?.let { library -> card("library") { YourLibrary(library, period, settings, onOpen) } }
-    if (cards.traits.isNotEmpty()) card("traits") { ListeningType(cards.traits) }
-    cards.milestones?.let { milestones -> card("milestones") { MilestonesAndBadges(milestones, period) } }
-    item(key = "private", contentType = "note") {
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = rowMotion(reduced).padding(start = ScreenPadding + 8.dp, end = ScreenPadding + 8.dp, top = 20.dp),
-        ) {
-            Icon(painterResource(R.drawable.ic_lock), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 1.dp).size(18.dp))
-            Text(stringResource(R.string.insights_private), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    insightsCardsOf(cards).forEach { key ->
+        item(key = key.name, contentType = key.name) {
+            when (key) {
+                InsightsCardKind.STORIES -> StoriesRow(page, rowMotion(reduced))
+                InsightsCardKind.EMPTY -> EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), rowMotion(reduced), text = stringResource(R.string.stats_empty_text))
+                InsightsCardKind.FOR_YOU -> ForYouInsights(rowMotion(reduced))
+                InsightsCardKind.PRIVATE -> Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = rowMotion(reduced).padding(start = ScreenPadding + 8.dp, end = ScreenPadding + 8.dp, top = 20.dp),
+                ) {
+                    Icon(painterResource(R.drawable.ic_lock), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 1.dp).size(18.dp))
+                    Text(stringResource(R.string.insights_private), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                // Each card arrives as it scrolls in; insightsCardsOf showed it only with its data.
+                else -> Arriving(key.name, list, arrived, period.kind, rowMotion(reduced).padding(top = 12.dp)) {
+                    when (key) {
+                        InsightsCardKind.TIME -> cards.time?.let { YourTime(it, period) { onPicture(Picture.SUMMARY) } }
+                        InsightsCardKind.DAYS -> cards.days?.let { EveryDay(it, period) }
+                        InsightsCardKind.CLOCK -> cards.clock?.let { DayOnARecord(it) }
+                        InsightsCardKind.ARTISTS -> cards.artists?.let { TopArtists(it, period, onOpen) }
+                        InsightsCardKind.SONGS -> cards.songs?.let { TopSongs(it, settings, onOpen, onSong) }
+                        InsightsCardKind.ALBUMS -> cards.albums?.let { TopAlbums(it, onOpen) { onPicture(Picture.ALBUMS) } }
+                        InsightsCardKind.TASTE -> cards.taste?.let { YourTaste(it) }
+                        InsightsCardKind.HOW -> cards.how?.let { HowYouListen(it, settings, onSong) }
+                        InsightsCardKind.MOMENTS -> Moments(cards.moments, settings)
+                        InsightsCardKind.FOUND -> NewToYou(cards.found, cards.comebacks, cards.forgotten, period, settings, onSong)
+                        InsightsCardKind.FRIENDS -> cards.friends?.let { YouAndFriends(it, settings) }
+                        InsightsCardKind.LYRICS -> ReadAlongAndHearts(cards.lyrics, cards.favourites, period, settings)
+                        InsightsCardKind.SEARCHES -> cards.searches?.let { YourSearches(it) }
+                        InsightsCardKind.SPOKEN -> cards.spoken?.let { BooksAndPodcasts(it) }
+                        InsightsCardKind.LIBRARY -> cards.library?.let { YourLibrary(it, period, settings, onOpen) }
+                        InsightsCardKind.TRAITS -> ListeningType(cards.traits)
+                        InsightsCardKind.MILESTONES -> cards.milestones?.let { MilestonesAndBadges(it, period) }
+                        InsightsCardKind.STORIES, InsightsCardKind.EMPTY, InsightsCardKind.FOR_YOU, InsightsCardKind.PRIVATE -> Unit
+                    }
+                }
+            }
         }
     }
 }
