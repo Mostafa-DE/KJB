@@ -17,7 +17,7 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 
 // Insights (KJB 3.2, handoff/suggest/plan.md part 1): the figures behind the Insights page and the monthly recap, from
-// the plays heard here ([PlayLogStore.listened]: an import's and the short ones left out, so neither adds to a count),
+// the plays heard here (PlayStats leaves an import's and the short ones out, so neither adds to a count),
 // the book log and the library. Time is in real minutes ([realMs]). Two ledgers, as Spotify keeps them: the time heard
 // counts everything (books, podcasts, hidden songs, songs gone from the phone) and the plays everything but books, which
 // never count one; the top lists and the songs, artists and albums counted are music only (no books, podcasts or hidden
@@ -26,13 +26,16 @@ import java.time.ZoneOffset
 /**
  * What Insights are worked out from, all time: the [plays] heard here, the oldest first, the book log's ([books]), each
  * song's totals with an import's plays ([everPlayed]: what was ever played, here or in the app imported from), and the
- * [favourites].
+ * [favourites]; for the Insights page also the quick skips the log keeps apart ([skips], [LoggedPlay.isShort]) and an
+ * import's plays ([imports]).
  */
 data class InsightsData(
     val plays: List<LoggedPlay>,
     val books: List<LoggedPlay> = emptyList(),
     val everPlayed: List<SongPlays> = emptyList(),
     val favourites: List<SongRef> = emptyList(),
+    val skips: List<LoggedPlay> = emptyList(),
+    val imports: List<LoggedPlay> = emptyList(),
 )
 
 /** A period's totals: the time heard and the plays that counted (both ledgers), and the songs, artists and albums played (music). */
@@ -362,7 +365,7 @@ private fun digDeeperOf(music: List<LoggedPlay>, library: Library, played: Set<S
 }
 
 /** Music played [FORGOTTEN_MIN_PLAYS] times or a favourite, with no play that counted for [QUIET_MS], the most played first. */
-private fun forgottenOf(data: InsightsData, now: Long, library: Library, kinds: Kinds): List<Top<Song>> {
+internal fun forgottenOf(data: InsightsData, now: Long, library: Library, kinds: Kinds): List<Top<Song>> {
     val favourites = data.favourites.mapNotNullTo(HashSet()) { library.resolver.find(it)?.path }
     val quiet = now - QUIET_MS
     return listeningOf(songPlaysOf(data.plays.filter { kinds.of(it) == Kind.MUSIC }), library).songs

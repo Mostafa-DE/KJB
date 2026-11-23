@@ -34,19 +34,13 @@ interface PlayLogStore {
      */
     suspend fun totals(from: Long? = null, until: Long? = null): List<SongPlays>
 
-    /**
-     * The plays heard here that started from [from] (inclusive) until [until] (exclusive), either end open, the oldest
-     * first, with all they keep: Insights' (stats/Insights.kt). An import's plays ([LoggedPlay.imported]) and the short
-     * ones ([LoggedPlay.isShort]) are left out, so neither adds to a count.
-     */
-    suspend fun listened(from: Long? = null, until: Long? = null): List<LoggedPlay>
-
     /** Every play in the log, the oldest first, for a backup (backup/); null when the log cannot be read. */
     suspend fun all(): List<LoggedPlay>?
 
     /**
      * The plays that started from [from] (wall-clock millis, inclusive), the short ones too, the oldest first, with all
-     * they keep: what suggestions read as plays come (suggestions/); null when the log cannot be read.
+     * they keep: what suggestions read as plays come (suggestions/), and Insights the plays written since they last read
+     * (stats/Listening.kt, PlayStats); null when the log cannot be read.
      */
     suspend fun since(from: Long): List<LoggedPlay>? = all()?.filter { it.startedAt >= from }
 
@@ -289,11 +283,6 @@ object PlaysSchema {
     const val ALL: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
         "ended_how, ended_at_ms, imported, clock_ms FROM plays ORDER BY started_at, path"
 
-    /** [ALL]'s columns for the plays heard here between two bounds, the oldest first ([PlayLogStore.listened]). */
-    const val LISTENED: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
-        "ended_how, ended_at_ms, imported, clock_ms FROM plays WHERE started_at >= CAST(? AS INTEGER) AND started_at < CAST(? AS INTEGER) " +
-        "AND imported = 0 AND (counted != 0 OR heard_ms >= ${PlayCounter.MIN_LOGGED_MS}) ORDER BY started_at, path"
-
     /** [ALL] from a start on (inclusive), by plays_by_start: suggestions read only the plays since they last read. */
     const val SINCE: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
         "ended_how, ended_at_ms, imported, clock_ms FROM plays WHERE started_at >= CAST(? AS INTEGER) ORDER BY started_at, path"
@@ -502,21 +491,6 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
             }
         } catch (e: Exception) {
             log("plays: not read (${e.javaClass.simpleName})")
-            emptyList()
-        }
-    }
-
-    override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> = withContext(io) {
-        try {
-            val bounds = arrayOf((from ?: Long.MIN_VALUE).toString(), (until ?: Long.MAX_VALUE).toString())
-            db.readableDatabase.rawQuery(PlaysSchema.LISTENED, bounds).use { rows ->
-                val row = CursorRow(rows)
-                buildList {
-                    while (rows.moveToNext()) loggedPlayOf(row)?.let(::add)
-                }
-            }
-        } catch (e: Exception) {
-            log("plays: not read for Insights (${e.javaClass.simpleName})")
             emptyList()
         }
     }

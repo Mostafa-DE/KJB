@@ -54,7 +54,7 @@ class InsightsCacheTest {
 
         override suspend fun all(): List<LoggedPlay>? = next.all()?.also { rows += it.size }
 
-        override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> = next.listened(from, until).also { rows += it.size }
+        override suspend fun since(from: Long): List<LoggedPlay>? = next.since(from)?.also { rows += it.size }
     }
 
     private fun stats(log: PlayLogStore, books: PlayLogStore? = null) = PlayStats(log, { library }, Dispatchers.Unconfined, books = books)

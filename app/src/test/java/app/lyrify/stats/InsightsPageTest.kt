@@ -5,6 +5,7 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.VOLUME
 import app.lyrify.library.song
+import app.lyrify.player.SourceKind
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -376,6 +377,142 @@ class InsightsPageTest {
         assertNull(taste.middleYear)
         assertEquals(2, taste.genres.size)
         assertNull(page(plays(copper, 12, nov(3)) + plays(tide, 1, nov(4)), library = Library.of(listOf(copper, tide), Settings())).cards.taste?.genres?.takeIf { it.isNotEmpty() })
+    }
+
+    // How you listen
+
+    private fun started(play: LoggedPlay, by: StartedBy, source: SourceKind = SourceKind.SONGS, shuffled: Boolean = false, end: PlayEnd? = PlayEnd.FINISHED, endedAtMs: Long = 200_000) =
+        play.copy(start = PlayStart(by, source, shuffled, songKey = null), end = end?.let { PlayEnded(it, endedAtMs) })
+
+    @Test
+    fun `how you listen sorts the plays by what started them and how they ended, quick skips too, older plays left out`() {
+        val day = nov(10)
+        val plays = listOf(
+            started(play(copper, day), StartedBy.PICKED),
+            started(play(tide, day + 1 * MINUTE), StartedBy.PICKED),
+            started(play(lantern, day + 2 * MINUTE), StartedBy.PICKED, end = PlayEnd.STOPPED),
+            // Low Sun in order: two to the end, one skipped at 10 s, one moved on from at a minute.
+            started(play(copper, day + 3 * MINUTE), StartedBy.AUTO, SourceKind.ALBUM),
+            started(play(tide, day + 4 * MINUTE), StartedBy.AUTO, SourceKind.ALBUM),
+            started(play(lantern, day + 5 * MINUTE, heardMs = 10_000, counted = false), StartedBy.AUTO, SourceKind.ALBUM, end = PlayEnd.NEXT, endedAtMs = 10_000),
+            started(play(signal, day + 6 * MINUTE, heardMs = 60_000, counted = false), StartedBy.AUTO, SourceKind.ALBUM, end = PlayEnd.NEXT, endedAtMs = 60_000),
+            // Shuffle: one to the end, three skipped early, two of them quick skips the log keeps apart.
+            started(play(harbour, day + 7 * MINUTE), StartedBy.AUTO, shuffled = true),
+            started(play(glass, day + 8 * MINUTE, heardMs = 500, counted = false), StartedBy.AUTO, shuffled = true, end = PlayEnd.NEXT, endedAtMs = 500),
+            started(play(glass, day + 9 * MINUTE, heardMs = 400, counted = false), StartedBy.AUTO, shuffled = true, end = PlayEnd.JUMP, endedAtMs = 400),
+            started(play(glass, day + 10 * MINUTE, heardMs = 20_000, counted = false), StartedBy.AUTO, shuffled = true, end = PlayEnd.NEXT, endedAtMs = 20_000),
+            started(play(glass, day + 11 * MINUTE), StartedBy.AUTO, shuffled = true),
+            started(play(north, day + 12 * MINUTE), StartedBy.SUGGESTED),
+            started(play(kite, day + 13 * MINUTE), StartedBy.AUTO, SourceKind.SUGGESTIONS),
+            started(play(kite, day + 14 * MINUTE), StartedBy.PICKED, SourceKind.HUDDLE),
+            // From before KJB kept how plays began.
+            play(copper, nov(2)),
+            play(tide, nov(2, "13:00")),
+        )
+
+        val how = shown(page(plays).cards.how)
+
+        assertEquals(Starts(picked = 3, inOrder = 4, shuffle = 5, suggestions = 2, huddle = 1), how.started)
+        assertEquals(Ends(finished = 9, movedOn = 1, early = 4), how.ends)
+        assertEquals(Ends(finished = 2, movedOn = 0, early = 3), how.shuffled)
+        assertEquals(Ends(finished = 2, movedOn = 1, early = 1), how.inOrder)
+        assertEquals(Skipped(glass, early = 3, plays = 4), how.mostSkipped)
+    }
+
+    @Test
+    fun `how you listen needs 10 plays that keep how they began, and a song skipped early 3 times to name one`() {
+        val few = List(9) { started(play(copper, nov(10) + it * MINUTE), StartedBy.PICKED) }
+        assertNull(page(few).cards.how)
+        assertNull(shown(page(few + started(play(tide, nov(11)), StartedBy.PICKED, end = PlayEnd.NEXT, endedAtMs = 5_000)).cards.how).mostSkipped)
+    }
+
+    // Moments
+
+    @Test
+    fun `moments find the song on repeat, the longest session, the latest night and a year ago today`() {
+        val plays = plays(copper, 4, nov(10, "09:00")) + plays(harbour, 3, nov(11, "09:00")) +
+            // Twelve 4-minute plays back to back from 20:00: 48 minutes; then, after a break, three more.
+            List(12) { play(if (it < 7) north else kite, nov(12, "20:00") + it * 4 * MINUTE, heardMs = 4 * MINUTE) } +
+            List(3) { play(lantern, nov(12, "21:10") + it * 4 * MINUTE, heardMs = 4 * MINUTE) } +
+            listOf(play(glass, nov(13, "23:30")), play(harbour, nov(14, "01:48")), play(tide, nov(14, "06:30"))) +
+            plays(signal, 3, at("2025-11-26T12:00+03:00[Asia/Amman]"))
+
+        val moments = page(plays).cards.moments
+
+        assertEquals(
+            listOf(
+                Moment.OnRepeat(north, LocalDate.of(2026, 11, 12), 7),
+                Moment.LongestSession(java.time.LocalDateTime.of(2026, 11, 12, 20, 0), 48 * MINUTE, north),
+                Moment.LatestNight(java.time.LocalDateTime.of(2026, 11, 14, 1, 48), harbour),
+                Moment.YearAgo(signal, LocalDate.of(2025, 11, 26), 3),
+            ),
+            moments,
+        )
+    }
+
+    @Test
+    fun `moments find albums played start to finish, time zones, and the time faster speeds saved`() {
+        val inOrder = listOf(copper, tide, lantern, signal).mapIndexed { i, song -> started(play(song, nov(10) + i * 5 * MINUTE, zone = 180), StartedBy.AUTO, SourceKind.ALBUM) }
+        // Low Sun again, a song skipped; Tidelines in order, but only two songs long.
+        val broken = listOf(copper, tide, signal).mapIndexed { i, song -> started(play(song, nov(11) + i * 5 * MINUTE, zone = 180), StartedBy.AUTO, SourceKind.ALBUM) }
+        val short = listOf(harbour, glass).mapIndexed { i, song -> started(play(song, nov(12) + i * 5 * MINUTE, zone = 60), StartedBy.AUTO, SourceKind.ALBUM) }
+        val podcast = play(talk, nov(13), heardMs = 30 * MINUTE, clockMs = 20 * MINUTE)
+        val book = bookPlay(nov(14), heardMs = 60 * MINUTE, clockMs = 40 * MINUTE)
+
+        val moments = page(inOrder + broken + short + podcast, books = listOf(book)).cards.moments
+
+        assertEquals(
+            listOf(
+                Moment.StartToFinish(1, checkNotNull(library.albums.firstOrNull { it.title == "Low Sun" })),
+                Moment.OnTheMove(listOf(180, 60)),
+                Moment.Faster(booksMs = 20 * MINUTE, podcastsMs = 10 * MINUTE),
+            ),
+            moments.filter { it is Moment.StartToFinish || it is Moment.OnTheMove || it is Moment.Faster },
+        )
+    }
+
+    @Test
+    fun `all time begins with the first play, and a month over has no year ago today`() {
+        val plays = listOf(play(north, at("2025-02-14T19:00+03:00[Asia/Amman]"))) + plays(signal, 3, at("2025-10-26T12:00+03:00[Asia/Amman]")) + plays(copper, 10, nov(3))
+
+        assertEquals(Moment.FirstPlay(north, LocalDate.of(2025, 2, 14)), page(plays, ListeningPeriod.ALL_TIME).cards.moments.firstOrNull())
+        assertEquals(emptyList<Moment>(), page(plays, ListeningPeriod.ALL_TIME).cards.moments.filterIsInstance<Moment.YearAgo>())
+        assertEquals(emptyList<Moment>(), recap(plays + plays(copper, 10, oct(3)), YearMonth.of(2026, 10)).cards.moments.filterIsInstance<Moment.YearAgo>())
+    }
+
+    // New to you, back again, still quiet
+
+    @Test
+    fun `new to you has the artists first heard in the period, those kept, the new songs' share, and where the artists came from`() {
+        val known = plays(copper, 2, oct(10)) + LoggedPlay(kite.ref, oct(1), 0, counted = true, imported = true)
+        val november = plays(copper, 5, nov(2)) +
+            listOf(started(play(harbour, nov(3)), StartedBy.SUGGESTED), play(harbour, nov(5)), play(harbour, nov(7))) +
+            started(play(north, nov(4)), StartedBy.PICKED, SourceKind.HUDDLE) + play(tide, nov(6)) + play(kite, nov(8))
+
+        val found = shown(page(known + november).cards.found)
+
+        assertEquals(listOf(FoundArtist(checkNotNull(library.artist("Mira Solen")), kept = true), FoundArtist(checkNotNull(library.artist("The Lowlands")), kept = false)), found.artists)
+        assertEquals(3, found.songs)
+        assertEquals(5 to 11, found.newPlays to found.plays)
+        assertEquals(Triple(1, 1, 0), Triple(found.fromSuggestions, found.fromFriends, found.onYourOwn))
+
+        val all = shown(page(known + november, ListeningPeriod.ALL_TIME).cards.found)
+        assertEquals(listOf("Kestrel", "Mira Solen", "Bexley Rowe", "The Lowlands"), all.artists.map { it.artist.name })
+        assertEquals(5, all.songs)
+    }
+
+    @Test
+    fun `back again has the songs played after 60 quiet days, the longest quiet first, and the favourites still quiet stay on the period pages`() {
+        val plays = plays(tide, 5, at("2026-08-01T12:00+03:00[Asia/Amman]")) + play(tide, nov(10)) +
+            play(harbour, at("2026-09-01T12:00+03:00[Asia/Amman]")) + play(harbour, nov(11)) +
+            play(copper, oct(20)) + plays(copper, 9, nov(3)) +
+            plays(north, 5, at("2026-07-01T12:00+03:00[Asia/Amman]")) + plays(kite, 5, at("2026-07-02T12:00+03:00[Asia/Amman]")) + plays(signal, 5, at("2026-07-03T12:00+03:00[Asia/Amman]"))
+
+        val cards = page(plays).cards
+
+        assertEquals(listOf(Comeback(tide, 101), Comeback(harbour, 71)), cards.comebacks)
+        assertEquals(listOf(signal, kite, north), cards.forgotten.map { it.item })
+        assertEquals(emptyList<Top<Song>>(), recap(plays, YearMonth.of(2026, 10)).cards.forgotten)
     }
 
     // Nothing to show

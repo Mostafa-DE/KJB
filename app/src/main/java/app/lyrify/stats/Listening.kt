@@ -290,24 +290,29 @@ class PlayStats(
         this.music = when {
             music == null || musicFrom == EVERY -> store.all()?.let { all ->
                 imports = slim(all.filter { it.imported })
+                skips = slim(all.filter { !it.imported && it.isShort })
                 slim(all.filter { !it.imported && !it.isShort })
             }
             musicFrom == NONE -> music
-            else -> spliced(music, musicFrom, store.listened(from = musicFrom))
+            // The quick skips are spliced too: How you listen counts them.
+            else -> store.since(musicFrom)?.let { read ->
+                val quick = spliced(skips, musicFrom, read.filter { !it.imported && it.isShort })
+                spliced(music, musicFrom, read.filter { !it.imported && !it.isShort })?.takeIf { quick != null }?.also { skips = checkNotNull(quick) }
+            }
         }
         val bookPlays = this.bookPlays
         this.bookPlays = when {
             books == null -> emptyList()
             bookPlays == null || booksFrom == EVERY -> books.all()?.let { all -> slim(all.filter { !it.isShort }) }
             booksFrom == NONE -> bookPlays
-            else -> spliced(bookPlays, booksFrom, books.listened(from = booksFrom))
+            else -> books.since(booksFrom)?.let { read -> spliced(bookPlays, booksFrom, read.filter { !it.isShort }) }
         }
         val touched = minOf(musicFrom, booksFrom)
         if (touched != NONE) worked.keys.removeAll { (period, _) -> touched < period.until }
         // A log not read (or a read cut short) stays null, so the next read is whole.
         val read = this.music ?: return@withLock null
         if (read !== music) ever = songPlaysOf(imports + read)
-        InsightsData(read, this.bookPlays.orEmpty(), ever)
+        InsightsData(read, this.bookPlays.orEmpty(), ever, skips = skips, imports = imports)
     }
 
     /**
@@ -319,16 +324,24 @@ class PlayStats(
         return if (read.size < kept.size - before.size) null else before + slim(read)
     }
 
-    /** Only what Insights use of [plays] (how each began and ended is not kept), each song's reference once: 100,000 plays stay a few MB. */
-    private fun slim(plays: List<LoggedPlay>): List<LoggedPlay> = plays.map { it.copy(song = refs.getOrPut(it.song) { it.song }, start = null, end = null) }
+    /**
+     * Only what Insights use of [plays] (the song's key is not kept), each song's reference and each way a play began
+     * once: 100,000 plays stay a few MB.
+     */
+    private fun slim(plays: List<LoggedPlay>): List<LoggedPlay> = plays.map { play ->
+        val start = play.start?.copy(songKey = null)?.let { starts.getOrPut(it) { it } }
+        play.copy(song = refs.getOrPut(play.song) { play.song }, start = start)
+    }
 
     /** Insights' copy of the logs and the periods over already worked out, by their bounds and the period before. */
     private val held = Mutex()
     private var music: List<LoggedPlay>? = null
     private var imports: List<LoggedPlay> = emptyList()
+    private var skips: List<LoggedPlay> = emptyList()
     private var bookPlays: List<LoggedPlay>? = null
     private var ever: List<SongPlays> = emptyList()
     private val refs = HashMap<SongRef, SongRef>()
+    private val starts = HashMap<PlayStart, PlayStart>()
     private val worked = HashMap<Pair<Period, Period?>, Insights>()
     private var overFor: Pair<Library?, List<SongRef>>? = null
 

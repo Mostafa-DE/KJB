@@ -6,6 +6,7 @@ import app.lyrify.library.Genre
 import app.lyrify.library.Library
 import app.lyrify.library.Song
 import app.lyrify.library.albumKey
+import app.lyrify.player.SourceKind
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -374,6 +375,29 @@ private const val MIN_DAY_PLAYS = 2
 
 private const val DECADE = 10
 
+/** How you listen: this many plays that keep how they began; a skip in the first 30 s is early; a song skipped early this often is named. */
+private const val MIN_HOW_PLAYS = 10
+private const val EARLY_SKIP_MS: Long = 30_000
+private const val MIN_EARLY_SKIPS = 3
+
+/** Moments: a song this many times in a day; a session from this long, broken by this long a gap; night from 9 pm to 6 am. */
+private const val MIN_REPEAT = 3
+private const val MIN_SESSION_MS: Long = 30 * 60_000
+private const val SESSION_GAP_MS: Long = 5 * 60_000
+private const val NIGHT_FROM = 21
+private const val NIGHT_UNTIL = 6
+private const val MINUTES_IN_HOUR = 60
+
+/** Moments: an album played through has this many songs; this many time zones; this much time saved. */
+private const val ALBUM_MIN_SONGS = 3
+private const val MIN_ZONES = 2
+private const val MIN_SAVED_MS: Long = 60_000
+
+/** New to you: an artist played on this many days is kept. Back again: after this many quiet days, this many shown. */
+private const val KEPT_DAYS = 3
+private const val QUIET_DAYS = 60
+private const val COMEBACKS_SHOWN = 3
+
 /**
  * One page's working out, each part once for the cards that share it: [heard], the play log's plays in the period (an
  * import's and the short ones left out), and [books], the book log's.
@@ -404,10 +428,215 @@ private class PageWork(private val data: InsightsData, private val period: PageP
             artists = topCardOf(tops.artists, MIN_TOP_OTHERS, placesBefore?.artists, { it.name }) { coverOf.byArtist[it.name] }
                 ?.let { card -> card.copy(loyalty = loyaltyOf(card.rows.first().top.item.name, library)) },
             songs = topCardOf(tops.songs, MIN_TOP_SONGS, placesBefore?.songs, { it.path }) { it }
-                ?.let { card -> card.copy(firstsDay = firstsDayOf(card.rows.first().top.item, library)) },
+                ?.let { card -> card.copy(firstsDay = firstsDayOf(card.rows.first().top.item)) },
             albums = topCardOf(tops.albums, MIN_TOP_OTHERS, placesBefore?.albums, { it.key }) { coverOf.byAlbum[it.key] },
             taste = tasteOf(library),
+            how = howOf(),
+            moments = momentsOf(library),
+            found = foundOf(library),
+            comebacks = comebacksOf(),
+            forgotten = if (period.going) forgottenOf(data, now, library, kinds) else emptyList(),
         )
+    }
+
+    /** [play]'s song in the library now (found again by its path, then its id hint), once per path. */
+    private fun songOf(play: LoggedPlay): Song? = songs.getOrPut(play.song.path) { library?.resolver?.find(play.song) }
+
+    private val songs = HashMap<String, Song?>()
+
+    /** The music played in the period whose song the library has, each with its song. */
+    private val musicSongs by lazy { music.mapNotNull { play -> songOf(play)?.let { play to it } } }
+
+    /** How you listen: from [MIN_HOW_PLAYS] plays that keep how they began, quick skips too; books left out. */
+    private fun howOf(): HowCard? {
+        val plays = (heard + data.skips.within(period.bounds)).filter { it.start != null && kinds.of(it) != Kind.BOOK }
+        if (plays.size < MIN_HOW_PLAYS) return null
+        val ways = plays.groupingBy { wayOf(checkNotNull(it.start)) }.eachCount()
+        val ended = plays.mapNotNull { play -> endOf(play)?.let { end -> songOf(play)?.takeIf { kinds.of(play) == Kind.MUSIC }?.let { it to end } } }
+        val mostSkipped = ended.filter { it.second == End.EARLY }.groupingBy { it.first }.eachCount()
+            .filter { it.value >= MIN_EARLY_SKIPS }
+            .maxWithOrNull(compareBy<Map.Entry<Song, Int>> { it.value }.thenBy { it.key.path })
+            ?.let { (song, early) -> Skipped(song, early, ended.count { it.first == song }) }
+        return HowCard(
+            started = Starts(ways[Way.PICKED] ?: 0, ways[Way.IN_ORDER] ?: 0, ways[Way.SHUFFLE] ?: 0, ways[Way.SUGGESTIONS] ?: 0, ways[Way.HUDDLE] ?: 0),
+            ends = endsOf(plays),
+            shuffled = endsOf(plays.filter { checkNotNull(it.start).shuffled }),
+            inOrder = endsOf(plays.filter { play -> checkNotNull(play.start).let { !it.shuffled && it.source == SourceKind.ALBUM } }),
+            mostSkipped = mostSkipped,
+        )
+    }
+
+    /** What started a play, the first that holds: Huddle, a suggestion, Shuffle, the user's own pick, else the list in order. */
+    private fun wayOf(start: PlayStart): Way = when {
+        start.source == SourceKind.HUDDLE -> Way.HUDDLE
+        start.by == StartedBy.SUGGESTED || start.source == SourceKind.SUGGESTIONS -> Way.SUGGESTIONS
+        start.shuffled -> Way.SHUFFLE
+        start.by == StartedBy.PICKED -> Way.PICKED
+        else -> Way.IN_ORDER
+    }
+
+    private enum class Way { PICKED, IN_ORDER, SHUFFLE, SUGGESTIONS, HUDDLE }
+
+    /** How a play ended for the cards: none for a play stopped (KJB closed) or that could not go on. */
+    private fun endOf(play: LoggedPlay): End? = when (play.end?.how) {
+        PlayEnd.FINISHED -> End.FINISHED
+        PlayEnd.NEXT, PlayEnd.JUMP, PlayEnd.BACK -> if (checkNotNull(play.end).atMs < EARLY_SKIP_MS) End.EARLY else End.MOVED_ON
+        else -> null
+    }
+
+    private enum class End { FINISHED, MOVED_ON, EARLY }
+
+    private fun endsOf(plays: List<LoggedPlay>): Ends {
+        val ends = plays.groupingBy(::endOf).eachCount()
+        return Ends(ends[End.FINISHED] ?: 0, ends[End.MOVED_ON] ?: 0, ends[End.EARLY] ?: 0)
+    }
+
+    /** The postcards, each from its own minimum: where it began (all time), then the period's own, then a year ago today. */
+    private fun momentsOf(library: Library): List<Moment> = listOfNotNull(
+        firstPlayOf().takeIf { period.bounds == null },
+        onRepeatOf(),
+        longestSessionOf(),
+        latestNightOf(),
+        startToFinishOf(library),
+        onTheMoveOf(),
+        fasterOf(),
+        yearAgoOf().takeIf { period.going && period.bounds != null },
+    )
+
+    private fun firstPlayOf(): Moment.FirstPlay? = data.plays.firstOrNull { it.counted && kinds.of(it) == Kind.MUSIC && songOf(it) != null }
+        ?.let { Moment.FirstPlay(checkNotNull(songOf(it)), localDay(it)) }
+
+    /** The song played most in one day: from [MIN_REPEAT] plays that counted. */
+    private fun onRepeatOf(): Moment.OnRepeat? = mostInADay(musicSongs.filter { it.first.counted })
+        ?.takeIf { it.plays >= MIN_REPEAT }
+        ?.let { Moment.OnRepeat(it.song, it.day, it.plays) }
+
+    /** The song of [plays] played most on one day, the latest day of equals. */
+    private fun mostInADay(plays: List<Pair<LoggedPlay, Song>>): DayPlays? = plays.groupingBy { (play, song) -> song to localDay(play) }.eachCount()
+        .maxWithOrNull(compareBy<Map.Entry<Pair<Song, LocalDate>, Int>> { it.value }.thenBy { it.key.second })
+        ?.let { (key, count) -> DayPlays(key.first, key.second, count) }
+
+    /**
+     * The longest listening without a break: plays (books too) with under [SESSION_GAP_MS] from one's end to the next's
+     * start, from [MIN_SESSION_MS], its most played music song shown.
+     */
+    private fun longestSessionOf(): Moment.LongestSession? {
+        val sessions = mutableListOf<MutableList<LoggedPlay>>()
+        var end = Long.MIN_VALUE
+        (heard + books).sortedBy { it.startedAt }.forEach { play ->
+            if (sessions.isEmpty() || play.startedAt - end > SESSION_GAP_MS) sessions += mutableListOf<LoggedPlay>()
+            sessions.last() += play
+            end = maxOf(end, play.startedAt + play.realMs)
+        }
+        return sessions.map { it to it.sumOf { play -> play.realMs } }
+            .filter { it.second >= MIN_SESSION_MS }
+            .sortedByDescending { it.second }
+            .firstNotNullOfOrNull { (plays, ms) ->
+                val song = plays.filter { it.counted && kinds.of(it) == Kind.MUSIC }.mapNotNull(::songOf).groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+                song?.let { Moment.LongestSession(localTimeOf(plays.first(), zone).truncatedTo(ChronoUnit.MINUTES), ms, it) }
+            }
+    }
+
+    /** The latest a music play started at night, [NIGHT_FROM] to [NIGHT_UNTIL] o'clock where it was heard. */
+    private fun latestNightOf(): Moment.LatestNight? = musicSongs.map { (play, song) -> localTimeOf(play, zone) to song }
+        .filter { (at) -> at.hour >= NIGHT_FROM || at.hour < NIGHT_UNTIL }
+        .maxWithOrNull(compareBy { (at) -> (if (at.hour < NIGHT_UNTIL) at.hour + HOURS_IN_DAY else at.hour) * MINUTES_IN_HOUR + at.minute })
+        ?.let { (at, song) -> Moment.LatestNight(at.truncatedTo(ChronoUnit.MINUTES), song) }
+
+    /**
+     * The albums played start to finish: an album of [ALBUM_MIN_SONGS] songs or more played from its page, not shuffled,
+     * every song in its order, one after the other, each to its end.
+     */
+    private fun startToFinishOf(library: Library): Moment.StartToFinish? {
+        var album: Album? = null
+        var played = 0
+        var through = 0
+        var latest: Album? = null
+        musicSongs.forEach { (play, song) ->
+            val start = play.start
+            val own = albumKey(song)?.let(library::album)?.takeIf { it.songs.size >= ALBUM_MIN_SONGS }
+            val inOrder = start != null && start.source == SourceKind.ALBUM && !start.shuffled && play.end?.how == PlayEnd.FINISHED
+            played = when {
+                own == null || !inOrder -> 0
+                own.key == album?.key && own.songs.getOrNull(played) == song -> played + 1
+                own.songs.first() == song -> 1
+                else -> 0
+            }
+            album = own.takeIf { played > 0 }
+            if (own != null && played == own.songs.size) {
+                through += 1
+                latest = own
+                played = 0
+            }
+        }
+        return latest?.let { Moment.StartToFinish(through, it) }
+    }
+
+    /** The time zones the period's plays were heard in, from two, the most heard first. */
+    private fun onTheMoveOf(): Moment.OnTheMove? = (heard + books).filter { it.zoneOffsetMinutes != null }
+        .groupBy { checkNotNull(it.zoneOffsetMinutes) }
+        .mapValues { (_, its) -> its.sumOf { it.realMs } }
+        .entries.sortedByDescending { it.value }.map { it.key }
+        .takeIf { it.size >= MIN_ZONES }
+        ?.let(Moment::OnTheMove)
+
+    /** The time faster speeds saved in books and podcasts: time heard past the real minutes, from a minute. */
+    private fun fasterOf(): Moment.Faster? {
+        fun saved(plays: List<LoggedPlay>): Long = plays.sumOf { play -> play.clockMs?.let { (play.heardMs - it).coerceAtLeast(0) } ?: 0 }
+        val booksMs = saved(books) + saved(heard.filter { kinds.of(it) == Kind.BOOK })
+        val podcastsMs = saved(heard.filter { kinds.of(it) == Kind.PODCAST })
+        return Moment.Faster(booksMs, podcastsMs).takeIf { booksMs + podcastsMs >= MIN_SAVED_MS }
+    }
+
+    /** The song played most on this day a year ago, where it was heard. */
+    private fun yearAgoOf(): Moment.YearAgo? {
+        val day = period.lastDay.minusYears(1)
+        return mostInADay(data.plays.filter { it.counted && kinds.of(it) == Kind.MUSIC && localDay(it) == day }.mapNotNull { play -> songOf(play)?.let { play to it } })
+            ?.let { Moment.YearAgo(it.song, it.day, it.plays) }
+    }
+
+    /**
+     * New to you: the artists and songs whose first play that counted is in the period, none known before it (played here,
+     * or in an app imported from); all time: every one. Kept: played on [KEPT_DAYS] days.
+     */
+    private fun foundOf(library: Library): FoundCard? {
+        if (!enough) return null
+        val from = period.bounds?.from
+        val known = if (from == null) emptySet() else (data.plays.filter { it.startedAt < from && it.counted } + data.imports).mapNotNullTo(HashSet()) { songOf(it)?.path }
+        val knownArtists = known.flatMapTo(HashSet()) { path -> library.song(path)?.let(library::artistsOf).orEmpty().map { it.name } }
+        val counted = musicSongs.filter { it.first.counted }
+        val daysOf = HashMap<String, MutableSet<LocalDate>>()
+        val firstOf = HashMap<String, LoggedPlay>()
+        counted.forEach { (play, song) ->
+            library.artistsOf(song).forEach { artist ->
+                daysOf.getOrPut(artist.name) { HashSet() } += localDay(play)
+                firstOf.putIfAbsent(artist.name, play)
+            }
+        }
+        val artists = tops.artists.filter { it.item.name !in knownArtists }.map { FoundArtist(it.item, (daysOf[it.item.name]?.size ?: 0) >= KEPT_DAYS) }
+        val songs = tops.songs.filter { it.item.path !in known }
+        if (artists.isEmpty() && songs.isEmpty()) return null
+        val ways = artists.mapNotNull { firstOf[it.artist.name]?.start }.map(::wayOf)
+        return FoundCard(
+            artists = artists,
+            songs = songs.size,
+            newPlays = songs.sumOf { it.plays },
+            plays = counted.size,
+            fromSuggestions = ways.count { it == Way.SUGGESTIONS },
+            fromFriends = ways.count { it == Way.HUDDLE },
+            onYourOwn = artists.size - ways.count { it == Way.SUGGESTIONS || it == Way.HUDDLE },
+        )
+    }
+
+    /** Back again: the songs played in the period after [QUIET_DAYS] days without a play that counted, the longest quiet first. */
+    private fun comebacksOf(): List<Comeback> {
+        val bySong = data.plays.filter { it.counted && kinds.of(it) == Kind.MUSIC }.mapNotNull { play -> songOf(play)?.let { play to it } }.groupBy({ it.second }, { it.first })
+        return bySong.mapNotNull { (song, plays) ->
+            plays.zipWithNext().filter { (_, next) -> period.bounds == null || next.startedAt in period.bounds }
+                .maxOfOrNull { (before, next) -> ChronoUnit.DAYS.between(localDay(before), localDay(next)) }
+                ?.takeIf { it >= QUIET_DAYS }
+                ?.let { Comeback(song, it.toInt()) }
+        }.sortedByDescending { it.quietDays }.take(COMEBACKS_SHOWN)
     }
 
     /** The top lists show from [MIN_TOP_PLAYS] music plays that counted. */
@@ -478,12 +707,8 @@ private class PageWork(private val data: InsightsData, private val period: PageP
         }
     }
 
-    /** The day [song] was played most in the period: from 2 plays that counted. */
-    private fun firstsDayOf(song: Song, library: Library): DayPlays? = music.filter { it.counted && library.resolver.find(it.song)?.path == song.path }
-        .groupingBy(::localDay).eachCount()
-        .maxWithOrNull(compareBy<Map.Entry<LocalDate, Int>> { it.value }.thenBy { it.key })
-        ?.takeIf { it.value >= MIN_DAY_PLAYS }
-        ?.let { DayPlays(song, it.key, it.value) }
+    /** The day [song] was played most in the period: from [MIN_DAY_PLAYS] plays that counted. */
+    private fun firstsDayOf(song: Song): DayPlays? = mostInADay(musicSongs.filter { it.first.counted && it.second == song })?.takeIf { it.plays >= MIN_DAY_PLAYS }
 
     /** Your taste: the genres from 2 of them, the decades and middle year from [MIN_TOP_PLAYS] plays of songs with a year. */
     private fun tasteOf(library: Library): TasteCard? {

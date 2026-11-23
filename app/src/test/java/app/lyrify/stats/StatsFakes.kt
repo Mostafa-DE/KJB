@@ -71,10 +71,6 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList(), interactions: List<Inte
 
     override suspend fun all(): List<LoggedPlay>? = if (failing) null else plays.sortedBy { it.startedAt }
 
-    override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> =
-        plays.filter { !it.imported && !it.isShort && (from == null || it.startedAt >= from) && (until == null || it.startedAt < until) }
-            .sortedWith(compareBy({ it.startedAt }, { it.song.path }))
-
     /** Each as [put] writes it, and each interaction not there yet, or none when [failing]. */
     override suspend fun putAll(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean {
         if (failing) return false
@@ -197,12 +193,6 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
         val row = ResultRow(rows)
         buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
     }
-
-    override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> =
-        query(PlaysSchema.LISTENED, (from ?: Long.MIN_VALUE).toString(), (until ?: Long.MAX_VALUE).toString()) { rows ->
-            val row = ResultRow(rows)
-            buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
-        }
 
     override suspend fun putAll(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean {
         transaction {
