@@ -506,6 +506,23 @@ class NavTest {
     }
 
     @Test
+    fun `Huddle opened from a page's header goes back to that page, Huddle opened from Tools back to Tools`() {
+        // Every bar root, with a page left open on Tools, and Library on another tab: Back gives each back as it was (HH1).
+        val roots = DockTab.entries.filter { it != DockTab.HUDDLE }.map { NavState.start(DockTab.LIBRARY).open(Page.Settings()).select(it) }
+        (roots + NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.ALBUMS)).forEach { here ->
+            val opened = here.open(Page.Huddle, keepOrigin = true)
+            assertEquals("${here.tab}", DockTab.TOOLS, opened.tab)
+            assertEquals("${here.tab}", Page.Huddle, opened.pages.last())
+            assertEquals("${here.tab}", here, opened.back())
+            // Kept across a turn of the phone and process death.
+            assertEquals("${here.tab}", here, NavState.decode(opened.encode())!!.back())
+        }
+        // Tools' Huddle row keeps its way back: to Tools.
+        val row = NavState.start(DockTab.LIBRARY).select(DockTab.TOOLS).open(Page.Huddle)
+        assertEquals(NavState.start(DockTab.LIBRARY).select(DockTab.TOOLS), row.back())
+    }
+
+    @Test
     fun `a sheet over Search goes back to Search's root with the sheet, and the artist's own pages pop first`() {
         val search = NavState.start(DockTab.SEARCH)
         val sheet = SheetReturn("search host", OpenSheet.Menu(SongRef("/music/b.flac")))
