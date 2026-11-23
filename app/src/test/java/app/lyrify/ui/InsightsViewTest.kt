@@ -277,7 +277,7 @@ class InsightsViewTest {
     fun `a short day or month never reads as no hours, and time zones go from west to east`() {
         val time = File("src/main/java/app/lyrify/ui/InsightsTime.kt").readText()
         assertFalse(time.contains("pluralStringResource(R.plurals.insights_hours_long, hours"))
-        assertTrue(time.contains("ms < HOUR -> listenedText(ms)"))
+        assertTrue(time.contains("ms < HOUR -> heardText(ms)"))
         assertTrue(time.contains("ms in 1 until HOUR -> stringResource(R.string.insights_under_an_hour)"))
         val you = File("src/main/java/app/lyrify/ui/InsightsYou.kt").readText()
         assertTrue(you.contains("val zones = moment.offsets.sorted().map { utcText(it) }"))
@@ -314,6 +314,23 @@ class InsightsViewTest {
         listOf(forYou, File(ui, "InsightsTops.kt").readText()).forEach { assertTrue(Regex("""RoundButton\(\s*R\.drawable\.ic_play_arrow_fill""").containsMatchIn(it)) }
         // The cards name a period with the words the top list already uses.
         assertTrue(File(ui, "InsightsCards.kt").readText().contains("else -> stringResource(period.kind.named)"))
+    }
+
+    @Test
+    fun `an answered quiz lets taps through to back and next, a moment under a minute never reads 0 min, and a bold word never lands inside another`() {
+        val ui = File("src/main/java/app/lyrify/ui")
+        // A clickable, even turned off, takes the touch from the halves under the slide: an answered row drops it.
+        val slides = File(ui, "InsightsSlides.kt").readText()
+        assertFalse(slides.contains("clickable(enabled = !answered)"))
+        assertTrue(slides.contains(".then(if (answered) Modifier else Modifier.clickable {"))
+        // Every Insights time that may be under half a minute goes through heardText, never listenedText's "0 min".
+        val cards = File(ui, "InsightsCards.kt").readText()
+        assertTrue(cards.contains("if (ms in 1 until ROUNDS_TO_NOTHING_MS) stringResource(R.string.insights_under_a_minute) else listenedText(ms)"))
+        val time = File(ui, "InsightsTime.kt").readText()
+        listOf("listenedText(totals.heardMs / days)", "listenedText(ms)", "listenedText(it)").forEach { assertFalse(it, time.contains(it)) }
+        assertFalse(slides.contains("listenedText(time.totals.heardMs / days)"))
+        // "UTC" bolds the plain "UTC", not the start of "UTC-8" before it.
+        assertTrue(File(ui, "InsightsYou.kt").readText().contains("while (at >= 0 && taken.any { at < it.last + 1 && at + word.length > it.first })"))
     }
 
     // TalkBack and privacy

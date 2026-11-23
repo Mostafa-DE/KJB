@@ -167,11 +167,11 @@ internal fun Slide(slide: StorySlide, page: InsightsPage, settings: Settings, st
                     val change = before?.takeIf { period.kind != ListeningPeriod.ALL_TIME }?.let { percentChange(time.totals.heardMs, it.heardMs) } ?: 0L
                     Text(
                         if (change == 0L) {
-                            stringResource(R.string.insights_story_a_day, listenedText(time.totals.heardMs / days))
+                            stringResource(R.string.insights_story_a_day, heardText(time.totals.heardMs / days))
                         } else {
                             stringResource(
                                 if (change < 0) R.string.insights_story_a_day_less else R.string.insights_story_a_day_more,
-                                listenedText(time.totals.heardMs / days),
+                                heardText(time.totals.heardMs / days),
                                 formatCount(abs(change).toInt()),
                                 beforeName(period),
                             )
@@ -433,10 +433,11 @@ private fun Quiz(rows: List<Ranked<Song>>, settings: Settings, state: StoryState
                             .clip(RoundedCornerShape(20.dp))
                             .background(if (answered && right) DarkBrandColors.suggestion.copy(alpha = 0.2f) else BrandLilac.copy(alpha = 0.08f))
                             .border(2.dp, border, RoundedCornerShape(20.dp))
-                            .clickable(enabled = !answered) {
+                            // Answered, a row is no button: a tap on it goes to back or next under the slide.
+                            .then(if (answered) Modifier else Modifier.clickable {
                                 state.picked = song
                                 fresh = true
-                            }
+                            })
                             .heightIn(min = 72.dp)
                             .padding(start = 8.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
                     ) {

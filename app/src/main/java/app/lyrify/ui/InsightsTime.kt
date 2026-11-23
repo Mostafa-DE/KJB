@@ -153,7 +153,7 @@ internal fun YourTime(time: TimeCard, period: PagePeriod, onShare: () -> Unit) {
                 )
             } else {
                 val days = (ChronoUnit.DAYS.between(period.firstDay, period.lastDay) + 1).coerceAtLeast(1)
-                Text(stringResource(R.string.insights_a_day, listenedText(totals.heardMs / days)), style = HeroLine, color = BrandLilac.copy(alpha = 0.86f))
+                Text(stringResource(R.string.insights_a_day, heardText(totals.heardMs / days)), style = HeroLine, color = BrandLilac.copy(alpha = 0.86f))
             }
         }
         HeroBars(time, period, Modifier.padding(top = 16.dp))
@@ -211,7 +211,7 @@ private fun HeroBars(time: TimeCard, period: PagePeriod, modifier: Modifier) {
     // TalkBack reads each step that has come and its time: "Mon 23 Nov 2 h 8 min, ...".
     val summary = stringResource(
         if (steps.step == Step.DAY) R.string.insights_chart_days else R.string.insights_chart_months,
-        steps.heardMs.mapIndexedNotNull { i, ms -> ms?.let { stringResource(R.string.insights_step, stepText(steps, i), listenedText(it)) } }.joinToString(", "),
+        steps.heardMs.mapIndexedNotNull { i, ms -> ms?.let { stringResource(R.string.insights_step, stepText(steps, i), heardText(it)) } }.joinToString(", "),
     )
     val count = steps.heardMs.size.coerceAtLeast(1)
     val step = staggerMs(count, BAR_STEP_MS, BAR_MS, ARRIVED_MS)
@@ -379,7 +379,7 @@ internal fun EveryDay(days: DaysCard, period: PagePeriod) {
             }
             Column(Modifier.weight(1f).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(18.dp)).padding(10.dp).semantics(mergeDescendants = true) {}) {
                 FactKicker(R.drawable.ic_auto_awesome, stringResource(R.string.insights_busiest), brand.highlight)
-                Counted(days.busiest.heardMs, FigureValue, MaterialTheme.colorScheme.onSurface) { AnnotatedString(listenedText(it)) }
+                Counted(days.busiest.heardMs, FigureValue, MaterialTheme.colorScheme.onSurface) { AnnotatedString(heardText(it)) }
                 Text(dayText(days.busiest.day, weekday = true, year = period.kind == ListeningPeriod.YEAR || period.kind == ListeningPeriod.ALL_TIME), style = FigureLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -435,7 +435,7 @@ private fun WeekColumns(days: DaysCard, period: PagePeriod, heat: List<Color>) {
             val day = days.heard.first.plusDays(i.toLong())
             val today = day == period.lastDay && period.going
             val name = stepText(days.heard, i)
-            val description = if (ms == null) name else stringResource(R.string.insights_step, name, if (ms > 0) listenedText(ms) else stringResource(R.string.insights_nothing))
+            val description = if (ms == null) name else stringResource(R.string.insights_step, name, if (ms > 0) heardText(ms) else stringResource(R.string.insights_nothing))
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -456,7 +456,7 @@ private fun WeekColumns(days: DaysCard, period: PagePeriod, heat: List<Color>) {
                 Text(
                     when {
                         ms == null -> ""
-                        ms < HOUR -> listenedText(ms)
+                        ms < HOUR -> heardText(ms)
                         else -> stringResource(R.string.insights_hours_short, String.format(Locale.getDefault(), "%.1f", ms / HOUR.toDouble()))
                     },
                     style = AxisLabel.copy(fontWeight = FontWeight.SemiBold).tabular(), color = colors.onSurfaceVariant, maxLines = 1, autoSize = TextAutoSize.StepBased(minFontSize = SMALLEST_LABEL, maxFontSize = AxisLabel.fontSize))
@@ -493,7 +493,7 @@ private fun MonthCalendar(days: DaysCard, period: PagePeriod, heat: List<Color>)
                     val ground = heat[if (ms == null) 0 else heatLevel(ms, Step.DAY)]
                     val today = day == period.lastDay && period.going
                     val busiest = day == days.busiest.day
-                    val description = stringResource(R.string.insights_step, stepText(days.heard, i), if (ms != null && ms > 0) listenedText(ms) else stringResource(R.string.insights_nothing))
+                    val description = stringResource(R.string.insights_step, stepText(days.heard, i), if (ms != null && ms > 0) heardText(ms) else stringResource(R.string.insights_nothing))
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
@@ -588,7 +588,7 @@ private fun MonthHours(days: DaysCard, heat: List<Color>) {
                         return@forEach
                     }
                     val ground = heat[heatLevel(ms, Step.MONTH)]
-                    val description = stringResource(R.string.insights_step, stepText(days.heard, i), if (ms > 0) listenedText(ms) else stringResource(R.string.insights_nothing))
+                    val description = stringResource(R.string.insights_step, stepText(days.heard, i), if (ms > 0) heardText(ms) else stringResource(R.string.insights_nothing))
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier.weight(1f).aspectRatio(0.8f).background(ground, RoundedCornerShape(6.dp)).clearAndSetSemantics { contentDescription = description },
@@ -678,7 +678,7 @@ internal fun Dial(
 ) {
     val clock = LocalArrivalClock.current
     val hourWords = (0 until HOURS).map { hourLabel(it) }
-    val summary = stringResource(R.string.insights_dial, hourWords[peak], hours.withIndex().filter { it.value > 0 }.map { stringResource(R.string.insights_step, hourWords[it.index], listenedText(it.value)) }.joinToString(", "))
+    val summary = stringResource(R.string.insights_dial, hourWords[peak], hours.withIndex().filter { it.value > 0 }.map { stringResource(R.string.insights_step, hourWords[it.index], heardText(it.value)) }.joinToString(", "))
     val your = stringResource(R.string.insights_your_hour)
     val measurer = rememberTextMeasurer()
     val labelStyle = AxisLabel.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, color = label)

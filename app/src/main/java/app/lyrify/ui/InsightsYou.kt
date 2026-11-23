@@ -645,9 +645,15 @@ internal fun boldIn(text: String, vararg bold: String): AnnotatedString {
     val ink = MaterialTheme.colorScheme.onSurface
     return buildAnnotatedString {
         append(text)
-        bold.forEach { word ->
-            val at = text.indexOf(word)
-            if (word.isNotEmpty() && at >= 0) addStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = ink), at, at + word.length)
+        // The longest words first, each where no other already is: "UTC" is the plain one, not the start of "UTC-8".
+        val taken = mutableListOf<IntRange>()
+        bold.filter { it.isNotEmpty() }.sortedByDescending { it.length }.forEach { word ->
+            var at = text.indexOf(word)
+            while (at >= 0 && taken.any { at < it.last + 1 && at + word.length > it.first }) at = text.indexOf(word, at + 1)
+            if (at >= 0) {
+                addStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = ink), at, at + word.length)
+                taken += at until at + word.length
+            }
         }
     }
 }

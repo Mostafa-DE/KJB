@@ -135,6 +135,8 @@
     <string name="insights_heat_more">More</string>
     <!-- "2.1 h" under a day of the week. -->
     <string name="insights_hours_short">%1$s h</string>
+    <!-- Some time heard, under half a minute, which would round to "0 min". -->
+    <string name="insights_under_a_minute">&lt;1 min</string>
     <!-- A month of all time heard for less than an hour, in its small cell. -->
     <string name="insights_under_an_hour">&lt;1</string>
     <plurals name="insights_year_summary">

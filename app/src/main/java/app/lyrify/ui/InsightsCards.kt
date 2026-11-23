@@ -220,6 +220,10 @@ internal fun bigTime(ms: Long, unit: SpanStyle): AnnotatedString {
     }
 }
 
+/** Real minutes as [listenedText] says them, but a moment under half a minute (which it rounds to "0 min") reads "<1 min". */
+@Composable
+internal fun heardText(ms: Long): String = if (ms in 1 until ROUNDS_TO_NOTHING_MS) stringResource(R.string.insights_under_a_minute) else listenedText(ms)
+
 /** [part] of [whole] in whole percent; 0 of nothing. */
 fun percentOf(part: Long, whole: Long): Int = if (whole <= 0) 0 else (part * 100.0 / whole).roundToInt()
 
@@ -390,6 +394,9 @@ private val PillWord = body(10.5f, 16, 650).copy(letterSpacing = 0.04.em)
 internal val PillNumber = body(12f, 16, 650)
 
 private val LegendValue = display(14, 18, weight = 700)
+
+/** Under this, [listenedText] rounds a time to 0 min. */
+private const val ROUNDS_TO_NOTHING_MS = 30_000L
 
 /** The smallest a counted number shrinks to with large text. */
 private val SMALLEST_NUMBER = 12.sp
