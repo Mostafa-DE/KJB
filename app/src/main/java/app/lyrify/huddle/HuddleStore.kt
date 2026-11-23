@@ -15,6 +15,7 @@ import app.lyrify.LOG_TAG
 import app.lyrify.backup.SectionJson.int
 import app.lyrify.backup.SectionJson.jsonObject
 import app.lyrify.backup.SectionJson.text
+import app.lyrify.backup.ZipLimits
 import app.lyrify.data.writeWithRetries
 import app.lyrify.stats.PlayRow
 import app.lyrify.stats.PlaysSchema
@@ -258,7 +259,7 @@ object HuddleBackup {
         return BackupKey(HuddleCrypto.encode(salt), rounds, HuddleCrypto.encode(HuddleCrypto.passphraseKey(passphrase, salt, rounds)))
     }
 
-    /** Whether [section] is sealed, so its restore asks for the passphrase; a plain one is not. */
+    /** Whether [section] is sealed (it names its kdf), so its restore asks for the passphrase and only that opens it; a plain one is not. */
     fun locked(section: String): Boolean = jsonObject(section)?.text(KDF_KEY) != null
 
     /** What a section holds, opened: Huddle's state, and its history ([HuddleLog]): cards both ways and friends' plays. */
@@ -305,20 +306,21 @@ object HuddleBackup {
     }
 
     /**
-     * What [section] holds: a plain one as it is, with no key, so a restore keeps the phone's own; a sealed one opened
-     * with [passphrase], with the key that opened it ([HuddleState.backupKey]) for the next backups. Null for another
-     * passphrase, a changed section, or none. A line of the history this version cannot read (a newer KJB's) is left out.
-     * A sealed one is slow, as [newKey].
+     * What [section] holds: a plain one as it is, with no key, so a restore keeps the phone's own; a sealed one ([locked])
+     * opened with [passphrase], its box only, with the key that opened it ([HuddleState.backupKey]) for the next backups.
+     * Null for another passphrase, a changed section, none, or one whose lines unpack past [limit] characters (a zip
+     * bomb, or not KJB's: as much as a backup holds of the play log's parts, [ZipLimits.partsBytes]). A line of the
+     * history this version cannot read (a newer KJB's) is left out. A sealed one is slow, as [newKey].
      */
-    fun open(section: String, passphrase: CharArray): Opened? {
+    fun open(section: String, passphrase: CharArray, limit: Long = ZipLimits().partsBytes): Opened? {
         val root = jsonObject(section) ?: return null
         val format = root.int(FORMAT_KEY)?.takeIf { it in 1..FORMAT } ?: return null
-        val lines = root.text(LINES_KEY)
         val plain: ByteArray
         val backupKey: BackupKey?
-        // Format 1 was always sealed.
-        if (lines != null && format > 1) {
-            plain = HuddleCrypto.decode(lines) ?: return null
+        // Sealed whenever it names its kdf, as the restore row is told ([locked]): then lines beside the box are no
+        // matter. Format 1 was always sealed.
+        if (root.text(KDF_KEY) == null && format > 1) {
+            plain = root.text(LINES_KEY)?.let(HuddleCrypto::decode) ?: return null
             backupKey = null
         } else {
             if (root.text(KDF_KEY) != KDF) return null
@@ -335,7 +337,12 @@ object HuddleBackup {
                 HuddleJson.decode(plain.decodeToString()).let { Opened(it.copy(inbox = emptyList(), backupKey = backupKey), it.inbox, it.plays) }
             } else {
                 GZIPInputStream(plain.inputStream()).bufferedReader().useLines { text ->
-                    val lines = text.iterator()
+                    var read = 0L
+                    // Counted as they are read: reading stops past the limit (an IOException, as a damaged one).
+                    val lines = text.onEach { line ->
+                        read += line.length
+                        if (read > limit) throw IOException("past $limit")
+                    }.iterator()
                     if (!lines.hasNext()) return null
                     val state = HuddleJson.decode(lines.next()).copy(backupKey = backupKey)
                     val cards = ArrayList<KeptCard>()
@@ -408,17 +415,20 @@ object HuddleBackup {
 }
 
 /**
- * This phone's state with [backup]'s restored into it: friends and invites it does not have yet, each friend's latest
- * play of the two, its own name and Listen privately kept when set, and [key] (the passphrase the restore was opened with)
- * kept for the next backups. The backup's cards and plays go to the history (Huddle.restore).
+ * This phone's state with [backup]'s restored into it: friends, invites and joins it does not have yet (a join whose
+ * answer was lost, sent again as it was, makes the same friend on both phones), each friend's latest play of the two,
+ * its own name and Listen privately kept when set, and [key] (the passphrase the restore was opened with) kept for the
+ * next backups. The backup's cards and plays go to the history (Huddle.restore).
  */
 fun HuddleState.restored(backup: HuddleState, key: BackupKey?): HuddleState {
     val boxes = friends.map { it.inBox }.toSet()
     val tokens = invites.map { it.token }.toSet()
+    val joinIds = joins.map { it.joinId }.toSet()
     return copy(
         name = name ?: backup.name,
         friends = friends + backup.friends.filter { it.inBox !in boxes },
         invites = invites + backup.invites.filter { it.token !in tokens },
+        joins = joins + backup.joins.filter { it.joinId !in joinIds },
         plays = latestPlays(plays + backup.plays),
         privateUntil = privateUntil ?: backup.privateUntil,
         // A plain backup brings no key: the phone keeps its own.

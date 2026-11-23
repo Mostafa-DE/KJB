@@ -177,6 +177,45 @@ class HuddleStoreTest {
     }
 
     @Test
+    fun `a sealed section given plain lines too opens only with its passphrase, and only to what it sealed`() = runBlocking {
+        // Made by hand: a stranger's lines beside the sealed box never skip the passphrase the restore row asks for.
+        val key = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)
+        val sealed = HuddleBackup.seal(full.copy(backupKey = key), history(cards, plays), random)!!
+        val plain = HuddleBackup.seal(full.copy(backupKey = null, friends = listOf(friend("f7", "Stranger"))), history(), random)!!
+        val both = sealed.dropLast(1) + ""","lines":"${Regex(""""lines":"([^"]*)"""").find(plain)!!.groupValues[1]}"}"""
+        assertTrue(HuddleBackup.locked(both))
+        assertNull(HuddleBackup.open(both, CharArray(0)))
+        assertNull(HuddleBackup.open(both, "correct horses".toCharArray()))
+        val back = HuddleBackup.open(both, "correct horse".toCharArray())!!
+        assertEquals(full.friends, back.state.friends)
+        assertEquals(key, back.state.backupKey)
+    }
+
+    @Test
+    fun `a section that unpacks past what a backup holds opens to nothing, plain or sealed`() = runBlocking {
+        // A few bytes in the zip can unpack to gigabytes: reading stops at the limit, as the play log's parts do.
+        val key = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)
+        val plain = HuddleBackup.seal(full.copy(backupKey = null), history(cards, plays), random)!!
+        val sealed = HuddleBackup.seal(full.copy(backupKey = key), history(cards, plays), random)!!
+        assertNull(HuddleBackup.open(plain, CharArray(0), limit = 100))
+        assertNull(HuddleBackup.open(sealed, "correct horse".toCharArray(), limit = 100))
+        assertNotNull(HuddleBackup.open(plain, CharArray(0)))
+        assertNotNull(HuddleBackup.open(sealed, "correct horse".toCharArray()))
+    }
+
+    @Test
+    fun `a restore brings back the joins the phone is not making yet, once each`() {
+        // A join whose answer was lost, sent again as it was from the new phone, makes the same friend on both phones.
+        val join = PendingJoin("join-f9", "accept-data", "out-f9", "in-f9", "ok-f9", "ik-f9", "Rook", card)
+        val mine = PendingJoin("join-f8", "accept-mine", "out-f8", "in-f8", "ok-f8", "ik-f8", "Kai", null)
+        val phone = HuddleState(name = "Wren", joins = listOf(mine))
+        val backup = full.copy(outbox = emptyList(), backupKey = null, joins = listOf(join, mine.copy(data = "accept-older")))
+        val restored = phone.restored(backup, null)
+        assertEquals(listOf(mine, join), restored.joins)
+        assertEquals("once each", restored, restored.restored(backup, null))
+    }
+
+    @Test
     fun `a plain backup's restore keeps the phone's own passphrase key, and a sealed one's key replaces it`() {
         val mine = BackupKey("salt-1", 1_000, "key-1")
         val phone = HuddleState(name = "Wren", backupKey = mine)
