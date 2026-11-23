@@ -550,7 +550,7 @@ private fun SectionHeader(title: String, count: Int) {
     )
 }
 
-/** One TalkBack stop: "title, artist, 2 copies, identical"; the cover is decorative. */
+/** One TalkBack stop: "title, artist, length, 2 copies, identical"; the cover is decorative. */
 @Composable
 private fun GroupCard(group: DuplicateGroup, modifier: Modifier, onOpen: () -> Unit) {
     val context = LocalContext.current
@@ -560,7 +560,7 @@ private fun GroupCard(group: DuplicateGroup, modifier: Modifier, onOpen: () -> U
     val description = stringResource(
         R.string.dupes_group_cd,
         keep.title,
-        artist,
+        listOfNotNull(artist, lengthWords(keep.durationMs).ifEmpty { null }).joinToString(", "),
         pluralStringResource(R.plurals.dupes_copies_cd, group.copies, group.copies),
         stringResource(levelDescription(group.confidence)),
     )
@@ -587,7 +587,10 @@ private fun GroupCard(group: DuplicateGroup, modifier: Modifier, onOpen: () -> U
             }
             Column(Modifier.weight(1f).padding(start = 4.dp)) {
                 Text(keep.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    SongLength(keep.durationMs, Modifier.padding(start = 8.dp))
+                }
                 Text(copies, style = MaterialTheme.typography.bodySmall.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

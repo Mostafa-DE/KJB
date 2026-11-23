@@ -322,9 +322,8 @@ class LibraryListsTest {
     fun `the length ends the artist's line before the menu, small and on one line, and the artist gives way first so a note fits too (the wiring, read from the source)`() {
         // No Compose renderer on the JVM: the format and the words are the tests above.
         val row = File("src/main/java/app/lyrify/ui/LibraryParts.kt").readText().substringAfter("fun SongRow(").substringBefore("\n}\n")
-        assertTrue(row.contains("val length = rowLength(song.durationMs)"))
-        assertTrue(row.contains("spokenLength(song.durationMs).map { (words, count) -> pluralStringResource(words, count, count) }.joinToString(\" \")"))
-        assertTrue(row.contains("mark, reason, lengthWords.ifEmpty { null })"))
+        // The length and its words as every row shows them (SongLength, lengthWords: LN2).
+        assertTrue(row.contains("mark, reason, lengthWords(song.durationMs).ifEmpty { null })"))
         // The artist, the note and the lyrics icon share, in a row of their own, what the length leaves; the artist is cut
         // first, a note never.
         val shrinking = row.substringAfter("Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {").substringBefore("\n                    }\n")
@@ -334,26 +333,132 @@ class LibraryListsTest {
         assertFalse(row.contains("listOfNotNull(artist, note)"))
         // The length after that row, at the line's end before "⋯", unweighted so it is measured first and never cut: the
         // secondary ink, small print, never wrapped (Grok review: a check by order alone let it slip into the row above).
-        assertFalse(shrinking.contains("Text(length"))
-        val length = row.substringAfter(shrinking).lines().single { "Text(length" in it }
-        assertTrue(length.contains("if (length != null) Text(length, style = MaterialTheme.typography.bodySmall.tabular(), color = colors.onSurfaceVariant, maxLines = 1, softWrap = false"))
+        assertFalse(shrinking.contains("SongLength("))
+        val length = row.substringAfter(shrinking).lines().single { "SongLength(" in it }
+        assertTrue(length.contains("SongLength(song.durationMs, Modifier.padding(start = 8.dp))"))
         assertFalse(length.contains("weight("))
     }
 
+    // Every song's length, wherever a song shows (LN2): the rows that are not the shared one, Huddle's cards, one format
+
     @Test
-    fun `the length is added once, in the shared song row, and rows with a length or progress of their own keep theirs (read from the source)`() {
-        val ui = File("src/main/java/app/lyrify/ui").listFiles().orEmpty().filter { it.extension == "kt" }
-        val uses = ui.associate { it.name to Regex("""(?<!fun )rowLength\(""").findAll(it.readText()).count() }.filterValues { it > 0 }
-        assertEquals(mapOf("LibraryParts.kt" to 1), uses)
-        // The queue says where a song was left, books where they stand: neither is the shared row, so neither shows a length
-        // on top of its own.
-        val shared = Regex("""\bSongRow\(""")
-        val queue = File("src/main/java/app/lyrify/ui/QueueScreens.kt").readText()
-        assertTrue(queue.contains("R.string.queue_left_at"))
-        assertFalse(shared.containsMatchIn(queue))
+    fun `a length shows as on the song rows, small in the secondary ink and on one line, and TalkBack hears it in words (the wiring, read from the source)`() {
+        // No Compose renderer on the JVM: rowLength and spokenLength, above, are the format and the words.
+        val parts = File("src/main/java/app/lyrify/ui/LibraryParts.kt").readText()
+        assertTrue(parts.contains("fun SongLength(ms: Long, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) {"))
+        val shown = parts.substringAfter("fun SongLength(").substringBefore("\n}\n")
+        // A length unknown (0, or under a second) shows nothing, and is not said either.
+        assertTrue(shown.contains("val length = rowLength(ms) ?: return"))
+        assertTrue(shown.contains("Text(length, style = MaterialTheme.typography.bodySmall.tabular(), color = color, maxLines = 1, softWrap = false, modifier = modifier.semantics { contentDescription = words })"))
+        assertTrue(parts.substringAfter("fun lengthWords(").substringBefore("\n\n").contains("spokenLength(ms).map { (words, count) -> pluralStringResource(words, count, count) }.joinToString(\" \")"))
+        // A row that opens something shows it at the end of its line when given one (What <name> played), and says it.
+        val nav = parts.substringAfter("fun NavRow(").substringBefore("\n}\n")
+        assertTrue(nav.contains("lengthMs: Long = 0,"))
+        assertTrue(nav.contains("SongLength(lengthMs, Modifier.padding(start = 8.dp))"))
+        assertTrue(nav.contains("description ?: listOfNotNull(title, sub, lengthWords(lengthMs).ifEmpty { null }).joinToString(\", \")"))
+    }
+
+    @Test
+    fun `the queue's rows show each song's length at the end of the artist's line, Left at, the handle and the title kept (read from the source)`() {
+        // On purpose (LN2): the queue shows the length too; LN1 kept it to the shared row.
+        val row = File("src/main/java/app/lyrify/ui/QueueScreens.kt").readText().substringAfter("private fun QueueSongRow(").substringBefore("\n}\n")
+        assertTrue(row.contains("R.string.queue_left_at"))
+        assertTrue(row.contains("listOfNotNull(label, sub, lengthWords(song?.durationMs ?: 0).ifEmpty { null }, mark, reason)"))
+        // The line under the title: the artist (or where the song was left) takes what is left, the length ends it.
+        val line = row.substringAfter("Text(sub, ").substringBefore("if (reason != null) ReasonLine(reason)")
+        assertTrue(line.startsWith("style = QueueLine, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))"))
+        assertTrue(line.contains("song?.let { SongLength(it.durationMs, Modifier.padding(start = 8.dp), muted) }"))
+        assertEquals(1, Regex("""SongLength\(""").findAll(row).count())
+        // The handle keeps its 48 dp.
+        assertTrue(row.substringAfterLast("Box(").contains(".size(48.dp)"))
+        // Books keep where they stand, and no length.
         val books = File("src/main/java/app/lyrify/ui/BooksScreen.kt").readText()
         assertTrue(books.contains("StatusLines(status)"))
-        assertFalse(shared.containsMatchIn(books))
+        assertFalse(books.contains("SongLength("))
+    }
+
+    @Test
+    fun `Huddle's song cards and rows show the song's length with its line, and TalkBack hears it (read from the source)`() {
+        fun body(file: String, start: String, end: String = "\n}\n") = File("src/main/java/app/lyrify/ui/$file").readText().substringAfter(start).substringBefore(end)
+        // The postcards (Sent to you, its View all, "You and <name>"): a song's card, small, after the song's line.
+        assertTrue(body("HuddleParts.kt", "internal fun Postcard(").contains("SongLength(lengthMs)"))
+        assertTrue(body("HuddleParts.kt", "internal fun KeptPostcard(").contains("lengthMs = if (card.kind == CardKind.SONG) card.songs.first().durationMs else 0,"))
+        // Listening now's card, and Library's card from a friend: after the artist.
+        val friend = body("HuddleParts.kt", "internal fun FriendCard(")
+        assertTrue(friend.contains("SongLength(play.song.durationMs, color = BrandLilac.copy(alpha = 0.85f))"))
+        assertTrue(friend.contains("lengthWords(play.song.durationMs)"))
+        assertTrue(body("HuddleEverywhere.kt", "internal fun FromCard(").contains("if (card.kind == CardKind.SONG) SongLength(first.durationMs)"))
+        // The card opened: a song's after its artist, an album's or a playlist's songs each at their row's end.
+        assertTrue(body("HuddleSheets.kt", "private fun ReceivedSheet(", "private fun SentBy(").contains("SongLength(song.durationMs)"))
+        val cardRow = body("HuddleSheets.kt", "private fun CardSongRow(")
+        assertTrue(cardRow.contains("SongLength(song.durationMs)"))
+        assertTrue(cardRow.contains("listOfNotNull(line, lengthWords(song.durationMs).ifEmpty { null }, words)"))
+        // A friend's song: after the artist; while they play, the bar under it ends with it instead.
+        assertTrue(body("HuddleSheets.kt", "private fun PeekSheet(", "private fun RowScope.PeekTile(").contains("if (!playing) SongLength(play.song.durationMs)"))
+        // What <name> played: each play's line ends with it.
+        val plays = body("HuddleHistory.kt", "private fun PlaysPage(")
+        assertTrue(plays.contains("lengthMs = play.song.durationMs,"))
+        assertTrue(plays.contains("lengthWords(play.song.durationMs).ifEmpty { null },"))
+        // The song sent: Send to's head, the invite's ticket and the invite's card.
+        assertTrue(body("HuddleSheets.kt", "internal fun SendToFriendSheet(").contains("if (kind == CardKind.SONG) SongLength(first.durationMs)"))
+        assertTrue(body("HuddleInvite.kt", "private fun Ticket(").contains("if (it.kind == CardKind.SONG) SongLength(it.songs.first().durationMs, color = BrandLilac.copy(alpha = 0.8f))"))
+        assertTrue(body("HuddleInvite.kt", "internal fun AcceptInviteSheet(").contains("if (it.kind == CardKind.SONG) SongLength(it.songs.first().durationMs)"))
+    }
+
+    @Test
+    fun `the other rows that list songs show the length at the end of the artist's line, and TalkBack hears it (read from the source)`() {
+        fun body(file: String, start: String) = File("src/main/java/app/lyrify/ui/$file").readText().substringAfter(start).substringBefore("\n}\n")
+        // The lyrics' Songs list, which the song pickers show too (a tone's song, a song for a friend).
+        val ledger = body("SongsScreen.kt", "private fun SongRow(entry: LedgerEntry")
+        assertTrue(ledger.contains("Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))"))
+        assertTrue(ledger.contains("SongLength(entry.durationMs, Modifier.padding(start = 8.dp))"))
+        assertTrue(ledger.contains("lengthWords(entry.durationMs).ifEmpty { null }"))
+        // Hidden songs and those kept out of suggestions, the phone's trash, Duplicates' groups.
+        assertTrue(body("LibraryHiding.kt", "internal fun HiddenRow(").contains("SongLength(song.durationMs)"))
+        assertTrue(body("TrashScreen.kt", "private fun TrashRow(").contains("SongLength(song.file.durationMs, Modifier.padding(start = 8.dp))"))
+        val group = body("DuplicatesScreen.kt", "private fun GroupCard(")
+        assertTrue(group.contains("SongLength(keep.durationMs, Modifier.padding(start = 8.dp))"))
+        assertTrue(group.contains("listOfNotNull(artist, lengthWords(keep.durationMs).ifEmpty { null }).joinToString(\", \")"))
+        // Insights' For you rows; the top songs (Your listening, Insights) and Insights' songs never played or forgotten.
+        assertTrue(body("SuggestionScreens.kt", "fun ForYouInsights(").contains("SongLength(pick.song.durationMs, Modifier.padding(start = 8.dp))"))
+        val top = body("ListeningScreen.kt", "internal fun TopRowView(")
+        assertTrue(top.contains("SongLength(lengthMs, Modifier.padding(start = 8.dp))"))
+        assertTrue(top.contains("lengthWords(lengthMs).ifEmpty { null }"))
+        assertTrue(body("ListeningScreen.kt", "internal fun TopRow(").contains("lengthMs = item.durationMs"))
+        val insights = File("src/main/java/app/lyrify/ui/InsightsCards.kt").readText()
+        assertTrue(insights.contains("lengthMs = song.durationMs"))
+        assertTrue(insights.contains("lengthMs = top.item.durationMs"))
+        // A song's bookmarks, and Downloads' rows.
+        assertTrue(body("BookmarksScreen.kt", "fun BookmarksPage(").contains("group.song?.let { SongLength(it.durationMs) }"))
+        assertTrue(body("DownloadsScreen.kt", "private fun DownloadRow(").contains("SongLength(item.durationSec * 1_000L, Modifier.padding(start = 8.dp))"))
+    }
+
+    @Test
+    fun `every song's length in the app is written as the player's clock, and the other formatter is gone (read from the source)`() {
+        val ui = File("src/main/java/app/lyrify/ui").listFiles().orEmpty().filter { it.extension == "kt" }.associate { it.name to it.readText() }
+        // The other one went through DateUtils.formatElapsedTime: "05:07" where the rows say "5:07".
+        ui.forEach { (name, text) ->
+            assertFalse(name, Regex("""\bsongLength\(""").containsMatchIn(text))
+            assertFalse(name, text.contains("formatElapsedTime"))
+        }
+        // The song sheet's head and Song info show nothing for a length unknown, as the rows do.
+        val sheets = ui.getValue("SongSheets.kt")
+        assertTrue(sheets.contains("rowLength(song.durationMs)?.let { length ->"))
+        assertTrue(sheets.contains("rowLength(song.durationMs)?.let { InfoRow(R.drawable.ic_schedule, R.string.lib_info_length, it) }"))
+        // A length inside a sentence keeps its place there, in the same format.
+        assertTrue(ui.getValue("LyricsSheet.kt").contains("val length = clock(song?.durationMs ?: entry?.durationMs ?: 0)"))
+        assertTrue(ui.getValue("CheckScreen.kt").contains("R.string.check_artist_length, artistOf(entry), clock(entry.durationMs)"))
+        assertTrue(ui.getValue("CheckScreen.kt").contains("val length = clock(candidate.duration.roundToLong() * MS_PER_SECOND)"))
+        assertTrue(ui.getValue("DuplicateSheets.kt").contains("val length = clock(file.durationMs)"))
+        // Huddle's "Is this the song?" and a friend's place in their song.
+        val huddle = ui.getValue("HuddleSheets.kt")
+        assertTrue(huddle.contains("listOfNotNull(song.title, song.artist, song.album, rowLength(song.durationMs))"))
+        assertTrue(huddle.contains("Text(clock(at), ") && huddle.contains("Text(clock(play.song.durationMs), "))
+        assertTrue(huddle.contains("R.string.huddle_play_along_foot, clock(playAlongMs(play, now)), name"))
+        // A video found on YouTube, and a link's.
+        val downloads = ui.getValue("DownloadsScreen.kt")
+        assertTrue(downloads.contains("val length = rowLength(result.durationSec * 1_000L)"))
+        assertTrue(downloads.contains("info?.let { SongLength(it.durationSec * 1_000L) }"))
     }
 
     // Recently added, Recently played and Most played (RP1): their chips, Search in this list, and the songs they show

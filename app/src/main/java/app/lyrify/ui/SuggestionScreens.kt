@@ -214,7 +214,10 @@ fun ForYouInsights(modifier: Modifier = Modifier) {
                 SongCover(SongArt(pick.song.path, pick.song.ref.mediaStoreId), size = 44.dp)
                 Column(Modifier.weight(1f)) {
                     Text(ui.title(pick.song), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(pick.song.artist.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(pick.song.artist.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        SongLength(pick.song.durationMs, Modifier.padding(start = 8.dp))
+                    }
                     if (reasons) ReasonLine(reasonWords(context, pick.reason, ui::title))
                 }
             }

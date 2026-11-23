@@ -187,12 +187,15 @@ private fun SongSheetHeader(song: Song, title: String, artists: List<String>, on
             ArtistLink(artists, onArtist) { go -> LinkText(song.artist ?: stringResource(R.string.check_no_artist), go) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LinkText(song.album ?: stringResource(R.string.lib_unknown_album), onAlbum, Modifier.weight(1f, fill = false))
-                Text(
-                    stringResource(R.string.lib_after_dot, songLength(song.durationMs)),
-                    style = MaterialTheme.typography.bodyMedium.tabular(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
+                // As the rows write it, and nothing for a length unknown.
+                rowLength(song.durationMs)?.let { length ->
+                    Text(
+                        stringResource(R.string.lib_after_dot, length),
+                        style = MaterialTheme.typography.bodyMedium.tabular(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
             }
         }
     }
@@ -404,7 +407,7 @@ internal fun SongInfoSheet(song: Song, ui: LibraryUi, onDismiss: () -> Unit) {
         song.albumArtist?.let { InfoRow(R.drawable.ic_person, R.string.lib_info_album_artist, it) }
         song.genre?.let { InfoRow(R.drawable.ic_category, R.string.lib_info_genre, it) }
         song.track?.let { InfoRow(R.drawable.ic_queue_music, R.string.lib_info_track, listOfNotNull(it.toString(), song.disc?.let { disc -> stringResource(R.string.lib_disc, disc) }).joinToString(" · ")) }
-        InfoRow(R.drawable.ic_schedule, R.string.lib_info_length, songLength(song.durationMs))
+        rowLength(song.durationMs)?.let { InfoRow(R.drawable.ic_schedule, R.string.lib_info_length, it) }
         InfoRow(R.drawable.ic_folder_open, R.string.lib_info_file, song.folder + song.fileName, middleEllipsis = true)
         InfoRow(R.drawable.ic_graphic_eq, R.string.lib_info_format, format)
         plays?.let {

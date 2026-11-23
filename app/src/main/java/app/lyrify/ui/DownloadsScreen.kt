@@ -443,7 +443,7 @@ private fun LazyListScope.downloadsList(ui: DownloadsUi, onOpen: (DownloadItem) 
     }
 }
 
-/** One download: its kind, title and where it is (a bar while it downloads); Cancel while it is under way. */
+/** One download: its kind, title, where it is and its length (a bar while it downloads); Cancel while it is under way. */
 @Composable
 private fun DownloadRow(item: DownloadItem, progress: DlProgress?, first: Boolean, onOpen: () -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
@@ -458,7 +458,10 @@ private fun DownloadRow(item: DownloadItem, progress: DlProgress?, first: Boolea
         onClick = onOpen,
         supporting = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(rowLine(context, item, progress), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(rowLine(context, item, progress), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    SongLength(item.durationSec * 1_000L, Modifier.padding(start = 8.dp))
+                }
                 if (item.state == DownloadState.Running) Bar(progress?.percent?.div(100f))
             }
         },
@@ -1058,7 +1061,7 @@ private fun SearchFound(search: YouTubeSearch, onPick: (DlSearchResult) -> Unit)
     }
     line?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     found.orEmpty().forEach { result ->
-        val length = result.durationSec.takeIf { it > 0 }?.let { DateUtils.formatElapsedTime(it.toLong()) }
+        val length = rowLength(result.durationSec * 1_000L)
         ChoiceLine(
             result.title,
             listOfNotNull(result.channel.ifBlank { null }, length).joinToString(" · "),
@@ -1077,7 +1080,7 @@ private fun LinkHead(info: DlInfo?, url: String) {
         Column(Modifier.weight(1f)) {
             Text(info?.title?.ifBlank { null } ?: url, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
             info?.artist?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1) }
-            info?.durationSec?.takeIf { it > 0 }?.let { Text(DateUtils.formatElapsedTime(it.toLong()), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            info?.let { SongLength(it.durationSec * 1_000L) }
         }
     }
     Spacer(Modifier.height(4.dp))

@@ -137,17 +137,21 @@ internal fun SendToFriendSheet(songs: List<Song>, kind: CardKind, name: String?,
     val friends = sendOrder(state.friends).filter { to == null || it.id == to }
     LyrifySheet(onDismiss = onDismiss, spacing = 12.dp) {
         Text(friends.singleOrNull()?.takeIf { to != null }?.let { stringResource(R.string.huddle_send_to, it.shownName) } ?: stringResource(R.string.huddle_send), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
-        Text(
-            when (kind) {
-                CardKind.SONG -> listOfNotNull(first.title, first.artist).joinToString(" · ")
-                CardKind.ALBUM -> stringResource(R.string.lib_source_album, name.orEmpty())
-                CardKind.PLAYLIST -> stringResource(R.string.lib_source_playlist, name.orEmpty())
-            },
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                when (kind) {
+                    CardKind.SONG -> listOfNotNull(first.title, first.artist).joinToString(" · ")
+                    CardKind.ALBUM -> stringResource(R.string.lib_source_album, name.orEmpty())
+                    CardKind.PLAYLIST -> stringResource(R.string.lib_source_playlist, name.orEmpty())
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+            if (kind == CardKind.SONG) SongLength(first.durationMs)
+        }
         if (needsName) {
             LyrifyField(typed, { typed = it.take(Invites.NAME_MAX) }, Modifier.fillMaxWidth(), label = stringResource(R.string.huddle_name_title), isError = nameMissing)
             Text(stringResource(R.string.huddle_name_text), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -337,7 +341,10 @@ private fun ReceivedSheet(
                 }
             }
             Text(song.title, style = ReceivedTitle, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
-            song.artist?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth()) }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), modifier = Modifier.fillMaxWidth()) {
+                song.artist?.let { Text(it, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.weight(1f, fill = false)) }
+                SongLength(song.durationMs)
+            }
             if (match != null) HaveChip(if (said[0] == false) Match.Missing else match, Modifier.align(Alignment.CenterHorizontally))
             when {
                 match is Match.Maybe && unsure -> Row(
@@ -428,13 +435,14 @@ private fun SentBy(kind: CardKind, from: String, color: Color, at: Long, to: Str
 /** What YouTube is asked for a song a friend sent or played: its artist and title. */
 internal fun youTubeQuery(song: CardSong): String = listOfNotNull(song.artist, song.title).joinToString(" ")
 
-/** A song of this library in one line, for "Is this the song?": its title, artist, album and length. */
+/** A song of this library in one line, for "Is this the song?": its title, artist, album and length (none unknown). */
 @Composable
-internal fun localSong(song: Song): String = listOfNotNull(song.title, song.artist, song.album, songLength(song.durationMs)).joinToString(" · ")
+internal fun localSong(song: Song): String = listOfNotNull(song.title, song.artist, song.album, rowLength(song.durationMs)).joinToString(" · ")
 
 /**
  * A song of an album or playlist a friend sent: how it was found here (an icon, read by TalkBack with the song), its title
- * and artist, and what to do: "Is this it?" for a loose match not answered yet, Get it for one not here.
+ * and artist, its length at the end, and what to do: "Is this it?" for a loose match not answered yet, Get it for one not
+ * here.
  */
 @Composable
 private fun CardSongRow(song: CardSong, match: Match?, said: Boolean?, onAsk: () -> Unit, onGetIt: () -> Unit) {
@@ -449,13 +457,15 @@ private fun CardSongRow(song: CardSong, match: Match?, said: Boolean?, onAsk: ()
     }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
         val line = listOfNotNull(song.title, song.artist).joinToString(" · ")
+        val description = listOfNotNull(line, lengthWords(song.durationMs).ifEmpty { null }, words).joinToString(", ")
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = listOfNotNull(line, words).joinToString(", ") },
+            modifier = Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = description },
         ) {
             icon?.let { Icon(painterResource(it), contentDescription = null, tint = if (here) LocalBrandColors.current.suggestion else colors.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
-            Text(line, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(line, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            SongLength(song.durationMs)
         }
         when {
             unsure -> LyrifyButton(stringResource(R.string.huddle_maybe_title), onClick = onAsk, kind = ButtonKind.GHOST, compact = true)
@@ -618,7 +628,8 @@ internal fun playIt(context: Context, song: Song, play: FriendPlay, name: String
 
 /**
  * A friend's song (the mockup's 1.2), from their face or their card: their song big, its cover glowing behind (yours,
- * else their colour), where they are in it while they play ("Paused" while paused), and tiles: Play along (from where
+ * else their colour), where they are in it while they play ("Paused" while paused; its length after the artist while they
+ * do not play), and tiles: Play along (from where
  * they are, while they play), Play it (from the top) and Send back; for a song you do not have, Ask <name> and Search on
  * YouTube in place of the first two. Their "⋯" sits at the top. Nothing shared yet: only Send a song. Under them, "You
  * and <name>" and "What <name> played" open the history ([onPage]).
@@ -675,7 +686,11 @@ private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, 
                         }
                         Column(Modifier.weight(1f)) {
                             Text(play.song.title, style = PeekTitle, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                            Text(listOfNotNull(play.song.artist, play.song.album).joinToString(" · "), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(listOfNotNull(play.song.artist, play.song.album).joinToString(" · "), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                // While they play, the bar under the song ends with its length instead.
+                                if (!playing) SongLength(play.song.durationMs)
+                            }
                             if (play.favourite) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 6.dp)) {
                                     Icon(painterResource(R.drawable.ic_favorite_fill), contentDescription = null, tint = lerp(color, colors.onSurface, 0.3f), modifier = Modifier.size(16.dp))
@@ -691,8 +706,8 @@ private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, 
                         Box(Modifier.fillMaxWidth(at.toFloat() / play.song.durationMs).height(6.dp).background(color, CircleShape))
                     }
                     Row(Modifier.padding(top = 6.dp, end = 12.dp).fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(songLength(at), style = MaterialTheme.typography.bodySmall.tabular(), color = colors.onSurfaceVariant)
-                        Text(songLength(play.song.durationMs), style = MaterialTheme.typography.bodySmall.tabular(), color = colors.onSurfaceVariant)
+                        Text(clock(at), style = MaterialTheme.typography.bodySmall.tabular(), color = colors.onSurfaceVariant)
+                        Text(clock(play.song.durationMs), style = MaterialTheme.typography.bodySmall.tabular(), color = colors.onSurfaceVariant)
                     }
                 }
             }
@@ -738,7 +753,7 @@ private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, 
         }
         if (play != null && song != null && playing) {
             Text(
-                stringResource(R.string.huddle_play_along_foot, songLength(playAlongMs(play, now)), name),
+                stringResource(R.string.huddle_play_along_foot, clock(playAlongMs(play, now)), name),
                 style = MaterialTheme.typography.bodySmall,
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp),
