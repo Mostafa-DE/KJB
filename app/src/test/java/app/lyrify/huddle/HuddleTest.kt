@@ -1835,4 +1835,29 @@ class HuddleTest {
         assertTrue("left on this phone, they stay left", wrenState.now.friends.isEmpty())
         assertEquals(listOf(juniperOnWren.id), wrenState.now.past.map { it.id })
     }
+
+    @Test
+    fun `a backup made without a passphrase keeps past friends and their history too, and a restore brings them back as past friends`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper, song)
+        juniper.played(lantern, now + testScheduler.currentTime)
+        wren.sync()
+        // Made while they were friends.
+        val older = wren.backupSection()!!
+        assertTrue(wren.remove(juniperOnWren.id))
+        val section = wren.backupSection()!!
+        assertFalse(HuddleBackup.locked(section))
+        val thread = wren.thread(juniperOnWren.id, 0, 10)
+        assertTrue("the history kept on this phone", thread.isNotEmpty())
+        val (newPhone, newState) = phone()
+        assertEquals(0, newPhone.restore(section, CharArray(0)))
+        assertEquals(wrenState.now.past, newState.now.past)
+        assertTrue(newState.now.friends.isEmpty())
+        assertEquals(thread, newPhone.thread(juniperOnWren.id, 0, 10))
+        assertEquals(listOf(lantern), newPhone.friendPlays(juniperOnWren.id, 0, 10).map { it.song })
+        assertEquals(1, wren.restore(older, CharArray(0)))
+        assertTrue("left on this phone, they stay left", wrenState.now.friends.isEmpty())
+        assertEquals(listOf(juniperOnWren.id), wrenState.now.past.map { it.id })
+    }
 }
