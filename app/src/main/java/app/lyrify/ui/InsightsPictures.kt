@@ -1,5 +1,7 @@
 package app.lyrify.ui
 
+import android.content.Context
+import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +35,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -47,15 +51,20 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
 import app.lyrify.R
 import app.lyrify.library.displayTitle
 import app.lyrify.settings.Settings
 import app.lyrify.stats.InsightsCards
 import app.lyrify.stats.InsightsPage
 import app.lyrify.stats.TraitKind
+import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 // Insights' pictures to share (the approved mockup's part 2): the summary, the top albums' collage and the night owl's
 // record, each drawn on screen as it is shared through the phone's share sheet.
@@ -83,17 +92,17 @@ internal fun PictureSheet(first: Picture, page: InsightsPage, settings: Settings
     LyrifySheet(onDismiss = onDismiss, spacing = 12.dp) {
         Text(stringResource(R.string.insights_share), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
-            items(pictures, key = { it.name }) { picture -> SharePicture(picture, page, settings, withButton = true) }
+            items(pictures, key = { it.name }) { picture -> SharePicture(picture, page, settings) }
         }
     }
 }
 
 /**
  * One picture to share (the mockup's 9:16 cards): KJB's mark and the story's name over its ground, its figures, and
- * "Made with KJB"; drawn on screen as it is shared. [withButton]: Share under it.
+ * "Made with KJB"; drawn on screen as it is shared, with Share under it.
  */
 @Composable
-internal fun SharePicture(picture: Picture, page: InsightsPage, settings: Settings, modifier: Modifier = Modifier, withButton: Boolean = false) {
+internal fun SharePicture(picture: Picture, page: InsightsPage, settings: Settings, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -199,27 +208,51 @@ internal fun SharePicture(picture: Picture, page: InsightsPage, settings: Settin
             Spacer(Modifier.weight(1f))
             Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
                 Text(stringResource(R.string.insights_picture_footer), style = body(11f, 14, 600), color = BrandLilac.copy(alpha = 0.78f), modifier = Modifier.weight(1f))
-                val right = when (picture) {
+                when (picture) {
                     Picture.SUMMARY -> cards.artists?.rows?.firstOrNull()?.let { stringResource(R.string.insights_top_artist, it.top.item.name) }
                     Picture.ALBUMS -> cards.time?.let { stringResource(R.string.insights_picture_albums_of, COLLAGE, it.totals.albums) }
                     Picture.CLOCK -> cards.clock?.let { stringResource(R.string.insights_picture_busiest, hourLabel(it.peak)) }
-                }
-                right?.let { Text(it, style = body(11f, 14, 600), color = BrandLilac.copy(alpha = 0.78f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                }?.let { Text(it, style = body(11f, 14, 600), color = BrandLilac.copy(alpha = 0.78f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
         }
-        if (withButton) {
-            DarkGround {
-                LyrifyButton(
-                    stringResource(R.string.insights_share),
-                    onClick = { scope.launch { toasts.say(resources, sharePicture(context, layer, "${period.kind.name.lowercase(Locale.ROOT)}-${period.firstDay}-${picture.name.lowercase(Locale.ROOT)}", title)) } },
-                    icon = R.drawable.ic_share,
-                )
-            }
+        DarkGround {
+            LyrifyButton(
+                stringResource(R.string.insights_share),
+                onClick = { scope.launch { toasts.say(resources, sharePicture(context, layer, "${period.kind.name.lowercase(Locale.ROOT)}-${period.firstDay}-${picture.name.lowercase(Locale.ROOT)}", title)) } },
+                icon = R.drawable.ic_share,
+            )
         }
     }
+}
+
+/**
+ * Shares [picture] (as drawn on screen) through the phone's share sheet as a PNG named for [name], with [title] as the
+ * subject. Nothing is uploaded: the user picks where it goes.
+ */
+internal suspend fun sharePicture(context: Context, picture: GraphicsLayer, name: String, title: String): Shared {
+    val png = try {
+        val drawn = picture.toImageBitmap().asAndroidBitmap()
+        withContext(Dispatchers.Default) {
+            val bitmap = if (drawn.config == Bitmap.Config.HARDWARE) drawn.copy(Bitmap.Config.ARGB_8888, false) else drawn
+            ByteArrayOutputStream().use { out ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, PNG_QUALITY, out)
+                out.toByteArray()
+            }
+        }
+    } catch (_: IllegalStateException) {
+        // The layer was never drawn (the page left before it showed).
+        return Shared.NoPicture
+    }
+    val file = try {
+        withContext(Dispatchers.IO) { shareCopy(context.cacheDir, "kjb-$name.png", png, System.currentTimeMillis()) }
+    } catch (_: IOException) {
+        return Shared.NoPicture
+    }
+    val uri = FileProvider.getUriForFile(context, context.packageName + SHARE_AUTHORITY, file)
+    return launchShare(1) { context.startActivity(shareSheet(recapImageShare(uri.toString(), title), context.packageName)) }
 }
 
 private val PICTURE_WIDTH = 260.dp
 
 /** PNG ignores the quality; the platform asks for one. */
-internal const val PNG_QUALITY = 100
+private const val PNG_QUALITY = 100

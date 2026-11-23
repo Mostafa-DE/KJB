@@ -105,15 +105,22 @@ internal val LocalArrivalClock = compositionLocalOf { ArrivalClock { ARRIVED_MS 
 fun phase(ms: Float, delay: Int, duration: Int, easing: Easing = LinearEasing): Float =
     easing.transform(((ms - delay) / duration).coerceIn(0f, 1f))
 
+/**
+ * How far apart [count] things arrive one after another: [step] ms, closer when there are so many that the last one's
+ * [duration] would end after [within] ms (its clock's end), so every one lands whole (a long all time's months).
+ */
+fun staggerMs(count: Int, step: Int, duration: Int, within: Float): Float = minOf(step.toFloat(), (within - duration) / (count - 1).coerceAtLeast(1))
+
 /** How much of an item of [size] px at [offset] shows in a viewport from [start] to [end]: 0 to 1. */
 fun shownShare(offset: Int, size: Int, start: Int, end: Int): Float =
     if (size <= 0) 0f else ((minOf(offset + size, end) - maxOf(offset, start)).coerceAtLeast(0) / size.toFloat())
 
 /**
- * A card of [list] (its item [key]) arriving as the mockup's do: faded, 26 dp lower and at 98% until a tenth of it shows,
+ * A card of [list] (its item [key]) arriving as the mockup's do: faded, 26 dp lower and at 98% until 12% of it shows,
  * then rising into place (its opacity over 520 ms, the move over 640 ms ease-rise). [arrived] keeps the cards that came,
- * so none comes twice. A new [period] swaps an arrived card in from a quarter faded and 8 dp lower (420 ms ease-rise)
- * and starts what moves in it again ([LocalArrival], [LocalArrivalClock]).
+ * so none comes twice. Each new [period] swaps an arrived card in from a quarter faded and 8 dp lower (420 ms ease-rise)
+ * and starts what moves in it again ([LocalArrival], [LocalArrivalClock]). With Remove animations, even turned on while
+ * the page shows, every card is in place at once.
  */
 @Composable
 internal fun Arriving(key: String, list: LazyListState, arrived: MutableSet<String>, period: Any, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
@@ -122,7 +129,15 @@ internal fun Arriving(key: String, list: LazyListState, arrived: MutableSet<Stri
     val rise = remember { Animatable(if (shown) 1f else 0f) }
     val swap = remember { Animatable(1f) }
     val clock = remember { Animatable(if (shown) ARRIVED_MS else 0f) }
-    LaunchedEffect(key) {
+    LaunchedEffect(key, reduced) {
+        if (reduced) {
+            arrived += key
+            shown = true
+            rise.snapTo(1f)
+            swap.snapTo(1f)
+            clock.snapTo(ARRIVED_MS)
+            return@LaunchedEffect
+        }
         if (shown) return@LaunchedEffect
         snapshotFlow {
             val info = list.layoutInfo
@@ -133,9 +148,12 @@ internal fun Arriving(key: String, list: LazyListState, arrived: MutableSet<Stri
         launch { clock.animateTo(ARRIVED_MS, tween(ARRIVED_MS.toInt(), easing = LinearEasing)) }
         rise.animateTo(1f, tween(RISE_MS, easing = LinearEasing))
     }
-    val first = remember { period }
+    // The period the card last showed: a change swaps it in, back to the first one too.
+    var last by remember { mutableStateOf(period) }
     LaunchedEffect(period) {
-        if (period == first || !shown || reduced) return@LaunchedEffect
+        if (period == last) return@LaunchedEffect
+        last = period
+        if (!shown || reduced) return@LaunchedEffect
         launch {
             clock.snapTo(0f)
             clock.animateTo(ARRIVED_MS, tween(ARRIVED_MS.toInt(), easing = LinearEasing))
@@ -163,25 +181,22 @@ internal fun Arriving(key: String, list: LazyListState, arrived: MutableSet<Stri
 
 /**
  * [value], as [text] says it, counting up over 900 ms (ease-out cubic) as its card arrives, from 0, and from the last
- * value when it changes (a new period); final at once with Remove animations and on a card already in place. Shrinks to
- * fit its line with large text.
+ * value when it changes (a new period); final at once with Remove animations and on a card already in place. Until the
+ * count lands it shows the count (never the final number first); then [value] exactly. Shrinks to fit its line with
+ * large text.
  */
 @Composable
 internal fun Counted(value: Long, style: TextStyle, color: Color, modifier: Modifier = Modifier, text: @Composable (Long) -> AnnotatedString) {
     val arrival = LocalArrival.current
     val reduced = LocalReducedMotion.current
     val count = remember { Animatable(if (reduced || arrival.shown) value.toFloat() else 0f) }
-    LaunchedEffect(value, arrival.shown) {
+    LaunchedEffect(value, arrival.shown, reduced) {
         when {
             reduced -> count.snapTo(value.toFloat())
             arrival.shown -> count.animateTo(value.toFloat(), tween(COUNT_MS, easing = Motion.Glide))
         }
     }
-    val shown = when {
-        count.isRunning -> count.value.roundToLong()
-        reduced || arrival.shown -> value
-        else -> 0L
-    }
+    val shown = if (reduced || (!count.isRunning && count.value == value.toFloat())) value else count.value.roundToLong()
     Text(text(shown), style = style.tabular(), color = color, maxLines = 1, autoSize = TextAutoSize.StepBased(minFontSize = SMALLEST_NUMBER, maxFontSize = style.fontSize), modifier = modifier)
 }
 
@@ -326,10 +341,7 @@ internal fun SmallFigure(value: Long, label: String, modifier: Modifier = Modifi
 @Composable
 internal fun periodName(period: PagePeriod): String = when {
     period.kind == ListeningPeriod.MONTH && !period.going -> monthText(java.time.YearMonth.from(period.firstDay))
-    period.kind == ListeningPeriod.WEEK -> stringResource(R.string.stats_this_week)
-    period.kind == ListeningPeriod.MONTH -> stringResource(R.string.stats_this_month)
-    period.kind == ListeningPeriod.YEAR -> stringResource(R.string.stats_this_year)
-    else -> stringResource(R.string.stats_all_time)
+    else -> stringResource(period.kind.named)
 }
 
 /** The period before [period], in words: "last week", "October", "2025"; empty for all time. */
@@ -373,8 +385,6 @@ internal val FigureValue = display(22, 26, -0.02, weight = 700)
 
 internal val FigureLabel = body(12f, 16, 500)
 
-internal val FactValue = display(22, 26, -0.02, weight = 700)
-
 private val PillWord = body(10.5f, 16, 650).copy(letterSpacing = 0.04.em)
 
 internal val PillNumber = body(12f, 16, 650)
@@ -387,9 +397,9 @@ private val SMALLEST_NUMBER = 12.sp
 // The motion's numbers (the mockup's CSS)
 
 /** A card's arrival clock is past every arrival by then (the slowest, the rings', is 1.3 s). */
-private const val ARRIVED_MS = 2_000f
+internal const val ARRIVED_MS = 2_000f
 
-/** A card arrives once this share of it shows. */
+/** A card arrives once this share of it shows (12%). */
 private const val ARRIVE_SHARE = 0.12f
 
 private const val FADE_MS = 520

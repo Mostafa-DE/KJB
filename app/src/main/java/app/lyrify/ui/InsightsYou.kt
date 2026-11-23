@@ -246,12 +246,7 @@ internal fun YouAndFriends(friends: FriendsCard, settings: Settings) {
                     }
                 }
                 Text(
-                    buildAnnotatedString {
-                        val words = stringResource(R.string.insights_alike_line, closest.name)
-                        append(words)
-                        val at = words.indexOf(closest.name)
-                        if (at >= 0) addStyle(SpanStyle(fontWeight = FontWeight.Bold, color = colors.onSurface), at, at + closest.name.length)
-                    },
+                    boldIn(stringResource(R.string.insights_alike_line, closest.name), closest.name),
                     style = FigureLabel.copy(fontSize = 13.sp, lineHeight = 18.sp),
                     color = colors.onSurfaceVariant,
                 )
@@ -316,12 +311,7 @@ internal fun YouAndFriends(friends: FriendsCard, settings: Settings) {
                 Column(Modifier.weight(1f)) {
                     Text(pluralStringResource(R.plurals.insights_in_sync, sync.times, sync.times), style = MaterialTheme.typography.titleSmall, color = colors.onSurface)
                     Text(
-                        buildAnnotatedString {
-                            val words = stringResource(R.string.insights_in_sync_line, sync.name, title)
-                            append(words)
-                            val at = words.indexOf(title)
-                            if (at >= 0) addStyle(SpanStyle(fontWeight = FontWeight.Bold), at, at + title.length)
-                        },
+                        boldIn(stringResource(R.string.insights_in_sync_line, sync.name, title), title),
                         style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp),
                         color = colors.onSurface,
                     )
@@ -364,18 +354,15 @@ internal fun YouAndFriends(friends: FriendsCard, settings: Settings) {
  */
 @Composable
 internal fun ReadAlongAndHearts(lyrics: LyricsCard?, favourites: FavouritesCard?, period: PagePeriod, settings: Settings) {
-    val wide = LocalDensity.current.fontScale <= STACK_FONT_SCALE
-    val tiles: List<@Composable (Modifier) -> Unit> = listOfNotNull(
-        lyrics?.let { { modifier: Modifier -> ReadAlong(it, settings, modifier) } },
-        favourites?.let { { modifier: Modifier -> NewFavourites(it, period, settings, modifier) } },
-    )
-    if (wide) {
+    if (LocalDensity.current.fontScale <= STACK_FONT_SCALE) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(horizontal = ScreenPadding).height(androidx.compose.foundation.layout.IntrinsicSize.Max)) {
-            tiles.forEach { it(Modifier.weight(1f)) }
+            lyrics?.let { ReadAlong(it, settings, Modifier.weight(1f)) }
+            favourites?.let { NewFavourites(it, period, settings, Modifier.weight(1f)) }
         }
     } else {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(horizontal = ScreenPadding)) {
-            tiles.forEach { it(Modifier.fillMaxWidth()) }
+            lyrics?.let { ReadAlong(it, settings, Modifier.fillMaxWidth()) }
+            favourites?.let { NewFavourites(it, period, settings, Modifier.fillMaxWidth()) }
         }
     }
 }
@@ -431,12 +418,7 @@ private fun ReadAlong(lyrics: LyricsCard, settings: Settings, modifier: Modifier
         lyrics.most?.let { most ->
             val title = displayTitle(most, settings.library)
             Text(
-                buildAnnotatedString {
-                    val words = stringResource(R.string.insights_lyrics_most, title, lyrics.mostTimes, percentOf(lyrics.syncedPlays.toLong(), lyrics.plays.toLong()))
-                    append(words)
-                    val at = words.indexOf(title)
-                    if (at >= 0) addStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = colors.onSurface), at, at + title.length)
-                },
+                boldIn(stringResource(R.string.insights_lyrics_most, title, lyrics.mostTimes, percentOf(lyrics.syncedPlays.toLong(), lyrics.plays.toLong())), title),
                 style = FigureLabel.copy(fontSize = 13.sp),
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp),
@@ -481,12 +463,7 @@ private fun NewFavourites(favourites: FavouritesCard, period: PagePeriod, settin
         favourites.mostPlayed?.let { most ->
             val title = displayTitle(most, settings.library)
             Text(
-                buildAnnotatedString {
-                    val words = stringResource(R.string.insights_favourites_most, title)
-                    append(words)
-                    val at = words.indexOf(title)
-                    if (at >= 0) addStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = colors.onSurface), at, at + title.length)
-                },
+                boldIn(stringResource(R.string.insights_favourites_most, title), title),
                 style = FigureLabel.copy(fontSize = 13.sp),
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
@@ -507,7 +484,8 @@ internal fun YourSearches(searches: SearchesCard) {
     val colors = MaterialTheme.colorScheme
     val chrome = LocalChromeColors.current
     val insights = if (LocalDarkTheme.current) DarkInsights else LightInsights
-    var shown by remember { mutableStateOf(false) }
+    // Hidden again for another period: a tap shows one period's words only.
+    var shown by remember(searches) { mutableStateOf(false) }
     InsightsCard {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.size(36.dp).background(colors.surface, RoundedCornerShape(12.dp))) {
@@ -585,7 +563,8 @@ private const val STACK_FONT_SCALE = 1.3f
 
 /**
  * Moments as postcards on the paper colour, tilted one way then the other, each with its kicker, its big figure, the
- * song's cover as the stamp and a line; they scroll sideways and straighten a little under a finger.
+ * song's cover as the stamp and a line; they scroll sideways. (The mockup's straightening under a mouse has no touch
+ * counterpart: the postcards are not buttons, so a press shows nothing.)
  */
 @Composable
 internal fun Moments(moments: List<Moment>, settings: Settings) {
@@ -662,7 +641,7 @@ private class MomentWords(@DrawableRes val icon: Int, val kicker: String, val va
 
 /** A line with [bold]'s words, wherever they fall in [text], in the page's ink. */
 @Composable
-private fun boldIn(text: String, vararg bold: String): AnnotatedString {
+internal fun boldIn(text: String, vararg bold: String): AnnotatedString {
     val ink = MaterialTheme.colorScheme.onSurface
     return buildAnnotatedString {
         append(text)
@@ -702,8 +681,9 @@ private fun momentWords(moment: Moment, settings: Settings): MomentWords = when 
         moment.album.songs.firstOrNull(),
     )
     is Moment.OnTheMove -> {
-        val zones = moment.offsets.map { utcText(it) }
-        val line = if (zones.size <= 2) stringResource(R.string.insights_moment_zones_two, zones.first(), zones.last()) else stringResource(R.string.insights_moment_zones_range, zones.minBy { it }, zones.maxBy { it })
+        // From west to east; two are both named, more as a range.
+        val zones = moment.offsets.sorted().map { utcText(it) }
+        val line = if (zones.size <= 2) stringResource(R.string.insights_moment_zones_two, zones.first(), zones.last()) else stringResource(R.string.insights_moment_zones_range, zones.first(), zones.last())
         MomentWords(R.drawable.ic_travel_explore, stringResource(R.string.insights_moment_zones), pluralStringResource(R.plurals.insights_time_zones, moment.offsets.size, moment.offsets.size), boldIn(line, *zones.toTypedArray()), null)
     }
     is Moment.Faster -> {

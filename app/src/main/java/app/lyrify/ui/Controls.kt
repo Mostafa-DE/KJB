@@ -37,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
@@ -288,6 +289,7 @@ fun LyrifySegmented(options: List<String>, selected: Int, onSelect: (Int) -> Uni
                     else -> colors.onSurface
                 }
                 val color by animateColorAsState(word, motion(tween(if (ink) INK_WORD_MS else 0), reduced), label = "word")
+                // With the largest text a word shrinks to fit its part ("All time" of four), before it is cut short.
                 Text(
                     label,
                     style = MaterialTheme.typography.labelLarge,
@@ -295,6 +297,7 @@ fun LyrifySegmented(options: List<String>, selected: Int, onSelect: (Int) -> Uni
                     color = color,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                    autoSize = TextAutoSize.StepBased(minFontSize = SEGMENT_SMALLEST, maxFontSize = MaterialTheme.typography.labelLarge.fontSize),
                 )
             }
         }
@@ -559,6 +562,9 @@ private const val CHIP_FADE_MS = 150
 /** The ink thumb's slide and its words' colour (the Insights mockup's 380 ms ease-pop, 200 ms). */
 private const val INK_THUMB_MS = 380
 private const val INK_WORD_MS = 200
+
+/** The smallest a segment's word shrinks to with the largest text. */
+private val SEGMENT_SMALLEST = 10.sp
 private const val CHECK_DRAW_MS = 160
 private val KNOB = 26.dp
 private val KNOB_PRESSED = 30.dp

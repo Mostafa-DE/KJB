@@ -63,7 +63,7 @@ class InsightsViewTest {
         assertTrue(state.next())
         // The quiz waits for its answer.
         assertFalse(state.runs())
-        state.answer = false
+        state.picked = fakeInsightsPage().cards.songs!!.rows[1].top.item
         assertTrue(state.runs())
         assertTrue(state.next())
         // At the last slide, next closes the story.
@@ -72,7 +72,7 @@ class InsightsViewTest {
     }
 
     @Test
-    fun `with Remove animations the story stands still and waits for a tap`() {
+    fun `with Remove animations the story's bar does not run, so it waits for a tap`() {
         val state = StoryState(listOf(StorySlide.INTRO, StorySlide.TIME))
         assertTrue(state.runs(reduced = false))
         assertFalse(state.runs(reduced = true))
@@ -105,7 +105,7 @@ class InsightsViewTest {
     }
 
     @Test
-    fun `a card arrives once a tenth of it shows`() {
+    fun `how much of a card shows in the list, from none of it to all`() {
         assertEquals(0f, shownShare(offset = 1_000, size = 400, start = 0, end = 900))
         assertEquals(0.25f, shownShare(offset = 800, size = 400, start = 0, end = 900), 0.0001f)
         assertEquals(1f, shownShare(offset = 100, size = 400, start = 0, end = 900))
@@ -127,7 +127,7 @@ class InsightsViewTest {
         // A card is in place at once, its numbers final, its charts drawn whole.
         assertTrue(cards.contains("var shown by remember { mutableStateOf(reduced || key in arrived) }"))
         assertTrue(cards.contains("reduced -> count.snapTo(value.toFloat())"))
-        assertTrue(cards.contains("if (period == first || !shown || reduced) return@LaunchedEffect"))
+        assertTrue(cards.contains("if (!shown || reduced) return@LaunchedEffect"))
         // The story's bar stands full and nothing follows on its own.
         val story = File(ui, "InsightsStory.kt").readText()
         assertTrue(story.contains("val runs = state.runs(reduced)"))
@@ -215,6 +215,107 @@ class InsightsViewTest {
         assertEquals(0f, doneShare(NextMilestone(MilestoneKind.PLAYS, 1_000, 5_000)))
     }
 
+    // Review round (Grok panel a-cards and b-story, 2026-11-23)
+
+    @Test
+    fun `the story's halves to tap lie under the slide, so an answer and Share take their own taps`() {
+        val story = File("src/main/java/app/lyrify/ui/InsightsStory.kt").readText()
+        val taps = story.indexOf("Row(Modifier.fillMaxSize().padding(top = TAP_TOP))")
+        assertTrue(taps in 0 until story.indexOf("AnimatedContent("))
+    }
+
+    @Test
+    fun `a story keeps the page it opened with, and the quiz its answer when you come back to it`() {
+        val story = File("src/main/java/app/lyrify/ui/InsightsStory.kt").readText()
+        assertTrue(story.contains("if (opened == null && page != null) {"))
+        val slides = File("src/main/java/app/lyrify/ui/InsightsSlides.kt").readText()
+        assertFalse(slides.contains("var picked by remember"))
+        assertTrue(slides.contains("state.picked = song"))
+        // Back on the answered quiz: its answer shows and the story goes on, with no shake or confetti again.
+        val state = StoryState(listOf(StorySlide.QUIZ, StorySlide.TIME))
+        state.picked = fakeInsightsPage().cards.songs!!.rows[1].top.item
+        assertTrue(state.next())
+        state.back()
+        assertTrue(state.runs())
+        assertTrue(slides.contains("if (fresh && picked == top && !reduced) Confetti("))
+    }
+
+    @Test
+    fun `bars of a long all time land whole within their arrival, never narrower than nothing`() {
+        assertEquals(16f, staggerMs(7, 16, 760, 2_000f))
+        listOf(2, 78, 125, 200, 600).forEach { count ->
+            val step = staggerMs(count, 16, 760, 2_000f)
+            assertTrue("$count bars", step > 0f && (count - 1) * step + 760 <= 2_000.01f)
+        }
+        val time = File("src/main/java/app/lyrify/ui/InsightsTime.kt").readText()
+        val slides = File("src/main/java/app/lyrify/ui/InsightsSlides.kt").readText()
+        assertTrue(time.contains("staggerMs(count, BAR_STEP_MS, BAR_MS, ARRIVED_MS)"))
+        assertTrue(slides.contains("staggerMs(daily.size, MINI_STEP_MS, MINI_MS, SLIDE_CLOCK_MS - MINI_DELAY_MS)"))
+        // Many bars: the gaps narrow first, so a bar never gets a width below nothing.
+        listOf(time, slides).forEach { assertTrue(it.contains("val gap = minOf(3.dp.toPx(), size.width / count / 4)")) }
+    }
+
+    @Test
+    fun `a count never flashes its final number first, and Remove animations turned on lands every card at once`() {
+        val cards = File("src/main/java/app/lyrify/ui/InsightsCards.kt").readText()
+        assertTrue(cards.contains("val shown = if (reduced || (!count.isRunning && count.value == value.toFloat())) value else count.value.roundToLong()"))
+        assertTrue(cards.contains("LaunchedEffect(value, arrival.shown, reduced)"))
+        assertTrue(cards.contains("LaunchedEffect(key, reduced)"))
+        // Every new period swaps the cards in, the first one again too.
+        assertFalse(cards.contains("period == first"))
+    }
+
+    @Test
+    fun `an unchanged period says the daily time, never 0 percent more`() {
+        val time = File("src/main/java/app/lyrify/ui/InsightsTime.kt").readText()
+        assertTrue(time.contains("if (change != 0L) {"))
+        val slides = File("src/main/java/app/lyrify/ui/InsightsSlides.kt").readText()
+        assertTrue(slides.contains("if (change == 0L) {"))
+    }
+
+    @Test
+    fun `a short day or month never reads as no hours, and time zones go from west to east`() {
+        val time = File("src/main/java/app/lyrify/ui/InsightsTime.kt").readText()
+        assertFalse(time.contains("pluralStringResource(R.plurals.insights_hours_long, hours"))
+        assertTrue(time.contains("ms < HOUR -> listenedText(ms)"))
+        assertTrue(time.contains("ms in 1 until HOUR -> stringResource(R.string.insights_under_an_hour)"))
+        val you = File("src/main/java/app/lyrify/ui/InsightsYou.kt").readText()
+        assertTrue(you.contains("val zones = moment.offsets.sorted().map { utcText(it) }"))
+        assertFalse(you.contains("zones.minBy"))
+    }
+
+    @Test
+    fun `with the largest text the period names, the rings' middles and a slide shrink to fit`() {
+        val ui = File("src/main/java/app/lyrify/ui")
+        assertTrue(File(ui, "Controls.kt").readText().contains("autoSize = TextAutoSize.StepBased(minFontSize = SEGMENT_SMALLEST, maxFontSize = MaterialTheme.typography.labelLarge.fontSize)"))
+        listOf("InsightsMilestones.kt", "InsightsTops.kt", "InsightsTime.kt").forEach { name ->
+            assertTrue(name, File(ui, name).readText().contains("// The largest text shrinks to fit the ring's hole."))
+        }
+        assertTrue(File(ui, "InsightsSlides.kt").readText().contains("measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))"))
+    }
+
+    @Test
+    fun `no helper is used in one place only, no small bit sits in a vague variable, and existing pieces are reused`() {
+        val ui = File("src/main/java/app/lyrify/ui")
+        val text = ui.listFiles { f -> f.name.startsWith("Insights") }.orEmpty().joinToString("\n") { it.readText() }
+        listOf(
+            "fun playStoryText", "fun chartSummary", "fun loyaltyText", "fun lengthText", "fun typeName", "fun milestoneShort",
+            "yearRing", "withButton", "val next =", "val tiles", "FactValue", "HOUR_MS", "if (cards.time != null) add(StorySlide",
+        ).forEach { assertFalse(it, text.contains(it)) }
+        // The picture's end line is written where it shows, not kept in a variable first.
+        assertFalse(File(ui, "InsightsPictures.kt").readText().contains("val right ="))
+        // The bold words of a line go through boldIn, wherever they are.
+        assertEquals(1, Regex(Regex.escape("addStyle(SpanStyle(fontWeight")).findAll(text).count())
+        // Sharing a picture sits with the pictures.
+        assertTrue(File(ui, "InsightsPictures.kt").readText().contains("internal suspend fun sharePicture("))
+        // For you's row and the top song reuse the mosaic and the round button.
+        val forYou = File(ui, "SuggestionScreens.kt").readText()
+        assertTrue(forYou.contains("MosaicTile(refs, size = 56.dp)"))
+        listOf(forYou, File(ui, "InsightsTops.kt").readText()).forEach { assertTrue(Regex("""RoundButton\(\s*R\.drawable\.ic_play_arrow_fill""").containsMatchIn(it)) }
+        // The cards name a period with the words the top list already uses.
+        assertTrue(File(ui, "InsightsCards.kt").readText().contains("else -> stringResource(period.kind.named)"))
+    }
+
     // TalkBack and privacy
 
     @Test
@@ -222,7 +323,7 @@ class InsightsViewTest {
         val ui = File("src/main/java/app/lyrify/ui")
         val time = File(ui, "InsightsTime.kt").readText()
         // The hero's bars, the dial, the year's squares: one summary each with the real numbers.
-        listOf("semantics { contentDescription = summary }", "chartSummary(steps)", "R.string.insights_dial", "R.plurals.insights_year_summary").forEach { assertTrue(it, time.contains(it)) }
+        listOf("semantics { contentDescription = summary }", "R.string.insights_chart_days", "R.string.insights_dial", "R.plurals.insights_year_summary").forEach { assertTrue(it, time.contains(it)) }
         // Each day of a week or a month, each month of all time, is a stop with its time.
         assertTrue(Regex(Regex.escape("clearAndSetSemantics { contentDescription = description }")).findAll(time).count() >= 3)
         val tops = File(ui, "InsightsTops.kt").readText()
@@ -250,7 +351,8 @@ class InsightsViewTest {
             listOf("searches", "WordCount", ".words").forEach { assertFalse("$name: $it", text.contains(it)) }
         }
         val you = File(ui, "InsightsYou.kt").readText()
-        assertTrue(you.contains("var shown by remember { mutableStateOf(false) }"))
+        // Hidden again for another period: a tap shows one period's words only.
+        assertTrue(you.contains("var shown by remember(searches) { mutableStateOf(false) }"))
         // Until the tap no word is drawn at all (a blur cannot be drawn on every phone), nor read by TalkBack.
         assertTrue(you.contains("then(if (shown) Modifier else Modifier.clearAndSetSemantics {})"))
         assertTrue(you.contains("if (shown) {\n                                Text(word.word"))

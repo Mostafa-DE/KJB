@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -67,6 +68,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -96,14 +98,14 @@ import kotlinx.coroutines.flow.first
 fun <T> quizOrder(songs: List<T>): List<T> = listOf(songs[1], songs[0], songs[2])
 
 /** Something on a slide arriving (the mockup's .r): from 26 dp lower and faded, over 700 ms ease-rise after [delay]. */
-internal fun Modifier.rise(clock: ArrivalClock, delay: Int = 0): Modifier = graphicsLayer {
+private fun Modifier.rise(clock: ArrivalClock, delay: Int = 0): Modifier = graphicsLayer {
     val t = phase(clock.ms(), delay, RISE_MS, Motion.Rise)
     alpha = phase(clock.ms(), delay, RISE_MS)
     translationY = (1f - t) * RISE_DP.toPx()
 }
 
 /** Something on a slide zooming in (the mockup's .zoom): from 40%, turned 8 degrees back and faded, 900 ms ease-pop after [delay]. */
-internal fun Modifier.zoom(clock: ArrivalClock, delay: Int = 0): Modifier = graphicsLayer {
+private fun Modifier.zoom(clock: ArrivalClock, delay: Int = 0): Modifier = graphicsLayer {
     val t = phase(clock.ms(), delay, ZOOM_MS, Motion.Pop)
     alpha = phase(clock.ms(), delay, ZOOM_MS)
     scaleX = 0.4f + 0.6f * t
@@ -132,7 +134,20 @@ internal fun Slide(slide: StorySlide, page: InsightsPage, settings: Settings, st
         if (slide == StorySlide.TOP_SONG) Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(HuddleCardShade.copy(alpha = 0.35f), HuddleCardShade.copy(alpha = 0.75f)))))
         Column(
             verticalArrangement = Arrangement.Center,
-            modifier = Modifier.fillMaxSize().padding(start = 26.dp, end = 26.dp, top = 92.dp, bottom = 72.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(start = 26.dp, end = 26.dp, top = 92.dp, bottom = 72.dp)
+                // Taller than the space it has (a short phone, the largest text): the slide shrinks to fit, never cut off.
+                .layout { measurable, constraints ->
+                    val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+                    val fit = minOf(1f, constraints.maxHeight / placeable.height.coerceAtLeast(1).toFloat())
+                    layout(constraints.maxWidth, constraints.maxHeight) {
+                        placeable.placeWithLayer(0, (constraints.maxHeight - placeable.height) / 2) {
+                            scaleX = fit
+                            scaleY = fit
+                        }
+                    }
+                },
         ) {
             when (slide) {
                 StorySlide.INTRO -> {
@@ -148,11 +163,12 @@ internal fun Slide(slide: StorySlide, page: InsightsPage, settings: Settings, st
                     val before = time.before
                     Text(stringResource(R.string.insights_story_listened).uppercase(), style = SlideKicker, color = StoryKicker, modifier = Modifier.rise(clock))
                     Counted(time.totals.heardMs, SlideHuge, BrandLilac, Modifier.padding(top = 6.dp).rise(clock, 100)) { bigTime(it, unit) }
+                    // Against the period before (none for all time); the same as it, only the time a day.
+                    val change = before?.takeIf { period.kind != ListeningPeriod.ALL_TIME }?.let { percentChange(time.totals.heardMs, it.heardMs) } ?: 0L
                     Text(
-                        if (before == null || period.kind == ListeningPeriod.ALL_TIME) {
+                        if (change == 0L) {
                             stringResource(R.string.insights_story_a_day, listenedText(time.totals.heardMs / days))
                         } else {
-                            val change = percentChange(time.totals.heardMs, before.heardMs)
                             stringResource(
                                 if (change < 0) R.string.insights_story_a_day_less else R.string.insights_story_a_day_more,
                                 listenedText(time.totals.heardMs / days),
@@ -166,11 +182,13 @@ internal fun Slide(slide: StorySlide, page: InsightsPage, settings: Settings, st
                     )
                     val daily = time.heard.heardMs.map { it ?: 0L }
                     val top = daily.maxOrNull()?.takeIf { it > 0 } ?: 1L
+                    val step = staggerMs(daily.size, MINI_STEP_MS, MINI_MS, SLIDE_CLOCK_MS - MINI_DELAY_MS)
                     Canvas(Modifier.padding(top = 24.dp).fillMaxWidth().height(70.dp).clearAndSetSemantics {}) {
-                        val gap = 3.dp.toPx()
-                        val width = (size.width - gap * (daily.size - 1)) / daily.size.coerceAtLeast(1)
+                        val count = daily.size.coerceAtLeast(1)
+                        val gap = minOf(3.dp.toPx(), size.width / count / 4)
+                        val width = (size.width - gap * (count - 1)) / count
                         daily.forEachIndexed { i, ms ->
-                            val h = size.height * (ms.toFloat() / top).coerceAtLeast(0.04f) * phase(clock.ms(), MINI_DELAY_MS + i * MINI_STEP_MS, MINI_MS, Motion.Rise)
+                            val h = size.height * (ms.toFloat() / top).coerceAtLeast(0.04f) * phase(clock.ms(), MINI_DELAY_MS + (i * step).toInt(), MINI_MS, Motion.Rise)
                             drawRoundRect(BrandLilac.copy(alpha = 0.85f), Offset(i * (width + gap), size.height - h), Size(width, h), CornerRadius(minOf(3.dp.toPx(), width / 2)))
                         }
                     }
@@ -296,7 +314,7 @@ internal fun Slide(slide: StorySlide, page: InsightsPage, settings: Settings, st
                         }
                     }
                 }
-                StorySlide.SHARE -> SharePicture(Picture.SUMMARY, page, settings, Modifier.align(Alignment.CenterHorizontally).zoom(clock), withButton = true)
+                StorySlide.SHARE -> SharePicture(Picture.SUMMARY, page, settings, Modifier.align(Alignment.CenterHorizontally).zoom(clock))
             }
         }
     }
@@ -360,18 +378,20 @@ private fun FloatingCovers(covers: List<Song>) {
 
 /**
  * The quiz: three covers, tap the one you think is your top song. Right, it lights teal and confetti falls; wrong, it
- * shakes and the right one lights. The story waits for the answer, then goes on after 2.6 s.
+ * shakes and the right one lights. The story waits for the answer, then goes on after 2.6 s. The answer stays on the
+ * story ([StoryState.picked]): back on the quiz it shows again, without the shake or the confetti.
  */
 @Composable
 private fun Quiz(rows: List<Ranked<Song>>, settings: Settings, state: StoryState) {
     val clock = LocalArrivalClock.current
     val reduced = LocalReducedMotion.current
     val top = rows.first().top.item
-    var picked by remember { mutableStateOf<Song?>(null) }
+    val picked = state.picked
+    // Picked on this visit of the quiz, not on one before.
+    var fresh by remember { mutableStateOf(false) }
     val shake = remember { Animatable(0f) }
-    LaunchedEffect(picked) {
-        val wrong = picked?.let { it != top } ?: return@LaunchedEffect
-        if (wrong && !reduced) shake.animateTo(0f, keyframes {
+    LaunchedEffect(fresh) {
+        if (fresh && picked != top && !reduced) shake.animateTo(0f, keyframes {
             durationMillis = SHAKE_MS
             -6f at SHAKE_MS * 20 / 100
             6f at SHAKE_MS * 40 / 100
@@ -414,8 +434,8 @@ private fun Quiz(rows: List<Ranked<Song>>, settings: Settings, state: StoryState
                             .background(if (answered && right) DarkBrandColors.suggestion.copy(alpha = 0.2f) else BrandLilac.copy(alpha = 0.08f))
                             .border(2.dp, border, RoundedCornerShape(20.dp))
                             .clickable(enabled = !answered) {
-                                picked = song
-                                state.answer = right
+                                state.picked = song
+                                fresh = true
                             }
                             .heightIn(min = 72.dp)
                             .padding(start = 8.dp, end = 14.dp, top = 8.dp, bottom = 8.dp),
@@ -440,7 +460,7 @@ private fun Quiz(rows: List<Ranked<Song>>, settings: Settings, state: StoryState
                 modifier = Modifier.padding(top = 14.dp).heightIn(min = 48.dp).semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
-        if (picked == top && !reduced) Confetti(Modifier.matchParentSize())
+        if (fresh && picked == top && !reduced) Confetti(Modifier.matchParentSize())
     }
 }
 

@@ -1,7 +1,5 @@
 package app.lyrify.ui
 
-import android.content.Context
-import android.graphics.Bitmap
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -60,9 +58,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -75,7 +71,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.FileProvider
 import app.lyrify.R
 import app.lyrify.library.Song
 import app.lyrify.stats.InsightsCards
@@ -83,14 +78,10 @@ import app.lyrify.stats.InsightsPage
 import app.lyrify.stats.ListeningPeriod
 import app.lyrify.stats.StatsGraph
 import app.lyrify.stats.phoneCalendar
-import java.io.ByteArrayOutputStream
-import java.io.IOException
 import java.time.YearMonth
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 // Your story (the approved mockup's part 2, handoff/insights/preview-insights-v1.html): a month, the year so far or the
 // period Insights shows as full screen slides. Tap the right side for the next, the left for the one before, hold to
@@ -112,7 +103,7 @@ fun storyMs(slide: StorySlide, last: Boolean, answered: Boolean): Int? = when {
 
 /**
  * Where a story is: its [slides], the one showing ([at]), whether the user paused it ([paused]) or holds it ([held]), and
- * the quiz's answer once given ([answer]: right or not).
+ * the song picked in the quiz ([picked]), kept while the story goes on and back.
  */
 @Stable
 class StoryState(val slides: List<StorySlide>) {
@@ -120,7 +111,7 @@ class StoryState(val slides: List<StorySlide>) {
         private set
     var paused by mutableStateOf(false)
     var held by mutableStateOf(false)
-    var answer by mutableStateOf<Boolean?>(null)
+    var picked by mutableStateOf<Song?>(null)
 
     val slide: StorySlide get() = slides[at]
 
@@ -137,20 +128,21 @@ class StoryState(val slides: List<StorySlide>) {
     }
 
     /** Whether the bar runs: animations on ([reduced] false), not paused or held, and not waiting for the quiz's answer. */
-    fun runs(reduced: Boolean = false): Boolean = !reduced && !paused && !held && storyMs(slide, at == slides.lastIndex, answer != null) != null
+    fun runs(reduced: Boolean = false): Boolean = !reduced && !paused && !held && storyMs(slide, at == slides.lastIndex, picked != null) != null
 }
 
 /**
  * The story's frame over [slides]' content: the progress bars, KJB's mark and [title], Pause and Close, the two halves to
- * tap (Back and Next, each a button for TalkBack) and holding to pause, each slide fading into the next (360 ms). The bar
- * of the slide showing fills as it runs and the next slide follows; with Remove animations it stands full and the story
- * waits for a tap. [content] draws a slide, its elements arriving by [rise] and [zoom] on the slide's own clock.
+ * tap under the slide (Back and Next, each a button for TalkBack; an answer or Share on the slide takes its own tap) and
+ * holding to pause, each slide fading into the next (360 ms). The bar of the slide showing fills as it runs and the next
+ * slide follows; with Remove animations it stands full and the story waits for a tap. [content] draws a slide, its
+ * elements arriving on the slide's own clock.
  */
 @Composable
 internal fun StoryFrame(title: String, state: StoryState, onClose: () -> Unit, content: @Composable (StorySlide) -> Unit) {
     val reduced = LocalReducedMotion.current
     val scope = rememberCoroutineScope()
-    val answered = state.answer != null
+    val answered = state.picked != null
     // A new slide, or the quiz answered: its bar starts again (full and still with reduced motion), then runs while
     // nothing holds it, on from where a pause left it.
     val fill = remember(state.at, answered) { Animatable(if (reduced) 1f else 0f) }
@@ -161,17 +153,10 @@ internal fun StoryFrame(title: String, state: StoryState, onClose: () -> Unit, c
         fill.animateTo(1f, tween(((1f - fill.value) * ms).toInt(), easing = LinearEasing))
         if (!state.next()) onClose()
     }
-    val next = { if (!state.next()) onClose() }
     val slideOf = stringResource(R.string.insights_story_slide, state.at + 1, state.slides.size)
     Box(Modifier.fillMaxSize().background(HuddleCardShade)) {
-        AnimatedContent(
-            state.at,
-            transitionSpec = { fadeIn(tween(if (reduced) Motion.REDUCED_MS else SLIDE_FADE_MS)) togetherWith fadeOut(tween(if (reduced) Motion.REDUCED_MS else SLIDE_FADE_MS)) },
-            label = "slide",
-        ) { at ->
-            SlideClock { content(state.slides[at]) }
-        }
-        // The two halves to tap, under the bars and buttons: back a third, next the rest; a press held pauses.
+        // The two halves to tap, under the slide (its empty space falls through to them) and the bars and buttons: back
+        // a third, next the rest; a press held pauses.
         Row(Modifier.fillMaxSize().padding(top = TAP_TOP)) {
             listOf(true, false).forEach { back ->
                 val label = stringResource(if (back) R.string.insights_story_back else R.string.insights_story_next)
@@ -182,7 +167,7 @@ internal fun StoryFrame(title: String, state: StoryState, onClose: () -> Unit, c
                         .semantics {
                             contentDescription = label
                             onClick(label) {
-                                if (back) state.back() else next()
+                                if (back) state.back() else if (!state.next()) onClose()
                                 true
                             }
                         }
@@ -198,12 +183,19 @@ internal fun StoryFrame(title: String, state: StoryState, onClose: () -> Unit, c
                                 if (state.held) {
                                     state.held = false
                                 } else if (up != null && up.uptimeMillis - down.uptimeMillis < TAP_MS) {
-                                    if (back) state.back() else next()
+                                    if (back) state.back() else if (!state.next()) onClose()
                                 }
                             }
                         },
                 )
             }
+        }
+        AnimatedContent(
+            state.at,
+            transitionSpec = { fadeIn(tween(if (reduced) Motion.REDUCED_MS else SLIDE_FADE_MS)) togetherWith fadeOut(tween(if (reduced) Motion.REDUCED_MS else SLIDE_FADE_MS)) },
+            label = "slide",
+        ) { at ->
+            SlideClock { content(state.slides[at]) }
         }
         Column(Modifier.fillMaxWidth().statusBarsPadding()) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, top = 14.dp).height(3.dp).clearAndSetSemantics {}) {
@@ -275,18 +267,23 @@ fun StoryView(view: FullScreen.Story) {
     }
     val settings = rememberSettings()
     val close = { nav.close(view) }
-    // Its slides as the story opened: plays written meanwhile change the numbers, never the slides.
+    // The story as it opened: plays written meanwhile change neither its slides nor its numbers, so a slide never loses
+    // what it shows while it plays.
+    var opened by remember { mutableStateOf<InsightsPage?>(null) }
     var state by remember { mutableStateOf<StoryState?>(null) }
-    if (state == null && page != null) state = StoryState(storySlides(page.cards))
+    if (opened == null && page != null) {
+        opened = page
+        state = StoryState(storySlides(page.cards))
+    }
     Box(Modifier.fillMaxSize().background(HuddleCardShade)) {
+        val story = opened ?: return@Box
         val shown = state ?: return@Box
-        page ?: return@Box
         // Nothing heard in it: there is no story, so it closes.
         if (shown.slides.isEmpty()) {
             LaunchedEffect(Unit) { close() }
             return@Box
         }
-        StoryFrame(storyName(page.period), shown, close) { slide -> Slide(slide, page, settings, shown) }
+        StoryFrame(storyName(story.period), shown, close) { slide -> Slide(slide, story, settings, shown) }
     }
 }
 
@@ -297,7 +294,7 @@ fun StoryView(view: FullScreen.Story) {
 fun storySlides(cards: InsightsCards): List<StorySlide> = buildList {
     if (cards.time == null) return@buildList
     add(StorySlide.INTRO)
-    if (cards.time != null) add(StorySlide.TIME)
+    add(StorySlide.TIME)
     val songs = cards.songs?.rows.orEmpty()
     if (songs.size >= QUIZ_SONGS) add(StorySlide.QUIZ)
     if (songs.isNotEmpty()) add(StorySlide.TOP_SONG)
@@ -306,34 +303,7 @@ fun storySlides(cards: InsightsCards): List<StorySlide> = buildList {
     if (cards.found?.artists.orEmpty().isNotEmpty()) add(StorySlide.NEW)
     if (cards.friends?.matches.orEmpty().isNotEmpty()) add(StorySlide.FRIEND)
     if (cards.traits.isNotEmpty()) add(StorySlide.TYPE)
-    if (cards.time != null) add(StorySlide.SHARE)
-}
-
-/**
- * Shares [picture] (as drawn on screen) through the phone's share sheet as a PNG named for [name], with [title] as the
- * subject. Nothing is uploaded: the user picks where it goes.
- */
-internal suspend fun sharePicture(context: Context, picture: GraphicsLayer, name: String, title: String): Shared {
-    val png = try {
-        val drawn = picture.toImageBitmap().asAndroidBitmap()
-        withContext(Dispatchers.Default) {
-            val bitmap = if (drawn.config == Bitmap.Config.HARDWARE) drawn.copy(Bitmap.Config.ARGB_8888, false) else drawn
-            ByteArrayOutputStream().use { out ->
-                bitmap.compress(Bitmap.CompressFormat.PNG, PNG_QUALITY, out)
-                out.toByteArray()
-            }
-        }
-    } catch (_: IllegalStateException) {
-        // The layer was never drawn (the page left before it showed).
-        return Shared.NoPicture
-    }
-    val file = try {
-        withContext(Dispatchers.IO) { shareCopy(context.cacheDir, "kjb-$name.png", png, System.currentTimeMillis()) }
-    } catch (_: IOException) {
-        return Shared.NoPicture
-    }
-    val uri = FileProvider.getUriForFile(context, context.packageName + SHARE_AUTHORITY, file)
-    return launchShare(1) { context.startActivity(shareSheet(recapImageShare(uri.toString(), title), context.packageName)) }
+    add(StorySlide.SHARE)
 }
 
 /** The story's line of who it is for: KJB's mark, then the title. */
@@ -352,7 +322,7 @@ private const val QUIZ_SEEN_MS = 2_600
 private const val SLIDE_FADE_MS = 360
 
 /** The slide's clock runs this long: the longest arrival on a slide (the artists' race, 400 ms + 4 x 80 ms + 2.6 s) is in by then. */
-private const val SLIDE_CLOCK_MS = 3_400f
+internal const val SLIDE_CLOCK_MS = 3_400f
 
 /** Held this long, a press pauses; let go sooner than [TAP_MS], it is a tap. */
 private const val HOLD_MS = 260L
@@ -366,10 +336,6 @@ private const val BACK_SHARE = 0.32f
 
 internal const val QUIZ_SONGS = 3
 
-
-// Insights' cards of when you listen (the approved mockup, handoff/insights/preview-insights-v1.html): the stories row,
-// your time (the hero), every day you listened and your day on a record. Their frame, motion and words are in
-// InsightsCards.kt.
 
 // The stories row
 
@@ -404,15 +370,23 @@ internal fun StoriesRow(page: app.lyrify.stats.InsightsPage, modifier: Modifier 
                     nav.show(FullScreen.Story(month = recap.month.toString()))
                 }
             }
-            if (i == 0 && going) yearRing(today.year) { nav.show(FullScreen.Story(period = ListeningPeriod.YEAR)) }
+            // The year so far: the year in big type on the hero's ground.
+            if (i == 0 && going) {
+                item(key = "year so far") {
+                    StoryRing(stringResource(R.string.insights_ring_so_far, today.year.toString()), new = false, covers = emptyList(), name = today.year.toString()) {
+                        nav.show(FullScreen.Story(period = ListeningPeriod.YEAR))
+                    }
+                }
+            }
         }
-        if (recaps.isEmpty() && going) yearRing(today.year) { nav.show(FullScreen.Story(period = ListeningPeriod.YEAR)) }
+        if (recaps.isEmpty() && going) {
+            item(key = "year so far") {
+                StoryRing(stringResource(R.string.insights_ring_so_far, today.year.toString()), new = false, covers = emptyList(), name = today.year.toString()) {
+                    nav.show(FullScreen.Story(period = ListeningPeriod.YEAR))
+                }
+            }
+        }
     }
-}
-
-/** The year so far's ring, the year in big type on the hero's ground. */
-private fun androidx.compose.foundation.lazy.LazyListScope.yearRing(year: Int, onClick: () -> Unit) = item(key = "year so far") {
-    StoryRing(stringResource(R.string.insights_ring_so_far, year.toString()), new = false, covers = emptyList(), name = year.toString(), onClick = onClick)
 }
 
 /**

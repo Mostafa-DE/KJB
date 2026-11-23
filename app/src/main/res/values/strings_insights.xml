@@ -135,10 +135,8 @@
     <string name="insights_heat_more">More</string>
     <!-- "2.1 h" under a day of the week. -->
     <string name="insights_hours_short">%1$s h</string>
-    <plurals name="insights_hours_long">
-        <item quantity="one">%1$s hour</item>
-        <item quantity="other">%1$s hours</item>
-    </plurals>
+    <!-- A month of all time heard for less than an hour, in its small cell. -->
+    <string name="insights_under_an_hour">&lt;1</string>
     <plurals name="insights_year_summary">
         <item quantity="one">%1$d, one square a day, darker for more time: music on %2$d day</item>
         <item quantity="other">%1$d, one square a day, darker for more time: music on %2$d days</item>

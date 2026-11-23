@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -21,7 +20,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,14 +36,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -205,29 +201,14 @@ fun ForYouInsights(modifier: Modifier = Modifier) {
             .clickable(onClickLabel = stringResource(R.string.lib_view_all)) { nav.open(Page.ForYou) }
             .padding(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
     ) {
-        Column(Modifier.size(56.dp).clip(RoundedCornerShape(16.dp)).clearAndSetSemantics {}) {
-            picks.take(4).chunked(2).forEach { pair ->
-                Row(Modifier.weight(1f)) {
-                    pair.forEach { pick -> SongCover(SongArt(pick.song.path, pick.song.ref.mediaStoreId), Modifier.weight(1f).fillMaxHeight(), size = 28.dp, shape = RectangleShape) }
-                }
-            }
-        }
+        MosaicTile(refs, size = 56.dp)
         Column(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
             SuggestedMark(stringResource(R.string.suggest_for_you))
             Text(pluralStringResource(R.plurals.insights_for_you_songs, picks.size, picks.size), style = display(17, 22, weight = 650), color = colors.onSurface)
             Text(stringResource(R.string.insights_for_you_line), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 18.sp), color = colors.onSurface)
         }
-        val play = stringResource(R.string.insights_play_song, stringResource(R.string.suggest_for_you))
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(brand.suggestion)
-                .clickable(role = Role.Button) { playback.play(refs, 0, source) }
-                .semantics { contentDescription = play },
-        ) {
-            Icon(painterResource(R.drawable.ic_play_arrow_fill), contentDescription = null, tint = brand.suggestionContainer, modifier = Modifier.size(26.dp))
+        RoundButton(R.drawable.ic_play_arrow_fill, stringResource(R.string.insights_play_song, stringResource(R.string.suggest_for_you)), container = brand.suggestion, tint = brand.suggestionContainer) {
+            playback.play(refs, 0, source)
         }
     }
 }

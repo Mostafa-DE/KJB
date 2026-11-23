@@ -133,8 +133,9 @@ internal fun YourTime(time: TimeCard, period: PagePeriod, onShare: () -> Unit) {
         }
         Counted(totals.heardMs, HeroTime, BrandLilac, Modifier.padding(top = 6.dp)) { bigTime(it, unit) }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp).semantics(mergeDescendants = true) {}) {
-            if (before != null) {
-                val change = percentChange(totals.heardMs, before.heardMs)
+            // Against the period before; the same as it (or nothing then), only the time a day.
+            val change = before?.let { percentChange(totals.heardMs, it.heardMs) } ?: 0L
+            if (change != 0L) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.heightIn(min = 28.dp).background(if (change < 0) BrandLilac.copy(alpha = 0.18f) else HuddleGold, RoundedCornerShape(14.dp)).padding(start = 6.dp, end = 10.dp),
@@ -148,6 +149,7 @@ internal fun YourTime(time: TimeCard, period: PagePeriod, onShare: () -> Unit) {
                         if (period.going) stringResource(R.string.insights_up_to_now) else "",
                     style = HeroLine,
                     color = BrandLilac.copy(alpha = 0.86f),
+                    modifier = Modifier.weight(1f),
                 )
             } else {
                 val days = (ChronoUnit.DAYS.between(period.firstDay, period.lastDay) + 1).coerceAtLeast(1)
@@ -177,7 +179,17 @@ internal fun YourTime(time: TimeCard, period: PagePeriod, onShare: () -> Unit) {
         }
         DarkGround {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 14.dp)) {
-                LyrifyButton(playStoryText(period), onClick = { nav.show(FullScreen.Story(period = period.kind)) }, modifier = Modifier.weight(1f), icon = R.drawable.ic_play_arrow_fill)
+                LyrifyButton(
+                    when (period.kind) {
+                        ListeningPeriod.WEEK -> stringResource(R.string.insights_play_week)
+                        ListeningPeriod.MONTH -> stringResource(R.string.insights_play_so_far, monthText(java.time.YearMonth.from(period.firstDay)))
+                        ListeningPeriod.YEAR -> stringResource(R.string.insights_play_so_far, period.firstDay.year.toString())
+                        ListeningPeriod.ALL_TIME -> stringResource(R.string.insights_play_all)
+                    },
+                    onClick = { nav.show(FullScreen.Story(period = period.kind)) },
+                    modifier = Modifier.weight(1f),
+                    icon = R.drawable.ic_play_arrow_fill,
+                )
                 ChromeIconButton(R.drawable.ic_share, stringResource(R.string.insights_share), onShare, tint = BrandLilac)
             }
         }
@@ -196,11 +208,16 @@ private fun HeroBars(time: TimeCard, period: PagePeriod, modifier: Modifier) {
     val ghost = time.heardBefore?.heardMs
     val now = if (period.going) stepOf(steps, period.lastDay) else -1
     val top = (steps.heardMs.filterNotNull() + ghost.orEmpty().filterNotNull()).maxOrNull()?.takeIf { it > 0 } ?: 1L
-    val summary = chartSummary(steps)
+    // TalkBack reads each step that has come and its time: "Mon 23 Nov 2 h 8 min, ...".
+    val summary = stringResource(
+        if (steps.step == Step.DAY) R.string.insights_chart_days else R.string.insights_chart_months,
+        steps.heardMs.mapIndexedNotNull { i, ms -> ms?.let { stringResource(R.string.insights_step, stepText(steps, i), listenedText(it)) } }.joinToString(", "),
+    )
+    val count = steps.heardMs.size.coerceAtLeast(1)
+    val step = staggerMs(count, BAR_STEP_MS, BAR_MS, ARRIVED_MS)
     Column(modifier) {
         Canvas(Modifier.fillMaxWidth().height(96.dp).semantics { contentDescription = summary }) {
-            val gap = 3.dp.toPx()
-            val count = steps.heardMs.size.coerceAtLeast(1)
+            val gap = minOf(3.dp.toPx(), size.width / count / 4)
             val width = (size.width - gap * (count - 1)) / count
             val t = clock.ms()
             steps.heardMs.forEachIndexed { i, ms ->
@@ -216,7 +233,7 @@ private fun HeroBars(time: TimeCard, period: PagePeriod, modifier: Modifier) {
                     )
                     return@forEachIndexed
                 }
-                val height = size.height * (ms.toFloat() / top).coerceAtLeast(0.03f) * phase(t, i * BAR_STEP_MS, BAR_MS, Motion.Rise)
+                val height = size.height * (ms.toFloat() / top).coerceAtLeast(0.03f) * phase(t, (i * step).toInt(), BAR_MS, Motion.Rise)
                 val glows = i == now
                 if (glows) drawRoundRect(HuddleGold.copy(alpha = 0.35f), Offset(x - 3.dp.toPx(), size.height - height - 3.dp.toPx()), Size(width + 6.dp.toPx(), height + 3.dp.toPx()), CornerRadius(6.dp.toPx()))
                 drawRoundRect(
@@ -283,7 +300,7 @@ fun stepOf(steps: Steps, day: LocalDate): Int {
 
 /** A step's name: "Mon 23 Nov" (short: "Mon" in a week's, "23 Nov" in a month's), or "Nov 2026" (short: "Nov" in a year's). */
 @Composable
-internal fun stepText(steps: Steps, i: Int, short: Boolean = false): String {
+private fun stepText(steps: Steps, i: Int, short: Boolean = false): String {
     val context = LocalContext.current
     val at = when (steps.step) {
         Step.DAY -> steps.first.plusDays(i.toLong())
@@ -302,13 +319,6 @@ internal fun stepText(steps: Steps, i: Int, short: Boolean = false): String {
     } else {
         DateUtils.formatDateTime(context, millis, flags or DateUtils.FORMAT_SHOW_DATE)
     }
-}
-
-/** What TalkBack says of a chart of [steps]: each step that has come and its time, "Mon 23 Nov 2 h 8 min, ...". */
-@Composable
-private fun chartSummary(steps: Steps): String {
-    val parts = steps.heardMs.mapIndexedNotNull { i, ms -> ms?.let { stringResource(R.string.insights_step, stepText(steps, i), listenedText(it)) } }
-    return stringResource(if (steps.step == Step.DAY) R.string.insights_chart_days else R.string.insights_chart_months, parts.joinToString(", "))
 }
 
 // Every day you listened
@@ -369,7 +379,7 @@ internal fun EveryDay(days: DaysCard, period: PagePeriod) {
             }
             Column(Modifier.weight(1f).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(18.dp)).padding(10.dp).semantics(mergeDescendants = true) {}) {
                 FactKicker(R.drawable.ic_auto_awesome, stringResource(R.string.insights_busiest), brand.highlight)
-                Counted(days.busiest.heardMs, FactValue, MaterialTheme.colorScheme.onSurface) { AnnotatedString(listenedText(it)) }
+                Counted(days.busiest.heardMs, FigureValue, MaterialTheme.colorScheme.onSurface) { AnnotatedString(listenedText(it)) }
                 Text(dayText(days.busiest.day, weekday = true, year = period.kind == ListeningPeriod.YEAR || period.kind == ListeningPeriod.ALL_TIME), style = FigureLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -383,7 +393,7 @@ private fun DayFact(@DrawableRes icon: Int, kicker: String, days: Int, line: Str
     val word = pluralStringResource(R.plurals.insights_days_word, days)
     Column(modifier.background(colors.surface, RoundedCornerShape(18.dp)).padding(10.dp).semantics(mergeDescendants = true) {}) {
         FactKicker(icon, kicker, LocalBrandColors.current.highlight, iconMotion)
-        Counted(days.toLong(), FactValue, colors.onSurface) {
+        Counted(days.toLong(), FigureValue, colors.onSurface) {
             buildAnnotatedString {
                 append(formatCount(it.toInt()))
                 withStyle(SpanStyle(fontSize = 13.sp, fontWeight = FontWeight(650))) { append(" $word") }
@@ -443,7 +453,13 @@ private fun WeekColumns(days: DaysCard, period: PagePeriod, heat: List<Color>) {
                     val height = size.height * (ms.toFloat() / top) * phase(clock.ms(), i * 3 * BAR_STEP_MS, BAR_MS, Motion.Rise)
                     drawRoundRect(heat[heatLevel(ms, Step.DAY).coerceAtLeast(1)], Offset(0f, size.height - height), Size(size.width, height), CornerRadius(12.dp.toPx()))
                 }
-                Text(if (ms == null) "" else stringResource(R.string.insights_hours_short, String.format(Locale.getDefault(), "%.1f", ms / HOUR.toDouble())), style = AxisLabel.copy(fontWeight = FontWeight.SemiBold).tabular(), color = colors.onSurfaceVariant, maxLines = 1, autoSize = TextAutoSize.StepBased(minFontSize = SMALLEST_LABEL, maxFontSize = AxisLabel.fontSize))
+                Text(
+                    when {
+                        ms == null -> ""
+                        ms < HOUR -> listenedText(ms)
+                        else -> stringResource(R.string.insights_hours_short, String.format(Locale.getDefault(), "%.1f", ms / HOUR.toDouble()))
+                    },
+                    style = AxisLabel.copy(fontWeight = FontWeight.SemiBold).tabular(), color = colors.onSurfaceVariant, maxLines = 1, autoSize = TextAutoSize.StepBased(minFontSize = SMALLEST_LABEL, maxFontSize = AxisLabel.fontSize))
             }
         }
     }
@@ -572,13 +588,17 @@ private fun MonthHours(days: DaysCard, heat: List<Color>) {
                         return@forEach
                     }
                     val ground = heat[heatLevel(ms, Step.MONTH)]
-                    val hours = (ms / HOUR).toInt()
-                    val description = stringResource(R.string.insights_step, stepText(days.heard, i), pluralStringResource(R.plurals.insights_hours_long, hours, formatCount(hours)))
+                    val description = stringResource(R.string.insights_step, stepText(days.heard, i), if (ms > 0) listenedText(ms) else stringResource(R.string.insights_nothing))
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier.weight(1f).aspectRatio(0.8f).background(ground, RoundedCornerShape(6.dp)).clearAndSetSemantics { contentDescription = description },
                     ) {
-                        Text(hours.toString(), style = AxisLabel.copy(fontSize = 10.sp, fontWeight = FontWeight(650)).tabular(), color = if (ms > 0) heatInk(ground) else colors.onSurfaceVariant, maxLines = 1)
+                        Text(
+                            when {
+                                ms in 1 until HOUR -> stringResource(R.string.insights_under_an_hour)
+                                else -> formatCount((ms / HOUR).toInt())
+                            },
+                            style = AxisLabel.copy(fontSize = 10.sp, fontWeight = FontWeight(650)).tabular(), color = if (ms > 0) heatInk(ground) else colors.onSurfaceVariant, maxLines = 1)
                     }
                 }
             }
@@ -624,7 +644,7 @@ internal fun DayOnARecord(clock: ClockCard) {
                                 Text(stringResource(names[i]), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight(650)), color = ink)
                                 Text(stringResource(ranges[i]), style = FigureLabel, color = line)
                             }
-                            Text(stringResource(R.string.insights_percent, formatCount(percentOf(parts[i], total))), style = FactValue.copy(fontSize = 18.sp).tabular(), color = ink)
+                            Text(stringResource(R.string.insights_percent, formatCount(percentOf(parts[i], total))), style = FigureValue.copy(fontSize = 18.sp).tabular(), color = ink)
                         }
                     }
                 }
@@ -695,9 +715,12 @@ internal fun Dial(
             drawText(text, topLeft = Offset(c.x + cos(angle) * s * 0.47f - text.size.width / 2, c.y + sin(angle) * s * 0.47f - text.size.height / 2))
         }
         val middle = measurer.measure(hourWords[peak], centreStyle)
-        drawText(middle, topLeft = Offset(c.x - middle.size.width / 2, c.y - middle.size.height / 2 - 6.dp.toPx()))
         val under = measurer.measure(your, yourStyle)
-        drawText(under, topLeft = Offset(c.x - under.size.width / 2, c.y + middle.size.height / 2 - 4.dp.toPx()))
+        // The largest text shrinks to fit the ring's hole.
+        scale(minOf(1f, s * 0.5f * 0.86f / maxOf(middle.size.width, under.size.width)), c) {
+            drawText(middle, topLeft = Offset(c.x - middle.size.width / 2, c.y - middle.size.height / 2 - 6.dp.toPx()))
+            drawText(under, topLeft = Offset(c.x - under.size.width / 2, c.y + middle.size.height / 2 - 4.dp.toPx()))
+        }
     }
 }
 
@@ -710,15 +733,6 @@ internal fun hourLabel(hour: Int): String {
         set(java.util.Calendar.MINUTE, 0)
     }
     return java.text.SimpleDateFormat(pattern, Locale.getDefault()).format(at.time).lowercase(Locale.getDefault())
-}
-
-/** "Play your week so far", and the rest as [storyName]. */
-@Composable
-private fun playStoryText(period: PagePeriod): String = when (period.kind) {
-    ListeningPeriod.WEEK -> stringResource(R.string.insights_play_week)
-    ListeningPeriod.MONTH -> stringResource(R.string.insights_play_so_far, monthText(java.time.YearMonth.from(period.firstDay)))
-    ListeningPeriod.YEAR -> stringResource(R.string.insights_play_so_far, period.firstDay.year.toString())
-    ListeningPeriod.ALL_TIME -> stringResource(R.string.insights_play_all)
 }
 
 private val HeroTime = display(64, 64, -0.04, weight = 700)

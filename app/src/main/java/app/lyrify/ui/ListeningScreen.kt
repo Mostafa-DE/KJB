@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -315,7 +314,7 @@ private fun TopListPage(kind: TopKind, onBack: () -> Unit, onOpen: (Page) -> Uni
     ListeningFrame(stringResource(kind.title), onBack) { padding ->
         val reduced = LocalReducedMotion.current
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
-            item(key = "head", contentType = "head") { Box(rowMotion(reduced)) { TopHead(stringResource(shownPeriod.named), tops.size, onViewAll = null) } }
+            item(key = "head", contentType = "head") { Box(rowMotion(reduced)) { TopHead(stringResource(shownPeriod.named), tops.size) } }
             if (page != null && tops.isEmpty()) {
                 item(key = "empty", contentType = "empty") {
                     EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), rowMotion(reduced), text = stringResource(R.string.stats_empty_text))
@@ -361,9 +360,9 @@ private fun ListeningFrame(
     )
 }
 
-/** A top list's name and length, a heading for TalkBack, with "View all" when it has more than it shows. */
+/** A top list's name and length, a heading for TalkBack. */
 @Composable
-private fun TopHead(title: String, count: Int, onViewAll: (() -> Unit)?) {
+private fun TopHead(title: String, count: Int) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -371,8 +370,6 @@ private fun TopHead(title: String, count: Int, onViewAll: (() -> Unit)?) {
     ) {
         Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
         Text(formatCount(count), style = MaterialTheme.typography.labelLarge.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.weight(1f))
-        if (onViewAll != null) LyrifyButton(stringResource(R.string.stats_view_all), onClick = onViewAll, kind = ButtonKind.GHOST, compact = true)
     }
 }
 
@@ -570,7 +567,7 @@ private val TopKind.title: Int
     }
 
 /** "This week", "This month", "This year", "All time". */
-private val ListeningPeriod.named: Int
+internal val ListeningPeriod.named: Int
     get() = when (this) {
         ListeningPeriod.WEEK -> R.string.stats_this_week
         ListeningPeriod.MONTH -> R.string.stats_this_month

@@ -48,12 +48,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -142,7 +142,14 @@ internal fun TopArtists(card: TopCard<Artist>, period: PagePeriod, onOpen: (Page
                         modifier = Modifier.padding(top = 8.dp).background(colors.surface, RoundedCornerShape(12.dp)).padding(start = 6.dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
                     ) {
                         Icon(painterResource(R.drawable.ic_emoji_events), contentDescription = null, tint = insights.goldInk, modifier = Modifier.size(16.dp))
-                        Text(loyaltyText(loyalty, period), style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold), color = insights.goldInk)
+                        // "Your number 1 for 6 weeks running", "in 8 of 11 months", "since June 2025".
+                        Text(
+                            when (loyalty) {
+                                is Loyalty.Running -> pluralStringResource(if (period.kind == ListeningPeriod.WEEK) R.plurals.insights_loyal_weeks else R.plurals.insights_loyal_months_running, loyalty.periods, loyalty.periods)
+                                is Loyalty.MonthsOf -> stringResource(R.string.insights_loyal_months, loyalty.months, loyalty.of)
+                                is Loyalty.Since -> stringResource(R.string.insights_loyal_since, monthText(loyalty.month, java.time.YearMonth.of(0, 1)))
+                            },
+                            style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold), color = insights.goldInk)
                     }
                 }
             }
@@ -185,14 +192,6 @@ internal fun TopArtists(card: TopCard<Artist>, period: PagePeriod, onOpen: (Page
     }
 }
 
-/** "Your number 1 for 6 weeks running", "in 8 of 11 months", "since June 2025". */
-@Composable
-private fun loyaltyText(loyalty: Loyalty, period: PagePeriod): String = when (loyalty) {
-    is Loyalty.Running -> pluralStringResource(if (period.kind == ListeningPeriod.WEEK) R.plurals.insights_loyal_weeks else R.plurals.insights_loyal_months_running, loyalty.periods, loyalty.periods)
-    is Loyalty.MonthsOf -> stringResource(R.string.insights_loyal_months, loyalty.months, loyalty.of)
-    is Loyalty.Since -> stringResource(R.string.insights_loyal_since, monthText(loyalty.month, java.time.YearMonth.of(0, 1)))
-}
-
 /**
  * Top songs: the top song's cover big and tilted with its play button, "Your top song", its name, artist and plays
  * counted up; then 2 to 5 with their covers, ups and downs, artist and time, and a short bar of their plays; then Play
@@ -214,22 +213,14 @@ internal fun TopSongs(card: TopCard<Song>, settings: Settings, onOpen: (Page) ->
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Box(Modifier.size(134.dp).padding(end = 10.dp, bottom = 10.dp)) {
                 SongCover(SongArt(first.cover.path, first.cover.ref.mediaStoreId), Modifier.rotate(-3f), size = 124.dp, shape = RoundedCornerShape(22.dp))
-                val play = stringResource(R.string.insights_play_song, displayTitle(first.top.item, settings.library))
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(10.dp, 10.dp)
-                        .size(56.dp)
-                        .border(4.dp, colors.surfaceContainerLow, CircleShape)
-                        .padding(4.dp)
-                        .clip(CircleShape)
-                        .background(chrome.action)
-                        .clickable(role = Role.Button) { playback.play(top25, 0, source) }
-                        .semantics { contentDescription = play },
-                ) {
-                    Icon(painterResource(R.drawable.ic_play_arrow_fill), contentDescription = null, tint = chrome.onAction, modifier = Modifier.size(26.dp))
-                }
+                // Play on the cover's corner, ringed in the card's colour.
+                RoundButton(
+                    R.drawable.ic_play_arrow_fill,
+                    stringResource(R.string.insights_play_song, displayTitle(first.top.item, settings.library)),
+                    modifier = Modifier.align(Alignment.BottomEnd).offset(10.dp, 10.dp).border(4.dp, colors.surfaceContainerLow, CircleShape).padding(4.dp),
+                    container = chrome.action,
+                    tint = chrome.onAction,
+                ) { playback.play(top25, 0, source) }
             }
             Column(Modifier.weight(1f).clickable(onClickLabel = stringResource(R.string.stats_song_options)) { onSong(first.top.item.ref) }.semantics(mergeDescendants = true) {}) {
                 Text(stringResource(R.string.insights_top_song).uppercase(), style = CardKicker.copy(fontSize = 11.5.sp), color = brand.highlight)
@@ -558,16 +549,19 @@ internal fun HowYouListen(how: HowCard, settings: Settings, onSong: (SongRef) ->
                         start += sweep
                     }
                     val a = measurer.measure(centre, big)
-                    drawText(a, topLeft = Offset(size.width / 2 - a.size.width / 2, size.height / 2 - a.size.height / 2 - 6.dp.toPx()))
                     val b = measurer.measure(toEnd, small)
-                    drawText(b, topLeft = Offset(size.width / 2 - b.size.width / 2, size.height / 2 + a.size.height / 2 - 6.dp.toPx()))
+                    // The largest text shrinks to fit the ring's hole.
+                    scale(minOf(1f, (2 * r - stroke) * 0.86f / maxOf(a.size.width, b.size.width)), center) {
+                        drawText(a, topLeft = Offset(size.width / 2 - a.size.width / 2, size.height / 2 - a.size.height / 2 - 6.dp.toPx()))
+                        drawText(b, topLeft = Offset(size.width / 2 - b.size.width / 2, size.height / 2 + a.size.height / 2 - 6.dp.toPx()))
+                    }
                 }
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
                     endNames.forEachIndexed { k, name ->
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.semantics(mergeDescendants = true) {}) {
                             Box(Modifier.padding(top = 4.dp).size(10.dp).background(endColors[k], RoundedCornerShape(3.dp)))
                             Column {
-                                Text(stringResource(R.string.insights_percent, formatCount(endShares[k])), style = FactValue.copy(fontSize = 17.sp, lineHeight = 20.sp).tabular(), color = colors.onSurface)
+                                Text(stringResource(R.string.insights_percent, formatCount(endShares[k])), style = FigureValue.copy(fontSize = 17.sp, lineHeight = 20.sp).tabular(), color = colors.onSurface)
                                 Text(name, style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 17.sp), color = colors.onSurfaceVariant)
                             }
                         }
@@ -577,13 +571,7 @@ internal fun HowYouListen(how: HowCard, settings: Settings, onSong: (SongRef) ->
         }
         skipRatio(how.shuffled, how.inOrder)?.let { ratio ->
             Text(
-                buildAnnotatedString {
-                    val words = stringResource(R.string.insights_shuffle_skips, String.format(Locale.getDefault(), "%.1f", ratio))
-                    val bold = stringResource(R.string.insights_times, String.format(Locale.getDefault(), "%.1f", ratio))
-                    val at = words.indexOf(bold)
-                    append(words)
-                    if (at >= 0) addStyle(SpanStyle(fontWeight = FontWeight(650), color = colors.onSurface), at, at + bold.length)
-                },
+                boldIn(stringResource(R.string.insights_shuffle_skips, String.format(Locale.getDefault(), "%.1f", ratio)), stringResource(R.string.insights_times, String.format(Locale.getDefault(), "%.1f", ratio))),
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.padding(top = 12.dp),
@@ -626,7 +614,7 @@ fun skipRatio(shuffled: Ends, inOrder: Ends): Float? {
     return ratio.takeIf { it >= MIN_SKIP_RATIO }
 }
 
-internal val BigNumber = display(40, 44, -0.03, weight = 700)
+private val BigNumber = display(40, 44, -0.03, weight = 700)
 
 private val RankStyle = display(15, 15, weight = 700)
 

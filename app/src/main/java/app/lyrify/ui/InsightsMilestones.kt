@@ -54,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
@@ -176,7 +177,16 @@ internal fun YourLibrary(library: LibraryCard, period: PagePeriod, settings: Set
             ProgressRing(played / 100f, brand.suggestion, stringResource(R.string.insights_percent, formatCount(played)), stringResource(R.string.insights_played_ever), 120, 14, LIBRARY_RING_MS, stringResource(R.string.insights_library_ring, played))
             Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.weight(1f)) {
                 LibraryFact(pluralStringResource(R.plurals.insights_songs, library.songs, formatCount(library.songs)), stringResource(R.string.insights_on_phone, Formatter.formatShortFileSize(context, library.bytes)))
-                LibraryFact(lengthText(library.durationMs), stringResource(R.string.insights_play_it_all))
+                // How long it plays end to end: "6 days 19 h", "19 h 5 min".
+                val length = listenedTime(library.durationMs)
+                LibraryFact(
+                    if (length.hours >= 24) {
+                        stringResource(R.string.insights_days_hours, pluralStringResource(R.plurals.insights_days_word_count, length.hours / 24, formatCount(length.hours / 24)), length.hours % 24)
+                    } else {
+                        listenedText(library.durationMs)
+                    },
+                    stringResource(R.string.insights_play_it_all),
+                )
                 val added = when (period.kind) {
                     ListeningPeriod.WEEK -> stringResource(R.string.insights_this_week_lower)
                     ListeningPeriod.MONTH -> stringResource(R.string.insights_this_month_lower)
@@ -192,7 +202,19 @@ internal fun YourLibrary(library: LibraryCard, period: PagePeriod, settings: Set
             val counts = shown.map { it.songs } + listOfNotNull(other.takeIf { it > 0 })
             val total = counts.sum().toLong()
             val shares = counts.map { percentOf(it.toLong(), total) }
-            val names = shown.map { typeName(it.mimeType) } + listOfNotNull(stringResource(R.string.insights_other).takeIf { other > 0 })
+            // Each type's short name: MP3, FLAC, M4A, OGG, Opus, WAV, else its subtype in capitals.
+            val names = shown.map { type ->
+                when (val mime = type.mimeType?.lowercase(Locale.ROOT)) {
+                    "audio/mpeg", "audio/mp3" -> "MP3"
+                    "audio/flac", "audio/x-flac" -> "FLAC"
+                    "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac" -> "M4A"
+                    "audio/ogg", "audio/vorbis" -> "OGG"
+                    "audio/opus" -> "Opus"
+                    "audio/wav", "audio/x-wav" -> "WAV"
+                    null -> "?"
+                    else -> mime.substringAfter('/').removePrefix("x-").uppercase(Locale.ROOT)
+                }
+            } + listOfNotNull(stringResource(R.string.insights_other).takeIf { other > 0 })
             val typeColors = listOf(insights.series[0], insights.series[3], insights.series[2])
             StackBar(shares, typeColors, 12.dp, Modifier.padding(top = 14.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 6.dp)) {
@@ -261,26 +283,6 @@ private fun LibraryRow(lead: @Composable () -> Unit, title: String, line: String
     }
 }
 
-/** "6 days 19 h", "19 h 5 min": how long a library plays end to end. */
-@Composable
-private fun lengthText(ms: Long): String {
-    val time = listenedTime(ms)
-    val days = time.hours / 24
-    return if (days > 0) stringResource(R.string.insights_days_hours, pluralStringResource(R.plurals.insights_days_word_count, days, formatCount(days)), time.hours % 24) else listenedText(ms)
-}
-
-/** A file type's short name: MP3, FLAC, M4A, OGG, Opus, WAV, else its subtype in capitals. */
-private fun typeName(mime: String?): String = when (mime?.lowercase(Locale.ROOT)) {
-    "audio/mpeg", "audio/mp3" -> "MP3"
-    "audio/flac", "audio/x-flac" -> "FLAC"
-    "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/aac" -> "M4A"
-    "audio/ogg", "audio/vorbis" -> "OGG"
-    "audio/opus" -> "Opus"
-    "audio/wav", "audio/x-wav" -> "WAV"
-    null -> "?"
-    else -> mime.substringAfter('/').removePrefix("x-").uppercase(Locale.ROOT)
-}
-
 /**
  * A ring that fills to [done] (0 to 1) in [color], drawing itself in over [ms] as its card arrives, with [value] in big
  * type and [line] under it in its middle; [size] and [stroke] in dp. TalkBack reads [description].
@@ -300,9 +302,12 @@ private fun ProgressRing(done: Float, color: Color, value: String, line: String,
         drawArc(colors.surfaceContainerHigh, 0f, 360f, false, at, box, style = Stroke(width))
         drawArc(color, -90f, 360f * done.coerceIn(0f, 1f) * phase(clock.ms(), 0, ms, Motion.Rise), false, at, box, style = Stroke(width, cap = StrokeCap.Round))
         val a = measurer.measure(value, big)
-        drawText(a, topLeft = Offset(this.size.width / 2 - a.size.width / 2, this.size.height / 2 - a.size.height / 2 - 6.dp.toPx()))
         val b = measurer.measure(line, small)
-        drawText(b, topLeft = Offset(this.size.width / 2 - b.size.width / 2, this.size.height / 2 + a.size.height / 2 - 6.dp.toPx()))
+        // The largest text shrinks to fit the ring's hole.
+        scale(minOf(1f, (2 * r - width) * 0.86f / maxOf(a.size.width, b.size.width)), center) {
+            drawText(a, topLeft = Offset(this.size.width / 2 - a.size.width / 2, this.size.height / 2 - a.size.height / 2 - 6.dp.toPx()))
+            drawText(b, topLeft = Offset(this.size.width / 2 - b.size.width / 2, this.size.height / 2 + a.size.height / 2 - 6.dp.toPx()))
+        }
     }
 }
 
@@ -448,7 +453,10 @@ internal fun MilestonesAndBadges(milestones: MilestonesCard, period: PagePeriod)
             milestones.hours?.let { add(Badge(R.drawable.ic_schedule, milestoneText(it.kind, it.count), monthOf(it.at), gold = true)) }
             milestones.artistsMonth?.let { add(Badge(R.drawable.ic_group, pluralStringResource(R.plurals.insights_artists, it.artists, formatCount(it.artists)), stringResource(R.string.insights_in_one_month), gold = false)) }
             if (milestones.booksFinished > 0) add(Badge(R.drawable.ic_auto_stories, stringResource(R.string.insights_bookworm), pluralStringResource(R.plurals.insights_books_finished_count, milestones.booksFinished, milestones.booksFinished), gold = false))
-            milestones.next?.let { add(Badge(R.drawable.ic_lock, milestoneShort(it), stringResource(R.string.insights_there, (doneShare(it) * 100).toInt()), gold = null)) }
+            // The locked medal: the milestone short, "1,000 h" or "2,500".
+            milestones.next?.let {
+                add(Badge(R.drawable.ic_lock, if (it.kind == MilestoneKind.HOURS) stringResource(R.string.insights_hours_short, formatCount(it.count)) else formatCount(it.count), stringResource(R.string.insights_there, (doneShare(it) * 100).toInt()), gold = null))
+            }
         }
         if (badges.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 16.dp)) {
@@ -503,21 +511,16 @@ private fun Medal(badge: Badge, modifier: Modifier) {
 
 /** How much of the way to [next] is done: 0 to 1. */
 fun doneShare(next: NextMilestone): Float {
-    val whole = if (next.kind == MilestoneKind.PLAYS) next.count.toLong() else next.count * HOUR_MS
+    val whole = if (next.kind == MilestoneKind.PLAYS) next.count.toLong() else next.count * HOUR
     return if (whole <= 0) 0f else ((whole - next.left).toFloat() / whole).coerceIn(0f, 1f)
 }
 
 /** "1,000 plays", "100 hours heard". */
 @Composable
-internal fun milestoneText(kind: MilestoneKind, count: Int): String = when (kind) {
+private fun milestoneText(kind: MilestoneKind, count: Int): String = when (kind) {
     MilestoneKind.PLAYS -> playsNote(count)
     MilestoneKind.HOURS -> pluralStringResource(R.plurals.insights_hours, count, formatCount(count))
 }
-
-/** A milestone short, for a locked medal: "1,000 h", "2,500". */
-@Composable
-private fun milestoneShort(next: NextMilestone): String =
-    if (next.kind == MilestoneKind.HOURS) stringResource(R.string.insights_hours_short, formatCount(next.count)) else formatCount(next.count)
 
 /** The month of [at], with its year: "March 2026". */
 @Composable
@@ -606,8 +609,6 @@ private const val REACHED = 4
 private const val LIBRARY_RING_MS = 1_300
 
 private const val SHINE_MS = 4_000
-
-private const val HOUR_MS = 3_600_000L
 
 private const val NEVER_PLAYED_KEY: String = "insights-never-played"
 
