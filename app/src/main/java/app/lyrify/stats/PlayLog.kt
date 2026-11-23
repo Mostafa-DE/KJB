@@ -181,6 +181,9 @@ object PlaysSchema {
      * is), so a file 3.1.0 kept after a downgrade gets the imports it made marked on the next upgrade too.
      * Version 4: each play's real minutes ([LoggedPlay.clockMs], Insights, KJB 3.2); the plays from before keep NULL.
      * Version 5: the interaction log ([Interaction]), one row per time and kind, codes as in version 3.
+     * Version 6: Huddle's history (huddle/HuddleStore.kt, HuddleLog): every card between the user and their friends, both
+     * ways, one row per message id with the card as Huddle's JSON, and friends' plays, one row each. Never in the plays
+     * section of a backup: only in Huddle's, sealed with its passphrase.
      */
     val STEPS: List<List<String>> = listOf(
         listOf(
@@ -207,6 +210,16 @@ object PlaysSchema {
         listOf(
             "CREATE TABLE IF NOT EXISTS interactions (at INTEGER NOT NULL, kind TEXT NOT NULL, zone_offset_min INTEGER, words TEXT, " +
                 "target TEXT, target_key TEXT, PRIMARY KEY (at, kind)) WITHOUT ROWID",
+        ),
+        listOf(
+            "CREATE TABLE IF NOT EXISTS huddle_cards (id TEXT NOT NULL PRIMARY KEY, friend TEXT NOT NULL, sent INTEGER NOT NULL, at INTEGER NOT NULL, " +
+                "card TEXT NOT NULL, opened INTEGER NOT NULL DEFAULT 0, dismissed INTEGER NOT NULL DEFAULT 0, delivered INTEGER NOT NULL DEFAULT 1) WITHOUT ROWID",
+            "CREATE INDEX IF NOT EXISTS huddle_cards_by_friend ON huddle_cards (friend, at)",
+            "CREATE INDEX IF NOT EXISTS huddle_cards_by_time ON huddle_cards (sent, at)",
+            "CREATE TABLE IF NOT EXISTS friend_plays (friend TEXT NOT NULL, at INTEGER NOT NULL, title TEXT NOT NULL, artist TEXT, album TEXT, " +
+                "duration_ms INTEGER NOT NULL DEFAULT 0, favourite INTEGER NOT NULL DEFAULT 0)",
+            "CREATE INDEX IF NOT EXISTS friend_plays_by_friend ON friend_plays (friend, at)",
+            "CREATE INDEX IF NOT EXISTS friend_plays_by_time ON friend_plays (at)",
         ),
     )
 
@@ -314,6 +327,52 @@ object PlaysSchema {
 
     /** A search's words forgotten (Recent searches' "×"), the search kept. */
     const val FORGET: String = "UPDATE interactions SET words = NULL WHERE at = ? AND kind = 'search'"
+
+    /** A Huddle card, kept once: one of the same message id there already stays as it is (opened, delivered). */
+    const val KEEP_CARD: String = "INSERT OR IGNORE INTO huddle_cards (id, friend, sent, at, card, opened, dismissed, delivered) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+
+    /** A friend's play, kept once: one with all the same values there already is the same play, sent again. */
+    const val KEEP_FRIEND_PLAY: String = "INSERT INTO friend_plays (friend, at, title, artist, album, duration_ms, favourite) SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7 " +
+        "WHERE NOT EXISTS (SELECT 1 FROM friend_plays WHERE friend = ?1 AND at = ?2 AND title = ?3 AND artist IS ?4 AND album IS ?5 AND duration_ms = ?6 AND favourite = ?7)"
+
+    /** Friends' plays from before a time let go. */
+    const val FRIEND_PLAYS_BEFORE: String = "DELETE FROM friend_plays WHERE at < ?"
+
+    /** A friend's plays past the newest so many ([friend], then how many) let go. */
+    const val FRIEND_PLAYS_PAST: String = "DELETE FROM friend_plays WHERE rowid IN " +
+        "(SELECT rowid FROM friend_plays WHERE friend = ?1 ORDER BY at DESC, rowid DESC LIMIT -1 OFFSET ?2)"
+
+    /** A received card opened, and put away too when asked (1); a put away one stays so. */
+    const val CARD_OPENED: String = "UPDATE huddle_cards SET opened = 1, dismissed = max(dismissed, ?) WHERE id = ? AND sent = 0"
+
+    const val FORGET_FRIEND_CARDS: String = "DELETE FROM huddle_cards WHERE friend = ?"
+
+    const val FORGET_FRIEND_PLAYS: String = "DELETE FROM friend_plays WHERE friend = ?"
+
+    private const val CARD_COLUMNS: String = "SELECT id, friend, sent, at, card, opened, dismissed, delivered FROM huddle_cards"
+
+    /** One card by its message id. */
+    const val CARD: String = "$CARD_COLUMNS WHERE id = ?"
+
+    /** A friend's cards, both ways, the newest first: a page, by how many and from which. */
+    const val THREAD: String = "$CARD_COLUMNS WHERE friend = ? ORDER BY at DESC, id DESC LIMIT CAST(? AS INTEGER) OFFSET CAST(? AS INTEGER)"
+
+    /** The cards friends sent, the newest first: a page. */
+    const val RECEIVED: String = "$CARD_COLUMNS WHERE sent = 0 ORDER BY at DESC, id DESC LIMIT CAST(? AS INTEGER) OFFSET CAST(? AS INTEGER)"
+
+    /** Every card, both ways, the newest first: a page (a backup). */
+    const val CARDS: String = "$CARD_COLUMNS ORDER BY at DESC, id DESC LIMIT CAST(? AS INTEGER) OFFSET CAST(? AS INTEGER)"
+
+    private const val FRIEND_PLAY_COLUMNS: String = "SELECT friend, at, title, artist, album, duration_ms, favourite FROM friend_plays"
+
+    /** A friend's plays, the newest first: a page. */
+    const val FRIEND_PLAYS: String = "$FRIEND_PLAY_COLUMNS WHERE friend = ? ORDER BY at DESC, rowid DESC LIMIT CAST(? AS INTEGER) OFFSET CAST(? AS INTEGER)"
+
+    /** Every friend's plays, the newest first: a page (a backup). */
+    const val ALL_FRIEND_PLAYS: String = "$FRIEND_PLAY_COLUMNS ORDER BY at DESC, rowid DESC LIMIT CAST(? AS INTEGER) OFFSET CAST(? AS INTEGER)"
+
+    /** Every friend's plays from a start on (inclusive), the oldest first (Suggestions). */
+    const val FRIEND_PLAYS_SINCE: String = "$FRIEND_PLAY_COLUMNS WHERE at >= CAST(? AS INTEGER) ORDER BY at, rowid"
 
     /** Per play still going: path, start, id hint, time heard, counted, length, position, parts heard, real minutes ([storedPlayOf]). */
     const val OPEN_PLAYS: String = "SELECT o.path, o.started_at, p.media_id, p.heard_ms, p.counted, o.duration_ms, o.position_ms, o.spans, p.clock_ms AS clock_ms " +
@@ -556,8 +615,8 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
         }
     }
 
-    /** The row [rows] is at, its columns by name; a column the query lacks is none. */
-    private class CursorRow(private val rows: Cursor) : PlayRow {
+    /** The row [rows] is at, its columns by name; a column the query lacks is none. Huddle's history reads its rows so too. */
+    internal class CursorRow(private val rows: Cursor) : PlayRow {
         override fun text(column: String): String? = rows.getColumnIndex(column).takeIf { it >= 0 }?.let(rows::text)
 
         override fun number(column: String): Long? = rows.getColumnIndex(column).takeIf { it >= 0 }?.let(rows::number)

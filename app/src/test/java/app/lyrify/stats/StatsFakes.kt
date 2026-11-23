@@ -232,7 +232,7 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
 
     override fun close() = connection.close()
 
-    private fun transaction(work: () -> Unit) {
+    fun transaction(work: () -> Unit) {
         connection.autoCommit = false
         try {
             work()
@@ -246,7 +246,7 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
     }
 
     /** The row [rows] is at, as the phone's Cursor gives it: a column the query lacks, or a value of another kind, is none. */
-    private class ResultRow(private val rows: ResultSet) : PlayRow {
+    class ResultRow(private val rows: ResultSet) : PlayRow {
         override fun text(column: String): String? = index(column)?.let(rows::getString)
 
         override fun number(column: String): Long? = index(column)?.let(::at)

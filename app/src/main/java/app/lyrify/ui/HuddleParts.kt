@@ -83,7 +83,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import app.lyrify.R
+import app.lyrify.backup.SongMatcher
+import app.lyrify.huddle.CardKind
+import app.lyrify.huddle.KeptCard
 import app.lyrify.huddle.Match
+import app.lyrify.huddle.Received
+import app.lyrify.huddle.Sent
 import app.lyrify.huddle.match
 import app.lyrify.library.Song
 import coil3.compose.AsyncImage
@@ -476,8 +481,10 @@ internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlon
 
 /**
  * A card a friend sent, as a postcard (Sent to you): their note in big type, the song's cover as the stamp (yours, else
- * their colour's pattern), then who sent it, the song, whether you have it ([have], or [some] of a list) and a play
- * button. Tilted a little, [tilt] degrees. A tap opens the card; the play button plays it (or opens it, when it is not here).
+ * their colour's pattern), then [from]'s face and who sent it ([line]: "From Wren", "From you"), the song, whether you
+ * have it ([have], or [some] of a list; a card you sent that never got there, [undelivered], says so there instead) and a
+ * play button. Tilted a little, [tilt] degrees. A tap opens the card; the play button plays it (or opens it, when it is
+ * not here).
  */
 @Composable
 internal fun Postcard(
@@ -490,8 +497,10 @@ internal fun Postcard(
     some: Pair<Int, Int>?,
     fresh: Boolean,
     tilt: Float,
+    line: String,
     onOpen: () -> Unit,
     onPlay: () -> Unit,
+    undelivered: Boolean = false,
 ) {
     val paper = if (LocalDarkTheme.current) DarkPaper else LightPaper
     val colors = MaterialTheme.colorScheme
@@ -545,11 +554,18 @@ internal fun Postcard(
             FriendFace(from, color, 28.dp, gap = paper.paper)
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(stringResource(R.string.huddle_from, from), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), color = lerp(color, colors.onSurface, 0.38f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    Text(line, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), color = lerp(color, colors.onSurface, 0.38f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                     if (fresh) NewMark()
                 }
                 Text(title, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                HaveChip(have, Modifier.padding(top = 2.dp), some)
+                if (undelivered) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
+                        Icon(painterResource(R.drawable.ic_error), contentDescription = null, tint = colors.error, modifier = Modifier.size(14.dp))
+                        Text(stringResource(R.string.huddle_not_delivered), style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold), color = colors.error, maxLines = 1)
+                    }
+                } else {
+                    HaveChip(have, Modifier.padding(top = 2.dp), some)
+                }
             }
             val playLabel = stringResource(R.string.huddle_play_card, title)
             Box(
@@ -565,6 +581,32 @@ internal fun Postcard(
             }
         }
     }
+}
+
+/**
+ * A card [kept] in the history as a postcard ([Postcard]), its songs matched in this library ([matcher], null while it is
+ * read): with [name]'s face in [color] and "From <name>", or for one you sent "From you" (and Not delivered when it never
+ * got there); New until a friend's is opened. The Huddle page's Sent to you, its View all and "You and <name>" show them.
+ */
+@Composable
+internal fun KeptPostcard(kept: KeptCard, name: String, color: Color, matcher: SongMatcher?, tilt: Float, onOpen: () -> Unit, onPlay: () -> Unit) {
+    val card = kept.card
+    val matches = remember(matcher, card) { matcher?.let { found -> card.songs.map(found::match) } }
+    Postcard(
+        card.note,
+        name,
+        color,
+        cardLine(card),
+        song = matches?.firstNotNullOfOrNull { (it as? Match.Found)?.song ?: (it as? Match.Maybe)?.song },
+        have = matches?.first(),
+        some = matches?.takeIf { card.kind != CardKind.SONG }?.let { found -> found.count { it is Match.Found } to found.size },
+        fresh = (kept as? Received)?.opened == false,
+        tilt = tilt,
+        line = if (kept is Sent) stringResource(R.string.huddle_from_you) else stringResource(R.string.huddle_from, name),
+        onOpen = onOpen,
+        onPlay = onPlay,
+        undelivered = (kept as? Sent)?.delivered == false,
+    )
 }
 
 /**

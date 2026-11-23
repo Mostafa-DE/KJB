@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
@@ -73,8 +74,10 @@ import app.lyrify.huddle.FriendPlay
 import app.lyrify.huddle.Huddle
 import app.lyrify.huddle.HuddleState
 import app.lyrify.huddle.Invites
+import app.lyrify.huddle.KeptCard
 import app.lyrify.huddle.Match
 import app.lyrify.huddle.Messages
+import app.lyrify.huddle.Sent
 import app.lyrify.huddle.match
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
@@ -194,7 +197,8 @@ internal fun SendToFriendSheet(songs: List<Song>, kind: CardKind, name: String?,
 }
 
 /**
- * A card a friend sent ([id] in Huddle's inbox), opened from Library's card, the Huddle page or an invite: the sheet
+ * A card a friend sent ([id] in Huddle's history; one you sent, from "You and <name>", too), opened from Library's card,
+ * the Huddle page, its lists or an invite: the sheet
  * ([ReceivedSheet]), and over it, for a song you do not have, YouTube's search ([YouTubeSearchSheet], KJB Downloads); back
  * from the search the card shows again, with the answers to "Is this the song?" given before. [playNow]: a song you have
  * plays at once. [onPlayer] shows the player; [onSendBack] answers the friend with a song of your own.
@@ -213,7 +217,8 @@ internal fun ReceivedHost(id: String?, onPlayer: () -> Unit, onSendBack: (String
 }
 
 /**
- * The card, opened (the mockup's 4.2 and 4.3): who sent it and when, the cover tilted like a gift (yours, else their
+ * The card, opened (the mockup's 4.2 and 4.3): who sent it and when (to whom, for one you sent: then with neither Send
+ * back nor Ask), the cover tilted like a gift (yours, else their
  * colour's pattern) with their note stuck on it, what it is, and whether you have it ([match]): a song found plays (Play,
  * Send back); one found only loosely asks "Is this the song?" first; one not here says so, with Ask <name> (your phone's
  * share sheet, any chat) and Search on YouTube. An album or a playlist lists each song with how it was found, plays the
@@ -236,20 +241,27 @@ private fun ReceivedSheet(
     val scope = rememberCoroutineScope()
     val huddle = rememberHuddle()
     val state = rememberHuddleState() ?: return
-    val received = state.inbox.firstOrNull { it.id == id }
-    val friend = received?.let { card -> state.friends.firstOrNull { it.id == card.friend } }
+    val written by huddle.cardsWritten.collectAsStateWithLifecycle()
+    // From the history, read again as cards are kept or opened: null until it is read, empty once it is gone.
+    val read by produceState<List<KeptCard>?>(null, id, written) { value = listOfNotNull(huddle.card(id)) }
+    val kept = (read ?: return).firstOrNull()
+    // A card you sent ("You and <name>"): yours to play again, with nothing to send back or ask for.
+    val mine = kept is Sent
+    val friend = kept?.let { card -> state.friends.firstOrNull { it.id == card.friend } }
     val matcher = rememberSongMatcher()
-    val found = remember(matcher, received?.card) { received?.card?.let { card -> matcher?.let { card.songs.map(it::match) } } }
+    val found = remember(matcher, kept?.card) { kept?.card?.let { card -> matcher?.let { card.songs.map(it::match) } } }
     var asking by rememberSaveable { mutableStateOf<Int?>(null) }
-    LaunchedEffect(id) { huddle.opened(id) }
-    if (received == null || friend == null) {
+    LaunchedEffect(id) { if (!mine) huddle.opened(id) }
+    if (kept == null || friend == null) {
         // Gone meanwhile: the friend removed you, and their cards went with them.
         LaunchedEffect(id) { onDismiss() }
         return
     }
-    val card = received.card
+    val card = kept.card
     val from = friend.shownName
-    val color = friendColor(friend.id)
+    // Who it is from, on its face and as the queue it plays as: the friend, or you.
+    val sender = if (mine) state.name ?: from else from
+    val color = if (mine) OwnFaceColor else friendColor(friend.id)
     val have = found?.mapIndexedNotNull { at, match ->
         when (match) {
             is Match.Found -> match.song
@@ -259,7 +271,7 @@ private fun ReceivedSheet(
     }.orEmpty()
     val missing = found?.indices?.filter { at -> found[at] == Match.Missing || (found[at] is Match.Maybe && said[at] == false) }.orEmpty()
     val play = { songs: List<Song> ->
-        Lyrify.playback(context).play(songs.map { it.ref }, 0, QueueSource(SourceKind.HUDDLE, received.id, from))
+        Lyrify.playback(context).play(songs.map { it.ref }, 0, QueueSource(SourceKind.HUDDLE, kept.id, sender))
         onDismiss()
         onPlayer()
     }
@@ -288,21 +300,21 @@ private fun ReceivedSheet(
                 when {
                     match is Match.Found -> {
                         LyrifyButton(stringResource(R.string.huddle_play), onClick = { play(listOf(match.song)) }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_play_arrow_fill)
-                        LyrifyButton(stringResource(R.string.huddle_send_back), onClick = sendBack, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_send)
+                        if (!mine) LyrifyButton(stringResource(R.string.huddle_send_back), onClick = sendBack, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_send)
                     }
                     match is Match.Maybe && unsure -> {
                         LyrifyButton(stringResource(R.string.huddle_maybe_yes), onClick = { play(listOf(match.song)) }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_play_arrow_fill)
                         LyrifyButton(stringResource(R.string.huddle_maybe_no), onClick = { onSaid(0 to false) }, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY)
                     }
                     match != null -> {
-                        LyrifyButton(stringResource(R.string.huddle_ask, from), onClick = askAll, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_send)
+                        if (!mine) LyrifyButton(stringResource(R.string.huddle_ask, from), onClick = askAll, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_send)
                         LyrifyButton(stringResource(R.string.huddle_youtube), onClick = { onYouTube(youTubeQuery(song)) }, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_search)
                     }
                     else -> LyrifyButton(stringResource(R.string.huddle_play), onClick = {}, modifier = Modifier.fillMaxWidth(), enabled = false)
                 }
             },
         ) {
-            SentBy(card.kind, from, color, received.at)
+            SentBy(card.kind, sender, color, kept.at, to = from.takeIf { mine })
             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 6.dp)) {
                 Box(Modifier.rotate(-4f).shadow(14.dp, RoundedCornerShape(26.dp), ambientColor = LocalChromeColors.current.shadowStrong, spotColor = LocalChromeColors.current.shadowStrong)) {
                     FriendArt((match as? Match.Found)?.song ?: (match as? Match.Maybe)?.song, color, RECEIVED_COVER, RoundedCornerShape(26.dp))
@@ -339,7 +351,7 @@ private fun ReceivedSheet(
                         Text(localSong(match.song), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                match != null && match !is Match.Found -> Text(stringResource(R.string.huddle_missing, from), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                match != null && match !is Match.Found && !mine -> Text(stringResource(R.string.huddle_missing, from), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
             }
         }
         return
@@ -351,11 +363,11 @@ private fun ReceivedSheet(
             if (have.isNotEmpty()) {
                 LyrifyButton(pluralStringResource(R.plurals.huddle_play_found, have.size, have.size), onClick = { play(have) }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_play_arrow_fill)
             }
-            if (missing.isNotEmpty()) LyrifyButton(stringResource(R.string.huddle_ask, from), onClick = askAll, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY)
-            LyrifyButton(stringResource(R.string.huddle_send_back), onClick = sendBack, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_send)
+            if (!mine && missing.isNotEmpty()) LyrifyButton(stringResource(R.string.huddle_ask, from), onClick = askAll, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY)
+            if (!mine) LyrifyButton(stringResource(R.string.huddle_send_back), onClick = sendBack, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_send)
         },
     ) {
-        SentBy(card.kind, from, color, received.at)
+        SentBy(card.kind, sender, color, kept.at, to = from.takeIf { mine })
         Fact(if (card.kind == CardKind.ALBUM) R.drawable.ic_album else R.drawable.ic_queue_music, cardLine(card))
         card.note?.let { Fact(R.drawable.ic_notes, stringResource(R.string.huddle_note_quoted, it)) }
         if (missing.isNotEmpty()) Text(pluralStringResource(R.plurals.huddle_missing_some, missing.size, missing.size), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -387,9 +399,12 @@ private fun ReceivedSheet(
     }
 }
 
-/** Who sent a card ("Wren sent you a song", on their face) and when: the top of the card opened, a heading for TalkBack. */
+/**
+ * Who sent a card ("Wren sent you a song", on their face), or to whom you sent it ([to]: "You sent Wren a song", on
+ * yours), and when: the top of the card opened, a heading for TalkBack.
+ */
 @Composable
-private fun SentBy(kind: CardKind, from: String, color: Color, at: Long) {
+private fun SentBy(kind: CardKind, from: String, color: Color, at: Long, to: String? = null) {
     val context = LocalContext.current
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) { heading() }) {
         FriendFace(from, color, 40.dp, gap = LocalChromeColors.current.sheet)
@@ -397,11 +412,11 @@ private fun SentBy(kind: CardKind, from: String, color: Color, at: Long) {
             Text(
                 stringResource(
                     when (kind) {
-                        CardKind.SONG -> R.string.huddle_sent_song
-                        CardKind.ALBUM -> R.string.huddle_sent_album
-                        CardKind.PLAYLIST -> R.string.huddle_sent_playlist
+                        CardKind.SONG -> if (to == null) R.string.huddle_sent_song else R.string.huddle_you_sent_song
+                        CardKind.ALBUM -> if (to == null) R.string.huddle_sent_album else R.string.huddle_you_sent_album
+                        CardKind.PLAYLIST -> if (to == null) R.string.huddle_sent_playlist else R.string.huddle_you_sent_playlist
                     },
-                    from,
+                    to ?: from,
                 ),
                 style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
             )
@@ -410,12 +425,12 @@ private fun SentBy(kind: CardKind, from: String, color: Color, at: Long) {
     }
 }
 
-/** What YouTube is asked for a song a friend sent: its artist and title. */
-private fun youTubeQuery(song: CardSong): String = listOfNotNull(song.artist, song.title).joinToString(" ")
+/** What YouTube is asked for a song a friend sent or played: its artist and title. */
+internal fun youTubeQuery(song: CardSong): String = listOfNotNull(song.artist, song.title).joinToString(" ")
 
 /** A song of this library in one line, for "Is this the song?": its title, artist, album and length. */
 @Composable
-private fun localSong(song: Song): String = listOfNotNull(song.title, song.artist, song.album, songLength(song.durationMs)).joinToString(" · ")
+internal fun localSong(song: Song): String = listOfNotNull(song.title, song.artist, song.album, songLength(song.durationMs)).joinToString(" · ")
 
 /**
  * A song of an album or playlist a friend sent: how it was found here (an icon, read by TalkBack with the song), its title
@@ -494,10 +509,11 @@ internal val HuddleSheetSaver: Saver<HuddleSheet?, String> = Saver(
 /**
  * The [sheet] asked for (a friend's song or "⋯", the ticket, Listen privately, a song for a friend, Rename, Remove), and
  * YouTube's search over a friend's song you do not have; [onSheet] moves to another or closes (null). A friend gone
- * meanwhile closes theirs. [ledger] feeds the song picker; [onPlayer] shows the player.
+ * meanwhile closes theirs. [ledger] feeds the song picker; [onPlayer] shows the player; [onPage] opens the history's pages
+ * from a friend's song and "⋯" (null outside the shell, HuddleHost, where no page opens: those rows do not show).
  */
 @Composable
-internal fun HuddleSheetsHost(sheet: HuddleSheet?, ledger: LedgerState, onPlayer: () -> Unit, onSheet: (HuddleSheet?) -> Unit) {
+internal fun HuddleSheetsHost(sheet: HuddleSheet?, ledger: LedgerState, onPlayer: () -> Unit, onPage: ((Page) -> Unit)?, onSheet: (HuddleSheet?) -> Unit) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -526,8 +542,8 @@ internal fun HuddleSheetsHost(sheet: HuddleSheet?, ledger: LedgerState, onPlayer
     }
     when (sheet) {
         null -> Unit
-        is HuddleSheet.Peek -> PeekSheet(checkNotNull(friend), state, onPlayer, onSheet, onYouTube = { youtube = it })
-        is HuddleSheet.Menu -> FriendMenuSheet(checkNotNull(friend), onSheet)
+        is HuddleSheet.Peek -> PeekSheet(checkNotNull(friend), state, onPlayer, onPage, onSheet, onYouTube = { youtube = it })
+        is HuddleSheet.Menu -> FriendMenuSheet(checkNotNull(friend), onPage, onSheet)
         HuddleSheet.Ticket -> InviteTicketSheet(card = null, onDismiss = close)
         HuddleSheet.Privately -> PrivatelySheet(state, onDismiss = close)
         is HuddleSheet.SendTo -> {
@@ -594,14 +610,21 @@ internal fun playAlong(context: Context, song: Song, play: FriendPlay, name: Str
     onPlayer()
 }
 
+/** Plays [song], [play]'s friend's song, from the top as a queue from them named [name], and shows the player ([onPlayer]): Play it. */
+internal fun playIt(context: Context, song: Song, play: FriendPlay, name: String, onPlayer: () -> Unit) {
+    Lyrify.playback(context).play(listOf(song.ref), 0, QueueSource(SourceKind.HUDDLE, "${play.friend}:${play.at}", name))
+    onPlayer()
+}
+
 /**
  * A friend's song (the mockup's 1.2), from their face or their card: their song big, its cover glowing behind (yours,
  * else their colour), where they are in it while they play, and tiles: Play along (from where they are), Play it (from
  * the top) and Send back; for a song you do not have, Ask <name> and Search on YouTube in place of the first two. Their
- * "⋯" sits at the top. Nothing shared yet: only Send a song.
+ * "⋯" sits at the top. Nothing shared yet: only Send a song. Under them, "You and <name>" and "What <name> played" open
+ * the history ([onPage]).
  */
 @Composable
-private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, onSheet: (HuddleSheet?) -> Unit, onYouTube: (String) -> Unit) {
+private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, onPage: ((Page) -> Unit)?, onSheet: (HuddleSheet?) -> Unit, onYouTube: (String) -> Unit) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -701,9 +724,8 @@ private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, 
                     }
                 }
                 PeekTile(R.drawable.ic_replay, stringResource(R.string.huddle_play_it)) {
-                    Lyrify.playback(context).play(listOf(song.ref), 0, QueueSource(SourceKind.HUDDLE, "${play.friend}:${play.at}", name))
                     close()
-                    onPlayer()
+                    playIt(context, song, play, name, onPlayer)
                 }
             }
             // Only once it is known not to be here: before the library is matched, nothing to ask for.
@@ -720,6 +742,18 @@ private fun PeekSheet(friend: Friend, state: HuddleState, onPlayer: () -> Unit, 
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp),
             )
+        }
+        onPage?.let { open ->
+            Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp)) {
+                ActionRow(R.drawable.ic_swap_horiz, stringResource(R.string.huddle_thread_title, name), supporting = stringResource(R.string.huddle_thread_row_text), chevron = true) {
+                    close()
+                    open(Page.HuddleThread(friend.id))
+                }
+                ActionRow(R.drawable.ic_history, stringResource(R.string.huddle_played_title, name), supporting = stringResource(R.string.huddle_played_row_text), chevron = true) {
+                    close()
+                    open(Page.HuddlePlays(friend.id))
+                }
+            }
         }
     }
 }
@@ -748,11 +782,11 @@ private fun RowScope.PeekTile(@DrawableRes icon: Int, text: String, hot: Color? 
 
 /**
  * A friend's "⋯" (the mockup's 5.1): their face and name, since when you are friends and whether they see what you play,
- * then Send a song, Stop sharing with them (or Share with them again; songs go both ways either way), Rename (on this
- * phone only) and Remove (asked first). A friend under a stand-in name says so.
+ * then Send a song, "You and <name>" (the history, [onPage]), Stop sharing with them (or Share with them again; songs go
+ * both ways either way), Rename (on this phone only) and Remove (asked first). A friend under a stand-in name says so.
  */
 @Composable
-private fun FriendMenuSheet(friend: Friend, onSheet: (HuddleSheet?) -> Unit) {
+private fun FriendMenuSheet(friend: Friend, onPage: ((Page) -> Unit)?, onSheet: (HuddleSheet?) -> Unit) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -777,6 +811,12 @@ private fun FriendMenuSheet(friend: Friend, onSheet: (HuddleSheet?) -> Unit) {
             }
         }
         ActionRow(R.drawable.ic_send, stringResource(R.string.huddle_send_song_to, name)) { onSheet(HuddleSheet.SendTo(friend.id)) }
+        onPage?.let { open ->
+            ActionRow(R.drawable.ic_swap_horiz, stringResource(R.string.huddle_thread_title, name), supporting = stringResource(R.string.huddle_thread_row_text), chevron = true) {
+                onSheet(null)
+                open(Page.HuddleThread(friend.id))
+            }
+        }
         ActionRow(
             if (sharing) R.drawable.ic_visibility_off else R.drawable.ic_visibility,
             stringResource(if (sharing) R.string.huddle_stop_sharing else R.string.huddle_share_again, name),

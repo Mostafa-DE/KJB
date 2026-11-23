@@ -171,6 +171,21 @@ sealed interface Page {
     @Serializable @SerialName("huddle")
     data object Huddle : Page
 
+    /** Huddle's history, kept on the phone (HuddleHistory.kt, HY1). */
+    sealed interface HuddlePages : Page
+
+    /** "You and <name>": every song and note between you and the friend [friend] (their id), both ways. */
+    @Serializable @SerialName("huddleThread")
+    data class HuddleThread(val friend: String) : HuddlePages
+
+    /** Sent to you's "View all": every card friends sent. */
+    @Serializable @SerialName("huddleCards")
+    data object HuddleCards : HuddlePages
+
+    /** "What <name> played": the friend [friend]'s plays of the last year, by day. */
+    @Serializable @SerialName("huddlePlays")
+    data class HuddlePlays(val friend: String) : HuddlePages
+
     /** Covers & tags (CoversTagsScreen.kt, T2). */
     @Serializable @SerialName("coversTags")
     data object CoversTags : Page
@@ -528,6 +543,8 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean, docked: List<DockTab> =
         is Page.CollectionPages, is Page.SuggestionPages -> own ?: here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY
+        // Huddle's history: inside Library when its friends row opened it, else a Tools page, as Huddle is.
+        is Page.HuddlePages -> own ?: here?.takeIf { it == DockTab.LIBRARY } ?: DockTab.TOOLS
         is Page.Check, Page.Duplicates, Page.Trash, Page.Tones, Page.Bookmarks, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, is Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists,
         Page.Licences, is Page.Licence, Page.BottomBar, Page.NeverSuggest, Page.SuggestionsHealth, Page.Huddle -> DockTab.TOOLS
     }

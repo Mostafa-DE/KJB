@@ -288,10 +288,11 @@ object BackupBundle {
      * Huddle's part (plan Q3.3): its friends and keys, sealed on the phone with the user's backup passphrase
      * (huddle/HuddleStore.kt, HuddleBackup), only when one is set. Not a [Section]: it is opened with that passphrase at
      * the restore, apart from the sections, and names no song. The manifest names it with its version; a KJB without
-     * Huddle neither reads nor keeps it.
+     * Huddle neither reads nor keeps it. Version 2 holds Huddle's history too; a KJB of version 1 leaves it, this one
+     * reads both.
      */
     const val HUDDLE: String = "huddle.json"
-    const val HUDDLE_VERSION: Int = 1
+    const val HUDDLE_VERSION: Int = 2
     const val MIME_TYPE: String = "application/zip"
 
     /**
@@ -492,7 +493,7 @@ object BackupBundle {
             appVersion = manifest.text(APP_VERSION_KEY).orEmpty(),
             songs = songs,
             // Opened only with its passphrase, at the restore: here only that it is what it says. One of another form is left out.
-            huddle = files[HUDDLE]?.decodeToString()?.takeIf { (manifest[HUDDLE_KEY] as? JsonObject)?.int(VERSION_KEY) == HUDDLE_VERSION && jsonObject(it) != null },
+            huddle = files[HUDDLE]?.decodeToString()?.takeIf { (manifest[HUDDLE_KEY] as? JsonObject)?.int(VERSION_KEY) in 1..HUDDLE_VERSION && jsonObject(it) != null },
         )
         val tooNew = mutableListOf<Section>()
         var unknown = 0

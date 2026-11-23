@@ -423,6 +423,7 @@ private fun PageContent(
         Page.Ai -> AiPage(ai, counts, aiWaiting, aiDoneToday, aiActions, onOpenStatus = { nav.open(Page.Songs(it.group, it)) }) { back() }
         Page.Downloads -> DownloadsPage { back() }
         Page.Huddle -> HuddlePage { back() }
+        is Page.HuddlePages -> HuddleHistoryPage(page)
         Page.CoversTags -> CoversTagsPage()
         Page.TagHistory -> TagHistoryPage()
         is Page.Settings -> SettingsScreen(settings, onSettings, grants, ai, aiActions, backup, versionName, onOpen = nav::open, section = page.section) { back() }

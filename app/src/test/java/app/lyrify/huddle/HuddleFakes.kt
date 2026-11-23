@@ -1,5 +1,8 @@
 package app.lyrify.huddle
 
+import app.lyrify.stats.JdbcPlayLog
+import app.lyrify.stats.PlayRow
+import app.lyrify.stats.PlaysSchema
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -121,3 +124,61 @@ class MemoryHuddle(initial: HuddleState = HuddleState()) : HuddleStorage {
 
 val lantern = CardSong("Paper Lantern", "Kit Calloway", "Harbour Glass", 201_000)
 val bell = CardSong("Brass Bell", "Kit Calloway", "Harbour Glass", 187_500)
+
+/**
+ * Huddle's history on plays.db's own SQL ([PlaysSchema], version 6) on the laptop's SQLite, in memory ([db]): what
+ * [SqlHuddleLog] runs on the phone, the same statements with the same values ([keptCardArgs], [friendPlayArgs]), a query's
+ * values bound as text as the phone binds them, and rows read the same way ([keptCardOf], [friendPlayOf]). [failing]:
+ * every write and read fails, as a full or damaged plays.db would; [forgetFails]: only letting a friend go fails.
+ */
+class JdbcHuddleLog(val db: JdbcPlayLog = JdbcPlayLog()) : HuddleLog, AutoCloseable {
+    var failing: Boolean = false
+    var forgetFails: Boolean = false
+
+    override suspend fun keep(cards: List<KeptCard>, plays: List<FriendPlay>, playsFrom: Long): Boolean = write {
+        cards.forEach { db.update(PlaysSchema.KEEP_CARD, *keptCardArgs(it)) }
+        plays.forEach { db.update(PlaysSchema.KEEP_FRIEND_PLAY, *friendPlayArgs(it)) }
+        db.update(PlaysSchema.FRIEND_PLAYS_BEFORE, playsFrom)
+        plays.mapTo(HashSet()) { it.friend }.forEach { db.update(PlaysSchema.FRIEND_PLAYS_PAST, it, HuddleLog.PLAYS_PER_FRIEND) }
+    }
+
+    override suspend fun card(id: String): KeptCard? = read(PlaysSchema.CARD, id, row = ::keptCardOf)?.firstOrNull()
+
+    override suspend fun thread(friend: String, from: Int, limit: Int): List<KeptCard>? = read(PlaysSchema.THREAD, friend, limit.toString(), from.toString(), row = ::keptCardOf)
+
+    override suspend fun received(from: Int, limit: Int): List<Received>? = read(PlaysSchema.RECEIVED, limit.toString(), from.toString()) { keptCardOf(it) as? Received }
+
+    override suspend fun cards(from: Int, limit: Int): List<KeptCard>? = read(PlaysSchema.CARDS, limit.toString(), from.toString(), row = ::keptCardOf)
+
+    override suspend fun plays(friend: String?, from: Int, limit: Int): List<FriendPlay>? = if (friend == null) {
+        read(PlaysSchema.ALL_FRIEND_PLAYS, limit.toString(), from.toString(), row = ::friendPlayOf)
+    } else {
+        read(PlaysSchema.FRIEND_PLAYS, friend, limit.toString(), from.toString(), row = ::friendPlayOf)
+    }
+
+    override suspend fun playsSince(from: Long): List<FriendPlay>? = read(PlaysSchema.FRIEND_PLAYS_SINCE, from.toString(), row = ::friendPlayOf)
+
+    override suspend fun opened(id: String, dismissed: Boolean): Boolean = write { db.update(PlaysSchema.CARD_OPENED, if (dismissed) 1L else 0L, id) }
+
+    override suspend fun forget(friend: String): Boolean = !forgetFails && write {
+        db.update(PlaysSchema.FORGET_FRIEND_CARDS, friend)
+        db.update(PlaysSchema.FORGET_FRIEND_PLAYS, friend)
+    }
+
+    override fun close() = db.close()
+
+    private fun write(work: () -> Unit): Boolean {
+        if (failing) return false
+        db.transaction(work)
+        return true
+    }
+
+    private fun <T> read(sql: String, vararg args: String, row: (PlayRow) -> T?): List<T>? = if (failing) {
+        null
+    } else {
+        db.query(sql, *args) { rows ->
+            val at = JdbcPlayLog.ResultRow(rows)
+            buildList { while (rows.next()) row(at)?.let(::add) }
+        }
+    }
+}

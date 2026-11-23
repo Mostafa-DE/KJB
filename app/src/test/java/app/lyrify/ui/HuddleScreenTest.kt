@@ -18,6 +18,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import java.time.LocalDate
+import java.time.ZoneOffset
 
 /**
  * Huddle's rows from what it keeps: the Tools line, the start screen's card, who comes first to send to, now playing, and
@@ -33,34 +35,34 @@ class HuddleScreenTest {
 
     @Test
     fun `Tools says what Huddle is for, then who waits, then how many friends with the cards not opened as the badge`() {
-        assertEquals(EntryRow(ToolLine.Text(R.string.huddle_tool_none), null), huddleEntry(HuddleState()))
+        assertEquals(EntryRow(ToolLine.Text(R.string.huddle_tool_none), null), huddleEntry(HuddleState(), emptyList()))
         val waiting = HuddleState(invites = listOf(PendingInvite("pk", "sk", "t", "o", 1)))
-        assertEquals(EntryRow(ToolLine.Text(R.string.huddle_tool_waiting), null), huddleEntry(waiting))
-        val friends = HuddleState(
-            friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper")),
-            inbox = listOf(Received("m1", "f1", 3, card), Received("m2", "f2", 2, card, opened = true), Received("m3", "gone", 1, card)),
-        )
-        assertEquals(EntryRow(ToolLine.Count(R.plurals.huddle_friends, 2), 1), huddleEntry(friends))
+        assertEquals(EntryRow(ToolLine.Text(R.string.huddle_tool_waiting), null), huddleEntry(waiting, emptyList()))
+        val friends = HuddleState(friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper")))
+        // Changed on purpose: the cards come from the history (Huddle.inbox), not huddle.json.
+        val inbox = listOf(Received("m1", "f1", 3, card), Received("m2", "f2", 2, card, opened = true), Received("m3", "gone", 1, card))
+        assertEquals(EntryRow(ToolLine.Count(R.plurals.huddle_friends, 2), 1), huddleEntry(friends, inbox))
+        assertEquals("cards left in huddle.json from before count no more", EntryRow(ToolLine.Count(R.plurals.huddle_friends, 2), null), huddleEntry(friends.copy(inbox = inbox), emptyList()))
     }
 
     @Test
     fun `the start screen shows the newest card not opened yet, from a friend still here`() {
         val friends = listOf(friend("f1", "Wren"))
-        assertNull(newestCard(HuddleState(friends = friends)))
+        assertNull(newestCard(HuddleState(friends = friends), emptyList()))
         val inbox = listOf(Received("m1", "f1", 5, card, opened = true), Received("m2", "gone", 4, card), Received("m3", "f1", 2, card), Received("m4", "f1", 3, card))
-        assertEquals("m4", newestCard(HuddleState(friends = friends, inbox = inbox))?.id)
+        assertEquals("m4", newestCard(HuddleState(friends = friends), inbox)?.id)
     }
 
     @Test
     fun `the start screen keeps the newest card and who sent it once it is opened, until it is dismissed`() {
         val friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper"))
         val played = Received("m1", "f1", 5, card, opened = true)
-        assertEquals("m1", newestCard(HuddleState(friends = friends, inbox = listOf(played)))?.id)
+        assertEquals("m1", newestCard(HuddleState(friends = friends), listOf(played))?.id)
         // One not opened yet comes first, older or not.
-        assertEquals("m2", newestCard(HuddleState(friends = friends, inbox = listOf(played, Received("m2", "f2", 3, card))))?.id)
+        assertEquals("m2", newestCard(HuddleState(friends = friends), listOf(played, Received("m2", "f2", 3, card)))?.id)
         // Dismissed, it goes, and an older card opened before does not take its place.
         val older = Received("m3", "f2", 2, card, opened = true)
-        assertNull(newestCard(HuddleState(friends = friends, inbox = listOf(played.copy(dismissed = true), older))))
+        assertNull(newestCard(HuddleState(friends = friends), listOf(played.copy(dismissed = true), older)))
         // The card's Hide puts it away; opening it only takes its New mark off.
         val screen = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText()
         assertTrue(screen.contains("huddle.opened(received.id, dismissed = true)"))
@@ -76,7 +78,9 @@ class HuddleScreenTest {
         assertEquals(2, plays.size)
         assertTrue(plays.all { "QueueSource(SourceKind.HUDDLE, " in it })
         assertTrue(sheets.contains("val source = QueueSource(SourceKind.HUDDLE, \"\${play.friend}:\${play.at}\", name)"))
-        assertTrue(sheets.contains("Lyrify.playback(context).play(songs.map { it.ref }, 0, QueueSource(SourceKind.HUDDLE, received.id, from))"))
+        // A card you sent ("You and <name>") plays as yours: From and your name.
+        assertTrue(sheets.contains("Lyrify.playback(context).play(songs.map { it.ref }, 0, QueueSource(SourceKind.HUDDLE, kept.id, sender))"))
+        assertTrue(sheets.contains("val sender = if (mine) state.name ?: from else from"))
         assertTrue(File("src/main/java/app/lyrify/player/PlayerConnection.kt").readText().contains("SourceKind.HUDDLE -> return context.getString(R.string.huddle_from, source.name)"))
         assertTrue(File("src/main/java/app/lyrify/ui/SongActions.kt").readText().contains("SourceKind.HUDDLE -> resources.getString(R.string.huddle_from, source.name)"))
         // The player's own line is "From <name>" already: the friend's name goes in it as it is.
@@ -92,7 +96,8 @@ class HuddleScreenTest {
         // The redesign (HD3) says it with a visible "New" mark, which TalkBack reads with the card.
         assertTrue(File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText().contains("if (!received.opened) NewMark()"))
         assertTrue(File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText().contains("if (fresh) NewMark()"))
-        assertTrue(File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText().contains("fresh = !received.opened,"))
+        // The page's postcards, its View all and "You and <name>" (HY1) show the history's cards through KeptPostcard.
+        assertTrue(File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText().contains("fresh = (kept as? Received)?.opened == false,"))
         assertTrue("""<string name="huddle_new">New</string>""" in File("src/main/res/values/strings_huddle.xml").readText())
     }
 
@@ -282,5 +287,81 @@ class HuddleScreenTest {
         )
         assertEquals(true, friendsNow(state, now - 100_000 + 200_000 + 60_000).first().playing)
         assertEquals(false, friendsNow(state, now - 100_000 + 200_000 + 60_001).single { it.friend == wren }.playing)
+    }
+
+    @Test
+    fun `a friend's plays read by day, the newest day first, each play on the day the phone's clock says`() {
+        val zone = ZoneOffset.ofHours(3)
+        val midnight = LocalDate.of(2026, 11, 23).atStartOfDay(zone).toInstant().toEpochMilli()
+        val plays = listOf(
+            FriendPlay("f1", midnight + 60_000, lantern),
+            FriendPlay("f1", midnight, bell),
+            FriendPlay("f1", midnight - 1, lantern),
+            // A day without plays has no heading.
+            FriendPlay("f1", midnight - 2 * 86_400_000L - 1, bell),
+        )
+        assertEquals(
+            listOf(
+                LocalDate.of(2026, 11, 23) to plays.take(2),
+                LocalDate.of(2026, 11, 22) to listOf(plays[2]),
+                LocalDate.of(2026, 11, 20) to listOf(plays[3]),
+            ),
+            playDays(plays, zone),
+        )
+        assertEquals("another zone, another day", LocalDate.of(2026, 11, 22), playDays(plays.take(1), ZoneOffset.UTC).single().first)
+        assertTrue(playDays(emptyList(), zone).isEmpty())
+    }
+
+    @Test
+    fun `a friend's song and their menu open the history, and Sent to you has View all`() {
+        val sheets = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText()
+        val peek = sheets.substringAfter("private fun PeekSheet(").substringBefore("private fun RowScope.PeekTile(")
+        assertTrue(peek.contains("Page.HuddleThread(friend.id)"))
+        assertTrue(peek.contains("Page.HuddlePlays(friend.id)"))
+        val menu = sheets.substringAfter("private fun FriendMenuSheet(").substringBefore("private fun PrivatelySheet(")
+        assertTrue(menu.contains("Page.HuddleThread(friend.id)"))
+        // Outside the shell (HuddleHost) no page opens, so neither row shows there.
+        assertTrue(File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText().contains("HuddleSheetsHost(sheet, ledger, onPlayer, onPage = null)"))
+        val page = File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText().substringAfter("fun HuddlePage(")
+        val sent = page.substringAfter("item(key = \"sent\"").substringBefore("item(key = \"postcards\"")
+        assertTrue(sent.contains("nav.open(Page.HuddleCards)"))
+        // KJB's headings all say View all.
+        assertTrue(sent.contains("LyrifyButton(stringResource(R.string.lib_view_all)"))
+        assertTrue(File("src/main/java/app/lyrify/ui/AppShell.kt").readText().contains("is Page.HuddlePages -> HuddleHistoryPage(page)"))
+    }
+
+    @Test
+    fun `the history's lists read plays_db in pages, and a friend's play plays as the peek's Play it does`() {
+        val history = File("src/main/java/app/lyrify/ui/HuddleHistory.kt").readText()
+        listOf("huddle.thread(friendId, from, limit)", "huddle.received(from, limit)", "huddle.friendPlays(friendId, from, limit)").forEach { assertTrue(it, history.contains(it)) }
+        assertTrue(history.contains("playIt(context, "))
+        // A card or play kept at the top between two pages moves the next page down: what was read already shows once,
+        // sorted out off the main thread.
+        assertTrue(history.contains("rows = withContext(Dispatchers.Default) { (rows + page).distinct() }"))
+        // After a turn of the phone as many rows as were read come back at once, so the list is where it was.
+        assertTrue(history.contains("var reached by rememberSaveable { mutableIntStateOf(0) }"))
+        assertTrue(history.contains("val asked = maxOf(PAGE, value?.size ?: reached)"))
+        val peek = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText().substringAfter("private fun PeekSheet(").substringBefore("private fun RowScope.PeekTile(")
+        assertTrue(peek.contains("playIt(context, "))
+    }
+
+    @Test
+    fun `a friend gone while their page is open shows they left, under Back, and closes nothing by itself`() {
+        val history = File("src/main/java/app/lyrify/ui/HuddleHistory.kt").readText()
+        // Back would close the player first when it is up over the page (NavState.back), and leave the page blank.
+        assertFalse(history.contains("onBack() }"))
+        listOf("private fun ThreadPage(", "private fun PlaysPage(").forEach { page ->
+            assertTrue(page, history.substringAfter(page).substringBefore("\n}\n").contains("stringResource(R.string.huddle_gone_title)"))
+        }
+    }
+
+    @Test
+    fun `a card you sent opens as yours, to whom it went, with Play and neither Send back nor Ask`() {
+        val sheet = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText().substringAfter("private fun ReceivedSheet(").substringBefore("private fun SentBy(")
+        assertTrue(sheet.contains("val mine = kept is Sent"))
+        assertTrue(sheet.contains("if (!mine) LyrifyButton(stringResource(R.string.huddle_send_back)"))
+        assertTrue(sheet.contains("!mine && missing.isNotEmpty()"))
+        // Only a friend's card is opened: one you sent writes nothing.
+        assertTrue(sheet.contains("LaunchedEffect(id) { if (!mine) huddle.opened(id) }"))
     }
 }

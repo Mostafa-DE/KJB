@@ -110,24 +110,28 @@ import kotlinx.coroutines.withContext
 // what they sent as postcards, the others below), its Tools row, Library's friends row with the newest card a friend
 // sent, and Huddle's host in the app (plan part 3 and 3b, user decisions 2026-11-22).
 
-/** Huddle's line on Tools: how many friends, with the cards not opened yet as its badge; what it is for before the first. */
-fun huddleEntry(state: HuddleState): EntryRow = when {
+/**
+ * Huddle's line on Tools: how many friends, with the cards not opened yet among the newest friends sent ([inbox],
+ * [Huddle.inbox]) as its badge; what it is for before the first.
+ */
+fun huddleEntry(state: HuddleState, inbox: List<Received>): EntryRow = when {
     state.friends.isNotEmpty() -> {
         val here = state.friends.mapTo(HashSet()) { it.id }
-        EntryRow(ToolLine.Count(R.plurals.huddle_friends, state.friends.size), state.inbox.count { !it.opened && it.friend in here }.takeIf { it > 0 })
+        EntryRow(ToolLine.Count(R.plurals.huddle_friends, state.friends.size), inbox.count { !it.opened && it.friend in here }.takeIf { it > 0 })
     }
     state.invites.isNotEmpty() -> EntryRow(ToolLine.Text(R.string.huddle_tool_waiting), null)
     else -> EntryRow(ToolLine.Text(R.string.huddle_tool_none), null)
 }
 
 /**
- * The card the start screen's "From <name>" row shows, from a friend still here: the newest not opened yet, else the newest
- * card, opened, until it is dismissed (an older one never takes its place); null for none.
+ * The card the start screen's "From <name>" row shows of the newest friends sent ([inbox], [Huddle.inbox]), from a friend
+ * still here: the newest not opened yet, else the newest card, opened, until it is dismissed (an older one never takes its
+ * place); null for none.
  */
-fun newestCard(state: HuddleState): Received? {
+fun newestCard(state: HuddleState, inbox: List<Received>): Received? {
     val here = state.friends.mapTo(HashSet()) { it.id }
-    return state.inbox.filter { !it.opened && it.friend in here }.maxByOrNull { it.at }
-        ?: state.inbox.filter { it.friend in here }.maxByOrNull { it.at }?.takeUnless { it.dismissed }
+    return inbox.filter { !it.opened && it.friend in here }.maxByOrNull { it.at }
+        ?: inbox.filter { it.friend in here }.maxByOrNull { it.at }?.takeUnless { it.dismissed }
 }
 
 /** Friends as Send to a friend lists them: the one you sent to last first, then the others by the name you see. */
@@ -274,9 +278,16 @@ internal fun rememberHuddle(): Huddle {
 @Composable
 internal fun rememberHuddleState(): HuddleState? = rememberHuddle().state.collectAsStateWithLifecycle(initialValue = null).value
 
+/** The newest cards friends sent, as they are kept and opened ([Huddle.inbox]); null until they are read. */
+@Composable
+internal fun rememberHuddleInbox(): List<Received>? = rememberHuddle().inbox.collectAsStateWithLifecycle(initialValue = null).value
+
 /** The Tools row's state ([huddleEntry]); null until Huddle is read. */
 @Composable
-fun huddleRow(): EntryRow? = rememberHuddleState()?.let(::huddleEntry)
+fun huddleRow(): EntryRow? {
+    val inbox = rememberHuddleInbox()
+    return rememberHuddleState()?.let { huddleEntry(it, inbox.orEmpty()) }
+}
 
 /** "Paper Lantern by Kit Calloway", or the title alone without an artist. */
 internal fun songBy(resources: Resources, song: CardSong): String = song.artist?.let { resources.getString(R.string.huddle_song_by, song.title, it) } ?: song.title
@@ -350,7 +361,7 @@ fun HuddleHost(invite: String?, onInviteTaken: () -> Unit, onPlayer: () -> Unit,
     }
     link?.let { AcceptInviteSheet(it, onDismiss = { link = null }) { received -> opened = received } }
     ReceivedHost(opened, onPlayer, onSendBack = { sheet = HuddleSheet.SendTo(it) }, playNow = true) { opened = null }
-    HuddleSheetsHost(sheet, ledger, onPlayer) { sheet = it }
+    HuddleSheetsHost(sheet, ledger, onPlayer, onPage = null) { sheet = it }
     val state = rememberHuddleState() ?: return
     state.joined.firstNotNullOfOrNull { id -> state.friends.firstOrNull { it.id == id } }?.let { friend ->
         JoinedDialog(
@@ -400,6 +411,7 @@ fun HuddlePage(onBack: (() -> Unit)?) {
     val scope = rememberCoroutineScope()
     val huddle = rememberHuddle()
     val state = rememberHuddleState()
+    val cards = rememberHuddleInbox()
     val now by rememberNow()
     val matcher = rememberSongMatcher()
     val list = rememberLazyListState()
@@ -461,7 +473,7 @@ fun HuddlePage(onBack: (() -> Unit)?) {
         val friends = friendsNow(shown, now)
         val playing = friends.filter { it.playing }
         val names = shown.friends.associate { it.id to it.shownName }
-        val inbox = shown.inbox.filter { it.friend in names }
+        val inbox = cards?.filter { it.friend in names }
         LazyColumn(
             state = list,
             modifier = Modifier.fillMaxSize(),
@@ -581,12 +593,15 @@ fun HuddlePage(onBack: (() -> Unit)?) {
                 }
             }
             item(key = "sent", contentType = "heading") {
-                val fresh = inbox.count { !it.opened }
-                HuddleHeading(stringResource(R.string.huddle_inbox_title), fresh.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.huddle_new_count, it, it) })
+                val fresh = inbox.orEmpty().count { !it.opened }
+                HuddleHeading(stringResource(R.string.huddle_inbox_title), fresh.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.huddle_new_count, it, it) }) {
+                    // Every card friends sent, kept on the phone: the row shows the newest.
+                    if (!inbox.isNullOrEmpty()) LyrifyButton(stringResource(R.string.lib_view_all), onClick = { nav.open(Page.HuddleCards) }, kind = ButtonKind.GHOST, compact = true)
+                }
             }
             item(key = "postcards", contentType = "postcards") {
                 LazyRow(contentPadding = PaddingValues(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    if (inbox.isEmpty()) {
+                    if (inbox?.isEmpty() == true) {
                         item(key = "example") {
                             Column(Modifier.alpha(EXAMPLE_ALPHA).clearAndSetSemantics { contentDescription = resources.getString(R.string.huddle_example) }) {
                                 Text(stringResource(R.string.huddle_example).uppercase(), style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
@@ -600,24 +615,19 @@ fun HuddlePage(onBack: (() -> Unit)?) {
                                     some = null,
                                     fresh = false,
                                     tilt = -1.6f,
+                                    line = stringResource(R.string.huddle_from, stringResource(R.string.huddle_example_friend)),
                                     onOpen = {},
                                     onPlay = {},
                                 )
                             }
                         }
                     }
-                    itemsIndexed(inbox, key = { _, it -> it.id }) { at, received ->
-                        val card = received.card
-                        val matches = remember(matcher, card) { matcher?.let { found -> card.songs.map(found::match) } }
-                        Postcard(
-                            card.note,
+                    itemsIndexed(inbox.orEmpty(), key = { _, it -> it.id }) { at, received ->
+                        KeptPostcard(
+                            received,
                             names.getValue(received.friend),
                             friendColor(received.friend),
-                            cardLine(card),
-                            song = matches?.firstNotNullOfOrNull { (it as? Match.Found)?.song ?: (it as? Match.Maybe)?.song },
-                            have = matches?.first(),
-                            some = matches?.takeIf { card.kind != CardKind.SONG }?.let { found -> found.count { it is Match.Found } to found.size },
-                            fresh = !received.opened,
+                            matcher,
                             tilt = if (at % 2 == 0) -1.6f else 1.4f,
                             onOpen = {
                                 playNow = false
@@ -676,7 +686,7 @@ fun HuddlePage(onBack: (() -> Unit)?) {
             opened = received
         }
     }
-    HuddleSheetsHost(sheet, LocalLyrics.current.ledger, player) { sheet = it }
+    HuddleSheetsHost(sheet, LocalLyrics.current.ledger, player, nav::open) { sheet = it }
     ReceivedHost(opened, player, onSendBack = { sheet = HuddleSheet.SendTo(it) }, playNow = playNow) { opened = null }
 }
 

@@ -56,6 +56,7 @@ object NoPlays : PlaysQuery {
 /** The play counter's objects, built by hand, one of each per process. */
 object StatsGraph {
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + logFailures)
+    private var db: PlaysDb? = null
     private var store: PlayLogStore? = null
     private var counter: PlayCounter? = null
     @Volatile
@@ -65,11 +66,18 @@ object StatsGraph {
     private var bookLog: PlayLogStore? = null
     private var bookCounter: PlayCounter? = null
 
-    /** `plays.db` in app-private `databases/`, an unreadable one moved aside there; what is written tells Insights. */
+    /**
+     * `plays.db` in app-private `databases/`, an unreadable one moved aside there: one helper for the play log and Huddle's
+     * history (huddle/HuddleGraph.kt), which keeps its tables there too.
+     */
+    @Synchronized
+    fun db(context: Context): PlaysDb = db ?: PlaysDb(context.applicationContext, log = { Log.w(LOG_TAG, it) }).also { db = it }
+
+    /** The play log in [db]; what is written tells Insights. */
     @Synchronized
     private fun store(context: Context): PlayLogStore = store ?: run {
         val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
-        WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, log = log), log = log)) { startedAt -> stats?.changed(startedAt) }
+        WatchedPlayLog(SqlPlayLog(db(context), log = log)) { startedAt -> stats?.changed(startedAt) }
     }.also { store = it }
 
     /** "Count a play after", from the moment the settings are read and as they change; null until then. */
