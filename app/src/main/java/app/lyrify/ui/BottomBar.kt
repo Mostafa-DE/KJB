@@ -7,6 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -182,11 +183,18 @@ private val DockItemSetting.on: Boolean get() = shown || tab == DockTab.LIBRARY
 // In the composition
 
 /**
- * The bar as the shell shows it ([LocalDockBar]): its [items] in order, whether Tools has its dot ([toolsDot]), and what
- * the phone offers now ([offered]: KJB Downloads installed, a book in the library).
+ * The bar as the shell shows it ([LocalDockBar]): its [items] in order, whether Tools has its dot ([toolsDot]), what
+ * the phone offers now ([offered]: KJB Downloads installed, a book in the library), and Huddle's live state, a friend
+ * playing now ([huddleLive]: the shell's one state, which the dock's dot and every header's Huddle read where they show,
+ * so nothing else redraws; null outside the shell).
  */
-@Immutable
-data class DockBar(val items: List<DockTab> = DOCK_TABS, val toolsDot: Boolean = false, val offered: DockOffers = DockOffers(downloads = false, books = false)) {
+@Stable
+data class DockBar(
+    val items: List<DockTab> = DOCK_TABS,
+    val toolsDot: Boolean = false,
+    val offered: DockOffers = DockOffers(downloads = false, books = false),
+    val huddleLive: State<HuddleLive>? = null,
+) {
     fun offers(tab: DockTab): Boolean = offered.offers(tab)
 }
 

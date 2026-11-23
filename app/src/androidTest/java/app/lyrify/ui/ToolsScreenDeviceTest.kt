@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -11,6 +12,7 @@ import app.lyrify.R
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
+import app.lyrify.settings.DockTab
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -34,8 +36,12 @@ class ToolsScreenDeviceTest {
         }
         var retried = 0
         compose.setContent {
-            // ToolsScreen takes no track or session: the shell draws it whatever plays, here with nothing at all.
-            CompositionLocalProvider(LocalLyrics provides shellLyrics(failed, onRetryFailed = { retried++ })) {
+            // ToolsScreen takes no track or session: the shell draws it whatever plays, here with nothing at all. Its header's
+            // Huddle opens with the shell's navigator (HH1).
+            CompositionLocalProvider(
+                LocalLyrics provides shellLyrics(failed, onRetryFailed = { retried++ }),
+                LocalNavigator provides remember { Navigator(NavState.start(DockTab.TOOLS)) },
+            ) {
                 ToolsScreen(rows = emptyList(), onOpen = {})
             }
         }

@@ -638,6 +638,9 @@ object Motion {
     /** The equalizer's knobs gliding to a preset: ease-out cubic. */
     val Glide: Easing = CubicBezierEasing(0.33f, 1f, 0.68f, 1f)
 
+    /** The headers' Huddle ring pulsing out round its circle while a friend plays (the Huddle glyph mockup's ping). */
+    val Pulse: Easing = CubicBezierEasing(0.2f, 0.6f, 0.4f, 1f)
+
     // Durations, in milliseconds
 
     /** A press, a chip's fill, a knob growing under the finger. */

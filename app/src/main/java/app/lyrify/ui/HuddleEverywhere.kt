@@ -352,12 +352,15 @@ internal fun CoverFriends(title: String, artist: String?, modifier: Modifier) {
     }
 }
 
-/** Whether a friend plays now ([huddleDot]), for the bar's Huddle item: a State that changes only when that does. */
+/**
+ * What the bar's Huddle item and the headers' Huddle show ([huddleLive]), for the shell to read once: a State that
+ * changes only when that does; joined with nobody playing until Huddle is read.
+ */
 @Composable
-fun rememberHuddleLive(): State<Boolean> {
+fun rememberHuddleLive(): State<HuddleLive> {
     val state = rememberHuddle().state.collectAsStateWithLifecycle(initialValue = null)
     val now = rememberNow()
-    return remember { derivedStateOf { state.value?.let { huddleDot(it, now.value) } == true } }
+    return remember { derivedStateOf { state.value?.let { huddleLive(it, now.value) } ?: HuddleLive() } }
 }
 
 private val FromTitle = display(18, 23, weight = 650)

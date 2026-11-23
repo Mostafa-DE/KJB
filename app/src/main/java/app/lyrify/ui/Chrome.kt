@@ -542,10 +542,11 @@ private fun TopBarRow(title: @Composable () -> Unit, navigation: (@Composable ()
 }
 
 /**
- * The header of the four main pages (Library, Playlists, Search, Tools): the KJB logo at the start, then the page's
- * title in the title style, the page's own actions at the end (user decision 2026-11-11). The logo is decorative, so
- * TalkBack reads one heading, the title alone. [below]: more of the band under the line, as Search's field. Inner pages
- * keep [LyrifyTopBar] with Back and their own title.
+ * The header of the main pages, the bar's roots (Library, Playlists, Search, Tools and what else the bar holds): the KJB
+ * logo at the start, then the page's title in the title style and right after it Huddle ([HuddleButton]: in reach from
+ * every one but Huddle's own, user 2026-11-23), the page's own actions at the end (user decision 2026-11-11). The logo
+ * is decorative, so TalkBack reads one heading, the title alone, then Huddle. [below]: more of the band under the line,
+ * as Search's field. Inner pages keep [LyrifyTopBar] with Back and their own title.
  */
 @Composable
 fun MainTopBar(tab: DockTab, under: Boolean, backdrop: GlassBackdrop?, actions: @Composable RowScope.() -> Unit = {}, below: (@Composable () -> Unit)? = null) {
@@ -557,7 +558,14 @@ fun MainTopBar(tab: DockTab, under: Boolean, backdrop: GlassBackdrop?, actions: 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         HeaderLogo()
                         Spacer(Modifier.width(12.dp))
-                        Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        // The title gives way first, so Huddle stays right after its words whatever buttons the page has.
+                        Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        // Opened as Tools' Huddle row opens it (so on its name step until one is picked); Back comes back here.
+                        if (tab != DockTab.HUDDLE) {
+                            val nav = LocalNavigator.current
+                            Spacer(Modifier.width(4.dp))
+                            HuddleButton { nav.open(Page.Huddle, keepOrigin = true) }
+                        }
                     }
                 },
                 navigation = null,
@@ -625,6 +633,22 @@ fun ChromeIconButton(
     iconSize: Dp = 22.dp,
     tint: Color = LocalContentColor.current,
 ) {
+    ChromeIconButton(contentDescription, onClick, modifier, enabled, glass, size) {
+        Icon(painterResource(icon), contentDescription = null, tint = if (enabled) tint else tint.copy(alpha = DISABLED_ALPHA), modifier = Modifier.size(iconSize))
+    }
+}
+
+/** [ChromeIconButton] with its own drawing in the circle ([content]) in place of an icon: the headers' Huddle. */
+@Composable
+fun ChromeIconButton(
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    glass: Boolean = true,
+    size: Dp = 40.dp,
+    content: @Composable BoxScope.() -> Unit,
+) {
     val chrome = LocalChromeColors.current
     val source = remember { MutableInteractionSource() }
     Box(
@@ -640,9 +664,8 @@ fun ChromeIconButton(
                 .size(size)
                 .indication(source, PressIndication(CircleShape, 0.9f))
                 .then(if (glass) Modifier.background(chrome.glassSolid, CircleShape).border(1.dp, chrome.glassEdge, CircleShape) else Modifier),
-        ) {
-            Icon(painterResource(icon), contentDescription = null, tint = if (enabled) tint else tint.copy(alpha = DISABLED_ALPHA), modifier = Modifier.size(iconSize))
-        }
+            content = content,
+        )
     }
 }
 

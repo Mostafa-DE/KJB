@@ -243,8 +243,9 @@ sealed interface FullScreen {
 data class StackEntry(val page: Page, val origin: Origin? = null)
 
 /**
- * Where a page opened from the player (or another full-screen view) or from a song's sheet came from: the [tab], the tab
- * [history] and the [views] shown then, and the [sheet] to show again. Back from the page goes back there.
+ * Where a page opened from the player (or another full-screen view), from a song's sheet or from a header's Huddle came
+ * from: the [tab], the tab [history] and the [views] shown then, and the [sheet] to show again. Back from the page goes
+ * back there.
  */
 @Serializable
 data class Origin(
@@ -319,13 +320,13 @@ data class NavState(
 
     /**
      * Opens [page] on its tab ([homeOf], by the bar's items now, [docked]), closing the views; the page on top already is
-     * not opened twice. Opened from a view (the player) or from a song's [sheet], it keeps where it came from ([Origin]),
-     * and Back from it goes there; the page already on top takes that new origin, so Back still goes back to the player
-     * or the sheet.
+     * not opened twice. Opened from a view (the player), from a song's [sheet] or with [keepOrigin] (the headers' Huddle), it
+     * keeps where it came from ([Origin]), and Back from it goes there; the page already on top takes that new origin, so
+     * Back still goes back to the player, the sheet or the page.
      */
-    fun open(page: Page, sheet: SheetReturn? = null, docked: List<DockTab> = DOCK_TABS): NavState {
+    fun open(page: Page, sheet: SheetReturn? = null, docked: List<DockTab> = DOCK_TABS, keepOrigin: Boolean = false): NavState {
         val home = homeOf(page, tab, views.isNotEmpty(), docked)
-        val origin = Origin(tab, history, views, sheet).takeIf { views.isNotEmpty() || sheet != null }
+        val origin = Origin(tab, history, views, sheet).takeIf { views.isNotEmpty() || sheet != null || keepOrigin }
         val moved = visit(home).copy(views = emptyList(), reopen = null)
         val stack = moved.stacks[home].orEmpty()
         val top = stack.lastOrNull()
@@ -573,8 +574,8 @@ class Navigator(initial: NavState) {
     var opened: PageOpened by mutableStateOf(PageOpened(null, 0))
         private set
 
-    fun open(page: Page, sheet: SheetReturn? = null) {
-        state = state.open(page, sheet, docked)
+    fun open(page: Page, sheet: SheetReturn? = null, keepOrigin: Boolean = false) {
+        state = state.open(page, sheet, docked, keepOrigin)
         opened = PageOpened(page, opened.count + 1)
     }
 

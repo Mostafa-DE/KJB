@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import android.os.Build
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.SnapSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.Color
@@ -9,6 +10,7 @@ import androidx.compose.ui.platform.AccessibilityManager
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import app.lyrify.R
+import app.lyrify.huddle.HuddleState
 import app.lyrify.settings.DockTab
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -327,6 +329,105 @@ class ChromeTest {
         // The inner pages' bars keep their Back.
         assertTrue(Regex("LyrifyTopBar\\(").findAll(ui.getValue("CollectionScreens.kt") + ui.getValue("SettingsScreen.kt") + ui.getValue("CoversTagsScreen.kt")).count() >= 4)
         assertTrue("navigation = { ChromeIconButton(R.drawable.ic_arrow_back" in ui.getValue("CoversTagsScreen.kt"))
+    }
+
+    // Huddle in every main page's header (user 2026-11-23, r4: "reachable everywhere"), HH1
+
+    /** MainTopBar's body, which every bar root's header is (the test above) and no inner page's. */
+    private fun mainHeader(): String = java.io.File("src/main/java/app/lyrify/ui/Chrome.kt").readText().substringAfter("fun MainTopBar(").substringBefore("\n}\n")
+
+    @Test
+    fun `every bar root's header has Huddle right after its title, the page's own buttons at the end, Huddle's own root none`() {
+        val header = mainHeader()
+        val title = header.substringAfter("title = {").substringBefore("navigation = null")
+        // The title gives way first (ellipsised), so Huddle stays right after its words whatever buttons the page has.
+        assertTrue(title, "Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))" in title)
+        val huddle = title.indexOf("if (tab != DockTab.HUDDLE)")
+        assertTrue(title, huddle > title.indexOf("Text(title") && "HuddleButton {" in title.substring(huddle))
+        assertTrue(header, "actions = actions," in header)
+        // Only there: an inner page's bar (Back and its own title, Settings among them) and the player have none.
+        val ui = java.io.File("src/main/java/app/lyrify/ui").listFiles { f -> f.extension == "kt" }!!.associate { it.name to it.readText() }
+        assertEquals(setOf("Chrome.kt"), ui.filterValues { Regex("(?<!fun )HuddleButton[ ({]").containsMatchIn(it) || "nav.open(Page.Huddle" in it }.keys)
+        assertFalse("MainTopBar(" in ui.getValue("PlayerScreen.kt") || "MainTopBar(" in ui.getValue("SettingsScreen.kt"))
+    }
+
+    @Test
+    fun `the header's Huddle opens the page Tools' Huddle row opens, from every bar root, so it asks for a name there first`() {
+        // Back from it comes back to the header's page (NavTest); Tools' row keeps going back to Tools.
+        assertTrue(mainHeader(), "HuddleButton { nav.open(Page.Huddle, keepOrigin = true) }" in mainHeader())
+        assertEquals(Page.Huddle, Tool.HUDDLE.page)
+        // Huddle on the bar too (its optional item) changes nothing: the header still opens Tools' Huddle page.
+        val bar = listOf(DockTab.LIBRARY, DockTab.HUDDLE, DockTab.SEARCH, DockTab.TOOLS)
+        DockTab.entries.filter { it != DockTab.HUDDLE }.forEach { root ->
+            listOf(DOCK_TABS, bar).forEach { docked ->
+                val opened = NavState.start(root).open(Page.Huddle, docked = docked, keepOrigin = true)
+                assertEquals("$root", DockTab.TOOLS, opened.tab)
+                assertEquals("$root", listOf<Page>(Page.Huddle), opened.pages)
+            }
+        }
+        // That page asks for a name before anything else until one is picked, then shows Huddle.
+        assertEquals(NameGate.NAME, nameGate(HuddleState()))
+        assertNull(nameGate(HuddleState(name = "Juniper")))
+    }
+
+    /** The headers' Huddle's body (HuddleParts.kt): its whole look, in one place so another can take its place. */
+    private fun huddleButton(): String = java.io.File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText().substringAfter("internal fun HuddleButton(").substringBefore("\n}\n")
+
+    @Test
+    fun `the header's Huddle is the Huddle glyph in Search and Tools' glass circle, live with the bars and a ring, from the shell's one state`() {
+        val button = huddleButton()
+        // The user's pick (idea B): the glyph's own drawable, two friends round a note, in the glass circle.
+        assertTrue(button, "ImageVector.vectorResource(R.drawable.ic_huddle)" in button && "ChromeIconButton(" in button)
+        val glyph = java.io.File("src/main/res/drawable/ic_huddle.xml").readText()
+        assertTrue(glyph, """android:viewportWidth="24"""" in glyph && """android:name="friends"""" in glyph && """android:name="note"""" in glyph)
+        // A friend playing: the note gives way to Huddle's three coral bars, cut out of the friends, and a ring pulses out,
+        // resting with Remove animations and on a hidden root; several playing, their count; no name yet, an ink plus.
+        val bars = button.substringAfter("Equaliser(").substringBefore("\n                    )")
+        assertTrue(bars, bars.trimStart().startsWith("brand.highlight,") && "count = 3," in bars && "gap = ground," in bars)
+        val ring = button.substringAfter("        if (lit > 0f) {").substringBefore("ChromeIconButton(")
+        assertTrue(ring, "if (huddleMoves()) rememberInfiniteTransition(label = \"huddle ring\")" in ring)
+        // The ring pulses on the mockup's curve, a Motion token as every screen's motion is (Grok round 2, reuse).
+        assertTrue(ring, "tween(RING_PULSE_MS, easing = Motion.Pulse)" in ring)
+        assertEquals(CubicBezierEasing(0.2f, 0.6f, 0.4f, 1f), Motion.Pulse)
+        // The glyph's two paths, parsed once and drawn by name: the friends, then the note in front of them.
+        assertTrue(button, "drawPath(friends, ink)" in button && "drawPath(note, ink, shown)" in button && "getValue(" !in button)
+        assertTrue(button, "AnimatedVisibility(live.joined && live.playing.size > 1" in button && "CountBadge(count.value)" in button)
+        assertTrue(button, "AnimatedVisibility(!live.joined" in button && "R.drawable.ic_add" in button && "chrome.action" in button)
+        val parts = java.io.File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText()
+        assertFalse(parts, "CubicBezierEasing(" in parts)
+        assertTrue("internal fun Equaliser(color: Color, modifier: Modifier = Modifier, count: Int = EQ_MS.size, gap: Color? = null)" in parts)
+        // One state for the bar's dot and every header: the shell's, never a second clock that could disagree with the bar.
+        assertTrue(button, "val live = LocalDockBar.current.huddleLive?.value ?: HuddleLive()" in button)
+        val ui = java.io.File("src/main/java/app/lyrify/ui").listFiles { f -> f.extension == "kt" }!!.map { it.readText() }
+        assertEquals(1, ui.sumOf { text -> Regex("(?<!fun )rememberHuddleLive\\(\\)").findAll(text).count() })
+        val shell = java.io.File("src/main/java/app/lyrify/ui/AppShell.kt").readText()
+        assertTrue("LocalDockBar provides DockBar(items, dot, offers, huddleLive)" in shell && "live = huddleLive.value.playing.isNotEmpty()" in shell)
+        assertNull(DockBar().huddleLive)
+    }
+
+    @Test
+    fun `TalkBack hears Huddle, then not joined yet, who is playing now or how many`() {
+        assertEquals("Huddle, Wren is playing now", dockItemName("Huddle", null, "Wren is playing now"))
+        val strings = java.io.File("src/main/res/values/strings_huddle.xml").readText()
+        listOf(
+            """<string name="huddle_title">Huddle</string>""",
+            """<string name="huddle_header_not_joined">not joined yet</string>""",
+            """<string name="huddle_header_playing">%1${'$'}s is playing now</string>""",
+            """<item quantity="other">%d friends playing now</item>""",
+        ).forEach { assertTrue(it, it in strings) }
+        val button = huddleButton()
+        assertTrue(button, "if (!live.joined) stringResource(R.string.huddle_header_not_joined) else null" in button)
+        assertTrue(button, "1 -> stringResource(R.string.huddle_header_playing, live.playing.single())" in button)
+        assertTrue(button, "else -> pluralStringResource(R.plurals.huddle_header_playing_count, live.playing.size, live.playing.size)" in button)
+    }
+
+    @Test
+    fun `every device test that draws a bar root's page gives it the navigator its header's Huddle opens with`() {
+        // AppShell provides it to every real page; a device test drawing a root without it would crash in its header.
+        val roots = Regex("""\b(LibraryPage|PlaylistsPage|SearchPage|BooksPage|ToolsScreen)\(|\b(QueuePage|CollectionPage|ListeningPage)\([^\n]*root = true|\b(DownloadsPage|HuddlePage)\(onBack = null""")
+        val tests = java.io.File("src/androidTest/java/app/lyrify").walk().filter { it.extension == "kt" }.associate { it.name to it.readText() }.filterValues { roots.containsMatchIn(it) }
+        assertTrue(tests.keys.toString(), "ToolsScreenDeviceTest.kt" in tests && "M3uScreensDeviceTest.kt" in tests)
+        tests.forEach { (name, text) -> assertTrue(name, "LocalNavigator provides" in text) }
     }
 
     @Test
