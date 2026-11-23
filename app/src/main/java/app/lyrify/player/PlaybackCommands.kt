@@ -11,7 +11,7 @@ import kotlinx.serialization.Serializable
  * like this; suggestions/), its [QueueSource.name] the page's title. [HUDDLE]: a card a friend sent (huddle/), its key the
  * card's id and its name the friend's, as you see it ("From Wren").
  */
-enum class SourceKind { SONGS, ALBUM, ARTIST, FOLDER, GENRE, PLAYLIST, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, SEARCH, PICKED, OPENED, BOOK, SUGGESTIONS, HUDDLE }
+enum class SourceKind { SONGS, ALBUM, ARTIST, FOLDER, GENRE, PLAYLIST, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, SEARCH, PICKED, OPENED, BOOK, SUGGESTIONS, HUDDLE, NOT_PLAYED }
 
 /**
  * The place in the app a queue was made from. [kind] and [key] tell one place from another: Recent keeps one queue per

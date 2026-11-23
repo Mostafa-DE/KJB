@@ -607,9 +607,50 @@ class NavTest {
     @Test
     fun `opening Search from another tab asks its field for focus, coming back to Library keeps its place`() {
         val search = NavState.start(DockTab.LIBRARY).select(DockTab.SEARCH)
-        assertEquals(1, search.reselectsOf(DockTab.SEARCH))
+        assertEquals(1, search.searchOpens)
+        assertEquals(0, search.reselectsOf(DockTab.SEARCH))
         assertEquals(0, search.select(DockTab.LIBRARY).reselectsOf(DockTab.LIBRARY))
-        assertEquals(2, search.select(DockTab.SEARCH).reselectsOf(DockTab.SEARCH))
+        // Tapped again on its search page: the focus again, and its lists to the top.
+        val again = search.select(DockTab.SEARCH)
+        assertEquals(2, again.searchOpens)
+        assertEquals(1, again.reselectsOf(DockTab.SEARCH))
+    }
+
+    /** User 2026-11-23 (r4): Search in the bar always goes to the search page itself; its words and results stay. */
+    @Test
+    fun `Search from another tab lands on its field, the pages opened there dropped, as if none had been opened`() {
+        val sheet = SheetReturn("search host", OpenSheet.Menu(SongRef("/music/b.flac")))
+        val opened = NavState.start(DockTab.LIBRARY).select(DockTab.SEARCH).open(Page.SearchAll(SearchGroup.ALBUMS, "lantern")).open(album).open(artist, sheet)
+        assertEquals(listOf(Page.SearchAll(SearchGroup.ALBUMS, "lantern"), album, artist), opened.pages)
+        val search = opened.select(DockTab.LIBRARY).select(DockTab.SEARCH)
+        assertEquals(DockTab.SEARCH, search.tab)
+        assertEquals(emptyList<Page>(), search.pages)
+        // Its field takes the focus; its results keep their place (lead 2026-11-23: no count to the top).
+        assertEquals(opened.searchOpens + 1, search.searchOpens)
+        assertEquals(opened.reselects, search.reselects)
+        // A turn of the phone or process death keeps the count, so the field is not focused again then.
+        assertEquals(search, NavState.decode(search.encode()))
+        // Back from its field goes back through the tabs, as it does when nothing was opened on Search.
+        assertEquals(NavState.start(DockTab.LIBRARY).select(DockTab.SEARCH).select(DockTab.LIBRARY).select(DockTab.SEARCH), search)
+        assertEquals(DockTab.LIBRARY, search.back()!!.tab)
+        assertNull(search.back()!!.reopen)
+    }
+
+    @Test
+    fun `Search tapped on a page opened there lands on its field with the focus, its results kept in place, then a tap there sends them to the top`() {
+        val opened = NavState.start(DockTab.LIBRARY).select(DockTab.SEARCH).open(album).open(artist)
+        val search = opened.select(DockTab.SEARCH)
+        assertEquals(DockTab.SEARCH, search.tab)
+        assertEquals(emptyList<Page>(), search.pages)
+        assertEquals(listOf(DockTab.LIBRARY), search.history)
+        assertEquals(opened.searchOpens + 1, search.searchOpens)
+        assertEquals(opened.reselects, search.reselects)
+        val again = search.select(DockTab.SEARCH)
+        assertEquals(opened.searchOpens + 2, again.searchOpens)
+        assertEquals(opened.reselectsOf(DockTab.SEARCH) + 1, again.reselectsOf(DockTab.SEARCH))
+        // Library's tap on a page there still only pops it, without asking its list to go to the top.
+        val library = NavState.start(DockTab.LIBRARY).open(album)
+        assertEquals(library.reselects, library.select(DockTab.LIBRARY).reselects)
     }
 
     // Notifications

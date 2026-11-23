@@ -181,6 +181,29 @@ class FavouritesPageTest {
         assertTrue(File("src/main/res/values/strings_insights.xml").readText().contains("""<string name="insights_open">Open Insights</string>"""))
     }
 
+    @Test
+    fun `Favourites' songs have the period lists' Search in this list, with its filter and its No matches, and no handles while it holds words (the wiring, read from the source)`() {
+        // No Compose renderer on the JVM: the filter is findInList's (LibraryListsTest), the field the period lists' own.
+        val screens = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
+        val favourites = screens.substringAfter("internal fun FavouritesPage(").substringBefore("\n}\n")
+        val periods = screens.substringAfter("private fun BuiltInPage(").substringBefore("\n}\n")
+        assertTrue(favourites.contains("findInList("))
+        // One field for both pages, over Favourites' Songs whether it shows alone or under its tab.
+        assertEquals(1, Regex("""FindInListField\(""").findAll(periods).count())
+        assertEquals(2, Regex("""FindInListField\(""").findAll(favourites).count())
+        assertEquals(3, Regex("""R\.string\.songs_no_match""").findAll(favourites).count() + Regex("""R\.string\.songs_no_match""").findAll(periods).count())
+        // A drag among the songs a search leaves would move songs it hides: the handles wait until it is cleared.
+        assertTrue(favourites.contains(".takeIf { order.reorders && words.isBlank() }"))
+        // The head's line, its count, Shuffle and Play take the songs shown, as on the period lists: while words are typed
+        // only those the filter leaves, none while it works them out (Grok review: a search kept over a turn of the phone
+        // showed and shuffled every favourite until then), and No matches only once it has.
+        assertTrue(favourites.contains("val entries = if (words.isBlank()) sorted else found.orEmpty()"))
+        assertTrue(favourites.contains("val songs = remember(entries) { entries.map { it.song } }"))
+        assertTrue(favourites.contains("SongPageFrame(ui, songs,"))
+        assertTrue(favourites.contains("loaded = words.isBlank() || found != null"))
+        assertEquals(2, Regex("""if \(words\.isNotBlank\(\) && found\?\.isEmpty\(\) == true\)""").findAll(favourites).count())
+    }
+
     // KJB 3.1: Favourites as a bar item has the bar's header with its name, as Queues, Downloads and Books do.
 
     @Test

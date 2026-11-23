@@ -135,6 +135,7 @@ fun sourceLabel(context: Context, source: QueueSource, songs: Int): String {
         SourceKind.MOST_PLAYED -> return context.getString(R.string.queue_source_most_played)
         SourceKind.RECENTLY_PLAYED -> return context.getString(R.string.queue_source_recently_played)
         SourceKind.RECENTLY_ADDED -> return context.getString(R.string.queue_source_recently_added)
+        SourceKind.NOT_PLAYED -> return context.getString(R.string.queue_source_not_played)
         SourceKind.OPENED -> return context.getString(R.string.open_queue)
         SourceKind.SUGGESTIONS -> return source.name
         SourceKind.PICKED -> return context.getString(R.string.queue_source_picked, context.resources.getQuantityString(R.plurals.queue_songs, songs, songs))

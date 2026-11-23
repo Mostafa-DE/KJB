@@ -125,6 +125,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntSize
@@ -673,6 +674,31 @@ fun ChromeIconButton(
 fun LyrifySearchField(
     value: String,
     onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+    focus: FocusRequester? = null,
+    onSearch: () -> Unit = {},
+    trailing: @Composable RowScope.() -> Unit = {},
+) {
+    LyrifyField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.then(if (focus != null) Modifier.focusRequester(focus) else Modifier),
+        placeholder = placeholder,
+        shape = CircleShape,
+        ring = 1.5.dp,
+        leading = { Icon(painterResource(R.drawable.ic_search), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp)) },
+        trailing = trailing,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { onSearch() }),
+    )
+}
+
+/** [LyrifySearchField] with its text's selection: Search's own field, whose words each Search tap selects. */
+@Composable
+fun LyrifySearchField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
     placeholder: String,
     modifier: Modifier = Modifier,
     focus: FocusRequester? = null,

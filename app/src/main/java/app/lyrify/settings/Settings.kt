@@ -110,8 +110,8 @@ data class LibrarySettings(
     /** Each song page's order, remembered per kind of page; a page not here has its [SongList.default]. */
     val listSorts: Map<SongList, ListSort> = emptyMap(),
     /**
-     * The period chip Recently added, Recently played and Most played were each left on (v4); a list not here starts on
-     * its [SongList.period].
+     * The period chip Recently added, Recently played, Most played and Not played were each left on (v4); a list not
+     * here starts on its [SongList.period].
      */
     val listPeriods: Map<SongList, ListPeriod> = emptyMap(),
     /**
@@ -193,15 +193,16 @@ data class ListSort(val key: SortSongs? = null, val reversed: Boolean = false) {
 }
 
 /**
- * How far back Recently added, Recently played and Most played reach, by the chips on each (v4): the past 15, 30, 60 or
- * 365 [days], today one of them, or all time.
+ * How far back Recently added, Recently played, Most played and Not played reach, by the chips on each (v4): the past
+ * 15, 30, 60 or 365 [days], today one of them, or all time.
  */
 enum class ListPeriod(val days: Int?) { DAYS_15(15), DAYS_30(30), DAYS_60(60), DAYS_365(365), ALL_TIME(null) }
 
 /**
  * The song pages that remember their order, each kind once (every album shares one): those with an own order ([own])
  * open in it; the others by their [default] key. Every page offers every [SortSongs] key. The lists with period chips
- * start on their [period]: Most played on all time, as it always showed.
+ * start on their [period]: Most played on all time, as it always showed, and Not played on all time (the songs never
+ * played).
  */
 enum class SongList(val own: Boolean, val default: ListSort, val period: ListPeriod? = null) {
     ALBUM(true, ListSort.OWN),
@@ -215,6 +216,8 @@ enum class SongList(val own: Boolean, val default: ListSort, val period: ListPer
     MOST_PLAYED(false, ListSort(SortSongs.PLAY_COUNT), ListPeriod.ALL_TIME),
     RECENTLY_PLAYED(false, ListSort(SortSongs.LAST_PLAYED), ListPeriod.DAYS_15),
     RECENTLY_ADDED(false, ListSort(SortSongs.RECENTLY_ADDED), ListPeriod.DAYS_30),
+    /** Its own order: the songs never played first, the newest added first, then the longest since played. */
+    NOT_PLAYED(true, ListSort.OWN, ListPeriod.ALL_TIME),
 }
 
 /** Settings > Lyrics, and the "Aa" choices of full lyrics. */

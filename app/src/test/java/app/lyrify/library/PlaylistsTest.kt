@@ -392,6 +392,42 @@ class PlaylistsTest {
         assertEquals(listOf(50 to NOW - 1_000, 500 to null), asked)
     }
 
+    @Test
+    fun `Not played is the library's songs without a play Most played counts in the period, the never played first, the newest added first, then the longest since played`() = runBlocking {
+        val day = TimeUnit.DAYS.toMillis(1)
+        val old = song("Music/Old Pier.mp3", id = 1, addedAt = NOW - 300 * day)
+        val fresh = song("Music/Fresh Paint.mp3", id = 2, addedAt = NOW - day)
+        val undated = song("Music/No Date.mp3", id = 3)
+        val longAgo = song("Music/Long Ago.mp3", id = 4, addedAt = NOW - 200 * day)
+        val lately = song("Music/Lately.mp3", id = 5, addedAt = NOW - 100 * day)
+        val loved = song("Music/Loved.mp3", id = 6, addedAt = NOW - 50 * day)
+        val episode = song("Music/Talks/Episode 3.mp3", id = 7, addedAt = NOW - day, isPodcast = true)
+        val library = Library.of(listOf(old, fresh, undated, longAgo, lately, loved, episode), Settings())
+        val since = NOW - 15 * day
+        val asked = mutableListOf<Pair<Int, Long?>>()
+        val plays = object : PlaysQuery {
+            // What Most played counts: over all time three songs, in the period one of them.
+            override suspend fun mostPlayed(limit: Int, since: Long?): List<SongPlays> {
+                asked += limit to since
+                val ever = listOf(SongPlays(loved.ref, 9, NOW - day, 0), SongPlays(lately.ref, 4, NOW - 40 * day, 0), SongPlays(longAgo.ref, 1, NOW - 90 * day, 0))
+                return if (since == null) ever else ever.take(1)
+            }
+
+            override suspend fun recentlyPlayed(limit: Int, since: Long?): List<SongPlays> = emptyList()
+
+            override suspend fun plays(song: SongRef): SongPlays? = null
+        }
+
+        val period = notPlayed(plays, library, since)
+        assertEquals(listOf(fresh, old, undated, longAgo, lately), period.map { it.first })
+        // Each with its plays of all time, for the note of when it was played last; none for a song never played.
+        assertEquals(listOf(null, null, null, NOW - 90 * day, NOW - 40 * day), period.map { it.second?.lastPlayedAt })
+        // All time: the songs never played. The podcast episode is out in both, as Most played leaves it out.
+        assertEquals(listOf(fresh, old, undated), notPlayed(plays, library, null).map { it.first })
+        // Every song Most played counts, never only its top 50, over the period asked and over all time.
+        assertEquals(setOf(Int.MAX_VALUE to since, Int.MAX_VALUE to null), asked.toSet())
+    }
+
     private companion object {
         const val NOW: Long = 1_800_000_000_000L
     }

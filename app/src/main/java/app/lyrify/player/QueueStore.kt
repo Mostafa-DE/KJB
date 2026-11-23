@@ -148,11 +148,12 @@ object QueuesJson {
     /** A queue's members but its two lists ([Encoder] adds them). */
     private fun head(queue: Queue): Map<String, JsonElement> = buildMap {
         put(ID_KEY, JsonPrimitive(queue.id))
-        // A list KJB suggested, or a card a friend sent, is stored as picked songs with a mark: an older KJB, which knows no
-        // such list, keeps its songs.
+        // A list KJB suggested, a card a friend sent, or Not played, is stored as picked songs with a mark: an older KJB,
+        // which knows no such list, keeps its songs.
         val suggested = queue.source.kind == SourceKind.SUGGESTIONS
         val sent = queue.source.kind == SourceKind.HUDDLE
-        val kind = if (suggested || sent) SourceKind.PICKED else queue.source.kind
+        val unplayed = queue.source.kind == SourceKind.NOT_PLAYED
+        val kind = if (suggested || sent || unplayed) SourceKind.PICKED else queue.source.kind
         put(
             SOURCE_KEY,
             JsonObject(
@@ -162,6 +163,7 @@ object QueuesJson {
                     put(NAME_KEY, JsonPrimitive(queue.source.name))
                     if (suggested) put(SUGGESTIONS_KEY, JsonPrimitive(true))
                     if (sent) put(HUDDLE_KEY, JsonPrimitive(true))
+                    if (unplayed) put(NOT_PLAYED_KEY, JsonPrimitive(true))
                 },
             ),
         )
@@ -194,6 +196,7 @@ object QueuesJson {
         val kind = when {
             (source[SUGGESTIONS_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true -> SourceKind.SUGGESTIONS
             (source[HUDDLE_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true -> SourceKind.HUDDLE
+            (source[NOT_PLAYED_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true -> SourceKind.NOT_PLAYED
             else -> named
         }
         val all = (stored[ITEMS_KEY] as? JsonArray).orEmpty()
@@ -285,6 +288,7 @@ object QueuesJson {
     private const val SMART_KEY: String = "smart"
     private const val SUGGESTIONS_KEY: String = "suggestions"
     private const val HUDDLE_KEY: String = "huddle"
+    private const val NOT_PLAYED_KEY: String = "notPlayed"
 }
 
 /** The stored form of [PlaybackPlace]: read leniently, a field it cannot use as its default; null when it is no JSON object. */

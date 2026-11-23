@@ -26,6 +26,7 @@
     <string name="queue_source_most_played">Most played</string>
     <string name="queue_source_recently_played">Recently played</string>
     <string name="queue_source_recently_added">Recently added</string>
+    <string name="queue_source_not_played">Not played</string>
     <string name="queue_source_picked">Picked · %1$s</string>
     <plurals name="queue_songs">
         <item quantity="one">%d song</item>
