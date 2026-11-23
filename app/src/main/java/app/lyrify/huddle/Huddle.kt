@@ -7,7 +7,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -112,6 +117,8 @@ sealed interface Accepted {
  *   each whatever the others answered. Each message is read once ([Friend.seen]) and acknowledged so the server deletes it.
  * - [syncWhileInFront]: when KJB comes to the front, then every [FAST_MS] on any page; after a sync without an answer,
  *   after each of [RETRY_MS]'s waits, then hourly. Nothing while KJB is not in front.
+ * - The history stays on the phone (user 2026-11-23, the server keeps nothing once delivered): every card both ways, for
+ *   good, and friends' plays of [PLAYS_KEPT_MS], in plays.db ([HuddleLog]); huddle.json keeps each friend's latest play.
  *
  * Nothing here logs a name, a title, a note, a key or a mailbox: a step that did not go logs a reason code. One sync or
  * send at a time.
@@ -126,9 +133,32 @@ class Huddle(
     private val clock: () -> Long,
     private val random: SecureRandom,
     private val scope: CoroutineScope,
+    /** Every card both ways and friends' plays of the last year, in plays.db: read through [moved]. */
+    private val history: HuddleLog,
     private val log: (String) -> Unit = {},
 ) {
     val state: Flow<HuddleState> = storage.state
+
+    private val _cardsWritten = MutableStateFlow(0)
+
+    /** Cards kept in the history or opened, counted: what shows cards reads them again. */
+    val cardsWritten: StateFlow<Int> = _cardsWritten.asStateFlow()
+
+    private val _playsWritten = MutableStateFlow(0)
+
+    /** Friends' plays kept in the history, counted: "What <name> played" reads them again. */
+    val playsWritten: StateFlow<Int> = _playsWritten.asStateFlow()
+
+    /**
+     * The newest cards friends sent ([INBOX_MAX]), read again as cards are kept or opened: the page's Sent to you, its
+     * badges and the start screen's card.
+     */
+    val inbox: Flow<List<Received>> = cardsWritten.map { moved().received(0, INBOX_MAX).orEmpty() }
+
+    /** Whether what huddle.json kept before the history ([moved]) is in it. */
+    @Volatile
+    private var inHistory = false
+    private val moving = Mutex()
 
     private val one = Mutex()
 
@@ -175,7 +205,7 @@ class Huddle(
         val pair = HuddleCrypto.keyPair(random)
         val token = ByteArray(Invites.TOKEN_BYTES).also(random::nextBytes)
         val inLink = card?.takeIf { Messages.cardJson(it).toString().encodeToByteArray().size <= LINK_CARD_MAX_BYTES }
-        val pending = PendingInvite(HuddleCrypto.encode(pair.public), HuddleCrypto.encode(pair.private), HuddleCrypto.encode(token), newId(OWNER_ID_BYTES), clock(), card.takeIf { inLink == null })
+        val pending = PendingInvite(HuddleCrypto.encode(pair.public), HuddleCrypto.encode(pair.private), HuddleCrypto.encode(token), newId(OWNER_ID_BYTES), clock(), card.takeIf { inLink == null }, inLink)
         if (!server.createInvite(Invites.joinId(token, pair.public), pending.owner)) return Invited.NoAnswer
         if (!storage.change { it.copy(invites = (it.invites + pending).takeLast(INVITES_MAX)) }) {
             server.deleteInvite(pending.owner)
@@ -243,12 +273,12 @@ class Huddle(
             asked = ask != null
             state.copy(
                 friends = state.friends + friend,
-                inbox = listOfNotNull(card) + state.inbox,
                 joins = state.joins.filterNot { it.joinId == joinId },
                 outbox = state.outbox + listOfNotNull(ask),
             )
         }
         already?.let { return if (kept) Accepted.Already(it) else Accepted.NoAnswer }
+        if (kept && card != null) keep(listOf(card))
         if (kept && asked) scope.launch { flush() }
         return if (kept) Accepted.Joined(friend, card?.id) else Accepted.NoAnswer
     }
@@ -352,6 +382,8 @@ class Huddle(
             )
         }
         if (!kept) return false
+        // After a sync under way, which may still keep what they sent last.
+        one.withLock { forgetHistory(friendId) }
         flush()
         server.dropBoxes(listOf(friend.inBox))
         return true
@@ -363,18 +395,20 @@ class Huddle(
         server.deleteInvite(invite.owner) && forget(listOf(invite))
     }
 
-    /** The backup's Huddle section now ([HuddleBackup.seal]); null without a backup passphrase. */
-    suspend fun backupSection(): String? = HuddleBackup.seal(now(), random)
+    /** The backup's Huddle section now, the history with it ([HuddleBackup.seal]); null without a backup passphrase. */
+    suspend fun backupSection(): String? = HuddleBackup.seal(now(), moved(), random)
 
     /**
-     * Restores a backup's Huddle [section] opened with [passphrase] into what this phone has ([restored]), its key kept
-     * for the next backups: how many friends it holds, or null when the passphrase does not open it (or it could not be
-     * written). Slow, as [HuddleBackup.open]: off the main thread.
+     * Restores a backup's Huddle [section] opened with [passphrase] into what this phone has: its history first (each card
+     * and play once, so a restore made twice adds nothing), then the rest ([restored]), its key kept for the next backups.
+     * How many friends it holds, or null when the passphrase does not open it (or it could not be written). Slow, as
+     * [HuddleBackup.open]: off the main thread.
      */
     suspend fun restore(section: String, passphrase: CharArray): Int? {
         val backup = HuddleBackup.open(section, passphrase) ?: return null
-        val key = backup.backupKey ?: return null
-        return backup.friends.size.takeIf { storage.change { it.restored(backup, key) } }
+        val key = backup.state.backupKey ?: return null
+        if (!keep(backup.cards, backup.plays)) return null
+        return backup.state.friends.size.takeIf { storage.change { it.restored(backup.state, key) } }
     }
 
     /** Listen privately until [until] (wall-clock millis; [HuddleState.FOREVER] until turned back on), or no longer (null). */
@@ -385,7 +419,7 @@ class Huddle(
 
     /** The card [receivedId] was played or looked at; [dismissed]: put away, it also leaves the start screen. */
     suspend fun opened(receivedId: String, dismissed: Boolean = false): Boolean = withContext(NonCancellable) {
-        storage.change { state -> state.copy(inbox = state.inbox.map { if (it.id == receivedId) it.copy(opened = true, dismissed = it.dismissed || dismissed) else it }) }
+        moved().opened(receivedId, dismissed).also { if (it) _cardsWritten.update { count -> count + 1 } }
     }
 
     /**
@@ -417,7 +451,55 @@ class Huddle(
         }
     }
 
+    /** The cards between you and the friend [friendId], both ways, the newest first: [limit] from the [from]th ("You and <name>"). */
+    suspend fun thread(friendId: String, from: Int, limit: Int): List<KeptCard> = moved().thread(friendId, from, limit).orEmpty()
+
+    /** Every card friends sent you, the newest first: [limit] from the [from]th (Sent to you's See all). */
+    suspend fun received(from: Int, limit: Int): List<Received> = moved().received(from, limit).orEmpty()
+
+    /** The card [id], either way: the card opened from a list; null for none. */
+    suspend fun card(id: String): KeptCard? = moved().card(id)
+
+    /** The friend [friendId]'s plays of the last year, the newest first: [limit] from the [from]th ("What <name> played"). */
+    suspend fun friendPlays(friendId: String, from: Int, limit: Int): List<FriendPlay> = moved().plays(friendId, from, limit).orEmpty()
+
+    /** Every friend's plays from [from] on, the oldest first: Suggestions' friends source ([HuddleFriends]). */
+    suspend fun playsSince(from: Long): List<FriendPlay> = moved().playsSince(from).orEmpty()
+
     private suspend fun now(): HuddleState = storage.state.first()
+
+    /**
+     * The history, once what huddle.json kept before it (KJB v4 test builds: the newest 100 cards, every play of 30 days)
+     * is in it: written to plays.db first, then the cards leave huddle.json and its plays keep each friend's latest, so a
+     * write that fails loses nothing and is tried again at the next read, and one run again adds nothing (each card and
+     * play is kept once). Once a run.
+     */
+    private suspend fun moved(): HuddleLog {
+        if (!inHistory) {
+            moving.withLock {
+                if (inHistory) return@withLock
+                val old = now()
+                if (!history.keep(old.inbox, old.plays, clock() - PLAYS_KEPT_MS)) return@withLock
+                inHistory = (old.inbox.isEmpty() && latestPlays(old.plays).size == old.plays.size) ||
+                    storage.change { state -> state.copy(inbox = state.inbox - old.inbox.toSet(), plays = latestPlays(state.plays)) }
+            }
+        }
+        return history
+    }
+
+    /** [cards] and [plays] kept in the history ([HuddleLog.keep]: plays past [PLAYS_KEPT_MS] let go), told to what shows them. */
+    private suspend fun keep(cards: List<KeptCard> = emptyList(), plays: List<FriendPlay> = emptyList()): Boolean =
+        moved().keep(cards, plays, clock() - PLAYS_KEPT_MS).also { kept ->
+            if (kept && cards.isNotEmpty()) _cardsWritten.update { it + 1 }
+            if (kept && plays.isNotEmpty()) _playsWritten.update { it + 1 }
+        }
+
+    /** The friend [friendId]'s cards and plays let go from the history: you removed them, or they removed you. */
+    private suspend fun forgetHistory(friendId: String) {
+        if (!moved().forget(friendId)) return
+        _cardsWritten.update { it + 1 }
+        _playsWritten.update { it + 1 }
+    }
 
     private suspend fun changeFriend(friendId: String, change: (Friend) -> Friend): Boolean {
         if (now().friends.none { it.id == friendId }) return false
@@ -448,7 +530,7 @@ class Huddle(
     private fun outgoing(friend: Friend, message: Message, kind: Kind, notBefore: Long): Outgoing? {
         val key = HuddleCrypto.decode(friend.outKey) ?: return null
         val sealed = HuddleCrypto.seal(key, Messages.encode(message), friend.outBox.encodeToByteArray(), random)
-        return Outgoing(message.id, friend.outBox, HuddleCrypto.encode(sealed), kind, message.at, notBefore)
+        return Outgoing(message.id, friend.outBox, HuddleCrypto.encode(sealed), kind, message.at, notBefore, (message as? Message.Share)?.card)
     }
 
     /**
@@ -490,7 +572,11 @@ class Huddle(
                                 joined = state.joined + named.id,
                             )
                         }
-                        if (kept) server.deleteInvite(invite.owner)
+                        if (kept) {
+                            server.deleteInvite(invite.owner)
+                            // The card the link carried reached them with it.
+                            invite.linked?.let { keep(listOf(Sent(newId(MESSAGE_ID_BYTES), friend.id, invite.madeAt, it))) }
+                        }
                     }
                 }
             }
@@ -524,9 +610,13 @@ class Huddle(
         val sharing = state.friends.filter { it.sharePlays }.mapTo(HashSet()) { it.outBox }
         val gone = outbox.filter { now - it.at > keptMs(it.kind) || (it.kind == Kind.PLAY && (private || it.box !in sharing)) }.mapTo(HashSet()) { it.id }
         var answered = true
+        val posted = HashSet<String>()
         for (out in outbox.filter { it.id !in gone && it.notBefore <= now }) {
             when (server.send(out.box, out.kind, out.data)) {
-                PostAnswer.POSTED -> gone += out.id
+                PostAnswer.POSTED -> {
+                    gone += out.id
+                    posted += out.id
+                }
                 // A play the friend's full mailbox refused is not tried again; a card is, until the server would have dropped it.
                 PostAnswer.REFUSED -> if (out.kind == Kind.PLAY) gone += out.id
                 PostAnswer.NO_ANSWER -> {
@@ -536,6 +626,13 @@ class Huddle(
                 }
             }
         }
+        // A card that went is kept in the history as sent; one let go (no answer, or refused, as long as the server would
+        // have kept it) as not delivered.
+        val sent = outbox.filter { it.id in gone }.mapNotNull { out ->
+            val card = out.card ?: return@mapNotNull null
+            state.friends.firstOrNull { it.outBox == out.box }?.let { Sent(out.id, it.id, out.at, card, delivered = out.id in posted) }
+        }
+        if (sent.isNotEmpty()) keep(sent)
         if (gone.isNotEmpty()) storage.change { state -> state.copy(outbox = state.outbox.filterNot { it.id in gone }) }
         return answered
     }
@@ -554,7 +651,10 @@ class Huddle(
         }
         val now = clock()
         // Nothing new and no count of messages that did not open to start over: only plays past their time go.
-        if (posted.isEmpty() && friends.none { it.notOpenedReads > 0 }) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
+        if (posted.isEmpty() && friends.none { it.notOpenedReads > 0 }) {
+            keep()
+            return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
+        }
         val upTo = HashMap<String, Long>()
         val read = ArrayList<Pair<String, Message>>()
         // By friend: their Friend.notOpenedReads after this read.
@@ -581,6 +681,13 @@ class Huddle(
         }
         if (kept > 0) log("huddle: inbox kept $kept that did not open, to read again (not_opened)")
         if (dropped > 0) log("huddle: inbox dropped $dropped that did not open (not_opened)")
+        // The cards and plays go to the history first, each once: a huddle.json write that fails after it reads them again.
+        val cards = read.mapNotNull { (friendId, message) -> (message as? Message.Share)?.let { Received(it.id, friendId, minOf(it.at, now), it.card) } }
+        val plays = read.mapNotNull { (friendId, message) -> (message as? Message.Play)?.let { FriendPlay(friendId, minOf(it.at, now), it.song, it.favourite) } }
+        if (!keep(cards, plays)) {
+            log("huddle: inbox not kept (not_written)")
+            return false
+        }
         // Whether what came asks for an answer (a name taken in your list, or free again): it goes in this sync.
         var answers = false
         val written = storage.change { state ->
@@ -597,13 +704,17 @@ class Huddle(
         // What was let go is gone: the next one that does not open gets its reads again.
         if (acknowledged && dropped > 0) storage.change { state -> state.copy(friends = state.friends.map { if (it.notOpenedReads > NOT_OPENED_RETRIES) it.copy(notOpenedReads = 0) else it }) }
         read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> friends.firstOrNull { it.id == id } }.forEach { gone ->
+            forgetHistory(gone.id)
             server.dropBoxes(listOf(gone.inBox, gone.outBox))
         }
         if (answers) flushNow()
         return acknowledged
     }
 
-    /** This state with [read] messages kept: each once, from friends still here; cards and plays kept within their limits. */
+    /**
+     * This state with [read] messages kept: each once, from friends still here; of plays, each friend's latest within
+     * [PLAYS_KEPT_MS] (the cards and every play are in the history).
+     */
     private fun HuddleState.received(read: List<Pair<String, Message>>, now: Long): HuddleState {
         var state = this
         for ((friendId, message) in read) {
@@ -611,16 +722,17 @@ class Huddle(
             // A friend's clock may be ahead: nothing is kept as from later than now.
             val at = minOf(message.at, now)
             if (message is Message.Play) {
-                // Plays are many: told apart by what they are, so the ids kept are those of cards and goodbyes only.
-                val play = FriendPlay(friendId, at, message.song, message.favourite)
-                if (play !in state.plays) state = state.copy(plays = listOf(play) + state.plays)
+                // Each friend's latest play only (every play is in the history, [fetch]). Plays are many: the ids kept are
+                // those of cards and goodbyes only.
+                state = state.copy(plays = latestPlays(state.plays + FriendPlay(friendId, at, message.song, message.favourite)))
                 continue
             }
             if (message.id in friend.seen) continue
             val seen = friend.copy(seen = (friend.seen + message.id).takeLast(SEEN_MAX))
             state = state.copy(friends = state.friends.map { if (it.id == friendId) seen else it })
             state = when (message) {
-                is Message.Share -> state.copy(inbox = listOf(Received(message.id, friendId, at, message.card)) + state.inbox)
+                // In the history already ([fetch]).
+                is Message.Share -> state
                 is Message.Play -> state
                 is Message.Profile -> state.profiled(seen, message, now)
                 is Message.Bye -> state.copy(
@@ -632,10 +744,7 @@ class Huddle(
                 )
             }
         }
-        return state.copy(
-            inbox = state.inbox.sortedByDescending { it.at }.take(INBOX_MAX),
-            plays = state.plays.filter { now - it.at <= PLAYS_KEPT_MS }.sortedByDescending { it.at }.take(PLAYS_MAX),
-        )
+        return state.copy(plays = state.plays.filter { now - it.at <= PLAYS_KEPT_MS })
     }
 
     /**
@@ -686,8 +795,11 @@ class Huddle(
         /** An invite nobody joined goes after a week, as the server's does. */
         const val INVITE_KEPT_MS: Long = 7 * DAY_MS
 
-        /** Friends' plays are kept 30 days, what Suggestions reads ("this week", "a friend loves this"), and no more. */
-        const val PLAYS_KEPT_MS: Long = 30 * DAY_MS
+        /**
+         * Friends' plays are kept a year in the history (user 2026-11-23, "What <name> played"); Suggestions read the last
+         * 30 days of them ("this week", "a friend loves this").
+         */
+        const val PLAYS_KEPT_MS: Long = 365 * DAY_MS
 
         /** A card fits the link when its JSON is at most this long: about one song with a note. */
         private const val LINK_CARD_MAX_BYTES: Int = 600
@@ -695,8 +807,9 @@ class Huddle(
 
         /** Joins waiting for the server's answer: a few at most, the oldest let go. */
         private const val JOINS_MAX: Int = 20
+
+        /** The newest cards friends sent that [inbox] reads: the page's Sent to you, its badges and the start screen's card. */
         private const val INBOX_MAX: Int = 100
-        private const val PLAYS_MAX: Int = 5_000
         private const val SEEN_MAX: Int = 200
         private const val MESSAGE_ID_BYTES: Int = 16
         private const val FRIEND_ID_BYTES: Int = 8
@@ -718,10 +831,11 @@ private fun standIn(name: String, friends: List<Friend>): String =
         friends.none { friend -> listOfNotNull(friend.shownName, friend.taken).any { sameName(it, candidate) } }
     }
 
-/** Friends' plays for Suggestions (handoff/sg1-interfaces.md, section 3): what [storage] keeps, mapped to Suggestions' own form. */
-class HuddleFriends(private val storage: HuddleStorage) : FriendsSource {
-    override suspend fun since(from: Long): List<SuggestionsPlay> = storage.state.first().plays
-        .filter { it.at >= from }
-        .sortedBy { it.at }
+/**
+ * Friends' plays for Suggestions (handoff/sg1-interfaces.md, section 3): what [huddle]'s history keeps, mapped to
+ * Suggestions' own form.
+ */
+class HuddleFriends(private val huddle: Huddle) : FriendsSource {
+    override suspend fun since(from: Long): List<SuggestionsPlay> = huddle.playsSince(from)
         .map { play -> SuggestionsPlay(play.friend, play.song.title, play.song.artist, play.song.album, play.song.durationMs.takeIf { it > 0 }, play.at, play.favourite) }
 }

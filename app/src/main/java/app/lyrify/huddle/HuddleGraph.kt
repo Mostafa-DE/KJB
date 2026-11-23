@@ -12,6 +12,7 @@ import app.lyrify.logFailures
 import app.lyrify.stats.HeardTime
 import app.lyrify.stats.PlayEvent
 import app.lyrify.stats.PlayEvents
+import app.lyrify.stats.StatsGraph
 import app.lyrify.suggestions.FriendsSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -70,16 +71,20 @@ object HuddleGraph {
     /** The hosts KJB opens invite links of (AndroidManifest.xml): Huddle's Railway address and the user's own domain (plan Q3.2). */
     val hosts: List<String> = listOf(BuildConfig.HUDDLE_HOST, BuildConfig.HUDDLE_DOMAIN)
 
-    /** Huddle with `huddle.json` and the server at [BuildConfig.HUDDLE_HOST], where its new invite links point too. */
+    /**
+     * Huddle with `huddle.json`, its history in `plays.db` (the play log's helper) and the server at
+     * [BuildConfig.HUDDLE_HOST], where its new invite links point too.
+     */
     @Synchronized
     fun huddle(context: Context): Huddle = huddle ?: run {
         val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
         val server = HuddleClient(BuildConfig.HUDDLE_HOST, USER_AGENT, log = log)
-        Huddle(HuddleFiles.of(context), server, BuildConfig.HUDDLE_HOST, hosts, System::currentTimeMillis, SecureRandom(), scope, log)
+        val history = SqlHuddleLog(StatsGraph.db(context), log = log)
+        Huddle(HuddleFiles.of(context), server, BuildConfig.HUDDLE_HOST, hosts, System::currentTimeMillis, SecureRandom(), scope, history, log)
     }.also { huddle = it }
 
     /** Friends' plays for Suggestions (handoff/sg1-interfaces.md, section 3): the integration wires it in SuggestionsGraph. */
-    fun friends(context: Context): FriendsSource = HuddleFriends(HuddleFiles.of(context))
+    fun friends(context: Context): FriendsSource = HuddleFriends(huddle(context))
 
     /** Where the player's plays go for Friends sharing (player/PlaybackService.kt). */
     fun plays(context: Context): PlayEvents {

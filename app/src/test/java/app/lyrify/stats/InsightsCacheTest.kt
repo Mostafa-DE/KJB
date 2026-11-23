@@ -200,7 +200,9 @@ class InsightsCacheTest {
     @Test
     fun `the app's play log and book log tell Insights each play written`() {
         val graph = java.io.File("src/main/java/app/lyrify/stats/PlaysQuery.kt").readText()
-        assertTrue(graph.contains("WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, log = log), log = log)) { startedAt -> stats?.changed(startedAt) }"))
+        // plays.db's helper is one, shared with Huddle's history (HY1): changed on purpose from a helper of the play log's own.
+        assertTrue(graph.contains("WatchedPlayLog(SqlPlayLog(db(context), log = log)) { startedAt -> stats?.changed(startedAt) }"))
+        assertTrue(graph.contains("fun db(context: Context): PlaysDb = db ?: PlaysDb(context.applicationContext, log = { Log.w(LOG_TAG, it) }).also { db = it }"))
         assertTrue(graph.contains("WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, name = BOOK_PLAYS, log = log), log = log)) { startedAt -> stats?.booksChanged(startedAt) }"))
         // Seen at once by the threads that write.
         assertTrue(graph.contains("@Volatile\n    private var stats: PlayStats? = null"))

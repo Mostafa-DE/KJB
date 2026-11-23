@@ -124,7 +124,7 @@ private fun HuddleFriends(tab: LibraryTab, modifier: Modifier, bleed: Dp = 0.dp)
             onInvite = { sheet = HuddleSheet.Ticket },
             onPrivately = { sheet = HuddleSheet.Privately },
         )
-        newestCard(state)?.let { received ->
+        newestCard(state, rememberHuddleInbox().orEmpty())?.let { received ->
             val friend = state.friends.firstOrNull { it.id == received.friend } ?: return@let
             FromCard(
                 received,
@@ -154,7 +154,7 @@ internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFri
     val context = LocalContext.current
     val resources = LocalResources.current
     val chrome = LocalChromeColors.current
-    val waiting = state.inbox.filter { !it.opened }.mapTo(HashSet()) { it.friend }
+    val waiting = rememberHuddleInbox().orEmpty().filter { !it.opened }.mapTo(HashSet()) { it.friend }
     val until = state.privateUntil?.takeIf { now < it }
     LazyRow(modifier, contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         if (until != null) {

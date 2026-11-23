@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
@@ -73,8 +74,10 @@ import app.lyrify.huddle.FriendPlay
 import app.lyrify.huddle.Huddle
 import app.lyrify.huddle.HuddleState
 import app.lyrify.huddle.Invites
+import app.lyrify.huddle.KeptCard
 import app.lyrify.huddle.Match
 import app.lyrify.huddle.Messages
+import app.lyrify.huddle.Received
 import app.lyrify.huddle.match
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
@@ -236,7 +239,10 @@ private fun ReceivedSheet(
     val scope = rememberCoroutineScope()
     val huddle = rememberHuddle()
     val state = rememberHuddleState() ?: return
-    val received = state.inbox.firstOrNull { it.id == id }
+    val written by huddle.cardsWritten.collectAsStateWithLifecycle()
+    // From the history, read again as cards are kept or opened: null until it is read, empty once it is gone.
+    val kept by produceState<List<KeptCard>?>(null, id, written) { value = listOfNotNull(huddle.card(id)) }
+    val received = (kept ?: return).firstOrNull() as? Received
     val friend = received?.let { card -> state.friends.firstOrNull { it.id == card.friend } }
     val matcher = rememberSongMatcher()
     val found = remember(matcher, received?.card) { received?.card?.let { card -> matcher?.let { card.songs.map(it::match) } } }

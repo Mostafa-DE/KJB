@@ -33,34 +33,34 @@ class HuddleScreenTest {
 
     @Test
     fun `Tools says what Huddle is for, then who waits, then how many friends with the cards not opened as the badge`() {
-        assertEquals(EntryRow(ToolLine.Text(R.string.huddle_tool_none), null), huddleEntry(HuddleState()))
+        assertEquals(EntryRow(ToolLine.Text(R.string.huddle_tool_none), null), huddleEntry(HuddleState(), emptyList()))
         val waiting = HuddleState(invites = listOf(PendingInvite("pk", "sk", "t", "o", 1)))
-        assertEquals(EntryRow(ToolLine.Text(R.string.huddle_tool_waiting), null), huddleEntry(waiting))
-        val friends = HuddleState(
-            friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper")),
-            inbox = listOf(Received("m1", "f1", 3, card), Received("m2", "f2", 2, card, opened = true), Received("m3", "gone", 1, card)),
-        )
-        assertEquals(EntryRow(ToolLine.Count(R.plurals.huddle_friends, 2), 1), huddleEntry(friends))
+        assertEquals(EntryRow(ToolLine.Text(R.string.huddle_tool_waiting), null), huddleEntry(waiting, emptyList()))
+        val friends = HuddleState(friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper")))
+        // Changed on purpose: the cards come from the history (Huddle.inbox), not huddle.json.
+        val inbox = listOf(Received("m1", "f1", 3, card), Received("m2", "f2", 2, card, opened = true), Received("m3", "gone", 1, card))
+        assertEquals(EntryRow(ToolLine.Count(R.plurals.huddle_friends, 2), 1), huddleEntry(friends, inbox))
+        assertEquals("cards left in huddle.json from before count no more", EntryRow(ToolLine.Count(R.plurals.huddle_friends, 2), null), huddleEntry(friends.copy(inbox = inbox), emptyList()))
     }
 
     @Test
     fun `the start screen shows the newest card not opened yet, from a friend still here`() {
         val friends = listOf(friend("f1", "Wren"))
-        assertNull(newestCard(HuddleState(friends = friends)))
+        assertNull(newestCard(HuddleState(friends = friends), emptyList()))
         val inbox = listOf(Received("m1", "f1", 5, card, opened = true), Received("m2", "gone", 4, card), Received("m3", "f1", 2, card), Received("m4", "f1", 3, card))
-        assertEquals("m4", newestCard(HuddleState(friends = friends, inbox = inbox))?.id)
+        assertEquals("m4", newestCard(HuddleState(friends = friends), inbox)?.id)
     }
 
     @Test
     fun `the start screen keeps the newest card and who sent it once it is opened, until it is dismissed`() {
         val friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper"))
         val played = Received("m1", "f1", 5, card, opened = true)
-        assertEquals("m1", newestCard(HuddleState(friends = friends, inbox = listOf(played)))?.id)
+        assertEquals("m1", newestCard(HuddleState(friends = friends), listOf(played))?.id)
         // One not opened yet comes first, older or not.
-        assertEquals("m2", newestCard(HuddleState(friends = friends, inbox = listOf(played, Received("m2", "f2", 3, card))))?.id)
+        assertEquals("m2", newestCard(HuddleState(friends = friends), listOf(played, Received("m2", "f2", 3, card)))?.id)
         // Dismissed, it goes, and an older card opened before does not take its place.
         val older = Received("m3", "f2", 2, card, opened = true)
-        assertNull(newestCard(HuddleState(friends = friends, inbox = listOf(played.copy(dismissed = true), older))))
+        assertNull(newestCard(HuddleState(friends = friends), listOf(played.copy(dismissed = true), older)))
         // The card's Hide puts it away; opening it only takes its New mark off.
         val screen = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText()
         assertTrue(screen.contains("huddle.opened(received.id, dismissed = true)"))

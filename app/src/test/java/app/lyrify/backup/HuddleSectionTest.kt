@@ -20,13 +20,14 @@ import org.junit.Test
  * beside the sections, and comes back only as what it says; a KJB without Huddle never reads it.
  */
 class HuddleSectionTest {
-    private val sealed = """{"format":1,"kdf":"pbkdf2-sha256","rounds":1000,"salt":"c2FsdA","box":"Ym94"}"""
+    private val sealed = """{"format":2,"kdf":"pbkdf2-sha256","rounds":1000,"salt":"c2FsdA","box":"Ym94"}"""
 
     @Test
     fun `the sealed Huddle part goes into the zip as it is and comes back, the sections as before`() {
         val bytes = zip(snapshot.copy(huddle = sealed))
         assertEquals(sealed, entries(bytes).single { it.first == BackupBundle.HUDDLE }.second)
-        assertEquals(JsonObject(mapOf("version" to JsonPrimitive(1))), manifest(bytes)["huddle"])
+        // Version 2 holds the history (huddle/HuddleStore.kt, HuddleBackup format 2): a KJB that reads only version 1 leaves it.
+        assertEquals(JsonObject(mapOf("version" to JsonPrimitive(2))), manifest(bytes)["huddle"])
         assertEquals(sealed, contents(bytes).huddle)
         assertEquals(contents().sections, contents(bytes).sections)
     }
@@ -42,11 +43,17 @@ class HuddleSectionTest {
     @Test
     fun `a Huddle part of a newer form, one that is no JSON object, or one the manifest leaves out is skipped, and the rest reads`() {
         val bytes = zip(snapshot.copy(huddle = sealed))
-        val newer = rewrite(bytes, change = { it + ("huddle" to JsonObject(mapOf("version" to JsonPrimitive(2)))) })
+        val newer = rewrite(bytes, change = { it + ("huddle" to JsonObject(mapOf("version" to JsonPrimitive(3)))) })
         assertNull(contents(newer).huddle)
         assertEquals(contents().sections, contents(newer).sections)
         assertNull(contents(rewrite(bytes, huddle = "[1,2]")).huddle)
         assertNull(contents(rewrite(bytes, change = { it - "huddle" })).huddle)
+    }
+
+    @Test
+    fun `a Huddle part from before the history (version 1, KJB v4 test builds) still reads`() {
+        val older = rewrite(zip(snapshot.copy(huddle = sealed)), change = { it + ("huddle" to JsonObject(mapOf("version" to JsonPrimitive(1)))) })
+        assertEquals(sealed, contents(older).huddle)
     }
 
     private fun manifest(bytes: ByteArray): JsonObject = Json.parseToJsonElement(entries(bytes).single { it.first == BackupBundle.MANIFEST }.second).jsonObject
