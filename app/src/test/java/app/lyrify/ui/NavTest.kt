@@ -178,6 +178,10 @@ class NavTest {
         assertEquals("from Search's Now bar", DockTab.TOOLS, NavState.start(DockTab.SEARCH).open(Page.HuddleThread("f1")).tab)
         assertEquals("from the player", DockTab.TOOLS, NavState.start(DockTab.LIBRARY).show(FullScreen.Player).open(Page.HuddleThread("f1")).tab)
         assertEquals(tools, NavState.decode(tools.encode()))
+        // Past friends (HY2), and a past friend's history from there.
+        val past = NavState.start(DockTab.TOOLS).open(Page.Huddle).open(Page.HuddlePast).open(Page.HuddleThread("f3"))
+        assertEquals(DockTab.TOOLS, past.tab)
+        assertEquals(past, NavState.decode(past.encode()))
     }
 
     @Test

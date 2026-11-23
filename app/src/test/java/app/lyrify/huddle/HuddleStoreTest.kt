@@ -44,6 +44,7 @@ class HuddleStoreTest {
         outbox = listOf(Outgoing("m10", "out-f1", "data", Kind.PLAY, 6_000, 6_500)),
         privateUntil = HuddleState.FOREVER,
         backupKey = BackupKey("salt", 1_000, "key"),
+        past = listOf(PastFriend("f3", "Kai", 7_000)),
     )
 
     @Test
@@ -61,6 +62,7 @@ class HuddleStoreTest {
         assertNull(read.friends.single().taken)
         assertFalse(read.friends.single().asksNewName)
         assertTrue(read.joined.isEmpty())
+        assertTrue("a huddle.json from before past friends has none", read.past.isEmpty())
     }
 
     @Test
@@ -112,6 +114,7 @@ class HuddleStoreTest {
         assertEquals(full.name, back.state.name)
         assertEquals("each friend's latest play, for now playing", full.plays, back.state.plays)
         assertEquals(full.invites, back.state.invites)
+        assertEquals("past friends, whose history it holds too", full.past, back.state.past)
         assertEquals("every card both ways, the newest first", cards.sortedByDescending { it.at }, back.cards)
         assertEquals("every play, the newest first", plays, back.plays)
         assertTrue("what was waiting to go is not restored", back.state.outbox.isEmpty())
@@ -158,7 +161,7 @@ class HuddleStoreTest {
     fun `the section holds no name, title, note, mailbox or key in the clear`() = runBlocking {
         val key = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)
         val section = HuddleBackup.seal(full.copy(backupKey = key), history(cards, plays), random)!!
-        listOf("Wren", "Juniper", "out-f1", "in-f1", "ok-f1", "ik-f1", "private-key-1", "owner-id-1", key.key, "correct horse", "Paper Lantern", "Kit Calloway", "Sunday drive", "for the coast", "for the drive")
+        listOf("Wren", "Juniper", "Kai", "out-f1", "in-f1", "ok-f1", "ik-f1", "private-key-1", "owner-id-1", key.key, "correct horse", "Paper Lantern", "Kit Calloway", "Sunday drive", "for the coast", "for the drive")
             .forEach { assertFalse(it, section.contains(it)) }
     }
 
@@ -304,6 +307,19 @@ class HuddleStoreTest {
         assertEquals(full.invites, restored.invites)
         assertEquals(key, restored.backupKey)
         assertEquals("Wren", HuddleState().restored(backup, key).name)
+    }
+
+    @Test
+    fun `a restore brings the backup's past friends back as past, and a friend who left this phone stays left`() {
+        val key = BackupKey("s", 1_000, "k")
+        // The backup was made while f1 was a friend, and after f3 left; on this phone f1 left since.
+        val phone = HuddleState(name = "Wren", friends = listOf(friend("f2", "Rook")), past = listOf(PastFriend("f1", "June", 8_000)))
+        val backup = HuddleState(name = "Wren", friends = listOf(friend("f1"), friend("f2", "Rook")), plays = listOf(FriendPlay("f1", 5_000, bell)), past = listOf(PastFriend("f3", "Kai", 7_000)))
+        val restored = phone.restored(backup, key)
+        assertEquals(listOf("f2"), restored.friends.map { it.id })
+        assertTrue("nor their latest play, for now playing", restored.plays.isEmpty())
+        assertEquals(listOf(PastFriend("f1", "June", 8_000), PastFriend("f3", "Kai", 7_000)), restored.past)
+        assertEquals("once each", restored, restored.restored(backup, key))
     }
 
     private fun assertThrows(block: () -> Unit) {

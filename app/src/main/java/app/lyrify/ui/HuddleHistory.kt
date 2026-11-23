@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import android.text.format.DateFormat
+import android.text.format.DateUtils
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -30,10 +31,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import app.lyrify.R
 import app.lyrify.huddle.FriendPlay
 import app.lyrify.huddle.Match
@@ -45,12 +49,14 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // Huddle's history, kept on the phone (user 2026-11-23, item 55; lane HY1): what went between you and a friend ("You
 // and <name>"), every card friends sent (Sent to you's View all), and what a friend played in the last year, each read
-// from plays.db in pages as the list scrolls.
+// from plays.db in pages as the list scrolls. A friend who left keeps theirs, under Past friends (item 59; lane HY2).
 
 /** Huddle's history pages ([Page.HuddlePages]). */
 @Composable
@@ -60,6 +66,7 @@ fun HuddleHistoryPage(page: Page.HuddlePages) {
         is Page.HuddleThread -> ThreadPage(page.friend) { nav.back() }
         Page.HuddleCards -> CardsPage { nav.back() }
         is Page.HuddlePlays -> PlaysPage(page.friend) { nav.back() }
+        Page.HuddlePast -> PastPage { nav.back() }
     }
 }
 
@@ -71,11 +78,17 @@ fun playDays(plays: List<FriendPlay>, zone: ZoneId): List<Pair<LocalDate, List<F
  * "You and <name>": every song and note between you and the friend [friendId], the newest first, as postcards, yours at
  * the end ("From you", and Not delivered when one never got there) and theirs at the start, as a conversation reads. A
  * tap opens the card ([ReceivedHost]: Play, and Send back for theirs); its play button plays it. Nothing yet: Send <name>
- * a song. Once they are gone (removed, or they removed you), the page says so under Back.
+ * a song. A past friend's (they left, or you removed them) stays under the name you saw them by, says they are no longer
+ * friends, and its "⋯" opens What <name> played and Delete history, asked first. Once they are gone with their history,
+ * the page says so under Back.
  */
 @Composable
 private fun ThreadPage(friendId: String, onBack: () -> Unit) {
     val nav = LocalNavigator.current
+    val resources = LocalResources.current
+    val toasts = LocalToasts.current
+    // Delete history leaves the page first: it runs on the activity's scope, and its toast outlives the page.
+    val lifecycle = LocalLifecycleOwner.current.lifecycleScope
     val huddle = rememberHuddle()
     val state = rememberHuddleState()
     val matcher = rememberSongMatcher()
@@ -85,12 +98,41 @@ private fun ThreadPage(friendId: String, onBack: () -> Unit) {
     var sheet by rememberSaveable(stateSaver = HuddleSheetSaver) { mutableStateOf<HuddleSheet?>(null) }
     var opened by rememberSaveable { mutableStateOf<String?>(null) }
     var playNow by rememberSaveable { mutableStateOf(false) }
+    var deleting by rememberSaveable { mutableStateOf(false) }
     val player = { nav.show(FullScreen.Player) }
     val friend = state?.friends?.firstOrNull { it.id == friendId }
-    val name = friend?.shownName.orEmpty()
-    PageFrame(topBar = { under, backdrop -> BackTopBar(if (friend == null) "" else stringResource(R.string.huddle_thread_title, name), under, backdrop, onBack = onBack) }) { padding ->
-        if (state != null && friend == null) {
-            // Gone meanwhile (removed, or they removed you): said under Back, as an album that went is (MissingPage).
+    val past = state?.past?.firstOrNull { it.id == friendId }
+    val name = friend?.shownName ?: past?.name.orEmpty()
+    PageFrame(
+        topBar = { under, backdrop ->
+            BackTopBar(
+                if (friend == null && past == null) "" else stringResource(R.string.huddle_thread_title, name),
+                under,
+                backdrop,
+                actions = {
+                    if (past != null) {
+                        var open by remember { mutableStateOf(false) }
+                        Box {
+                            ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.menu_more), { open = true })
+                            LyrifyMenu(expanded = open, onDismiss = { open = false }) {
+                                MenuRow(stringResource(R.string.huddle_played_title, name), R.drawable.ic_history, onClick = {
+                                    open = false
+                                    nav.open(Page.HuddlePlays(friendId))
+                                })
+                                MenuRow(stringResource(R.string.huddle_delete_history), R.drawable.ic_delete, destructive = true, onClick = {
+                                    open = false
+                                    deleting = true
+                                })
+                            }
+                        }
+                    }
+                },
+                onBack = onBack,
+            )
+        },
+    ) { padding ->
+        if (state != null && friend == null && past == null) {
+            // Gone meanwhile with their history (deleted): said under Back, as an album that went is (MissingPage).
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 EmptyState(EmptyArt.Icon(R.drawable.ic_person_off), stringResource(R.string.huddle_gone_title), text = stringResource(R.string.huddle_gone))
             }
@@ -100,13 +142,17 @@ private fun ThreadPage(friendId: String, onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp),
             ) {
+                if (past != null) {
+                    item(key = "past", contentType = "past") { Fact(R.drawable.ic_person_off, stringResource(R.string.huddle_past_note), Modifier.padding(horizontal = ScreenPadding, vertical = 8.dp)) }
+                }
                 if (cards?.isEmpty() == true) {
                     item(key = "empty", contentType = "empty") {
                         EmptyState(
                             EmptyArt.Icon(R.drawable.ic_swap_horiz),
                             stringResource(R.string.huddle_thread_empty),
                             text = stringResource(R.string.huddle_thread_empty_text, name),
-                            action = stringResource(R.string.huddle_send_song_to, name),
+                            // Nothing goes to a past friend.
+                            action = stringResource(R.string.huddle_send_song_to, name).takeIf { past == null },
                         ) { sheet = HuddleSheet.SendTo(friendId) }
                     }
                 }
@@ -135,11 +181,31 @@ private fun ThreadPage(friendId: String, onBack: () -> Unit) {
     }
     HuddleSheetsHost(sheet, LocalLyrics.current.ledger, player, nav::open) { sheet = it }
     ReceivedHost(opened, player, onSendBack = { sheet = HuddleSheet.SendTo(it) }, playNow = playNow) { opened = null }
+    if (deleting && past != null) {
+        ConfirmDialog(
+            title = stringResource(R.string.huddle_delete_history_title, name),
+            text = stringResource(R.string.huddle_delete_history_text),
+            confirm = stringResource(R.string.lib_delete),
+            dismiss = stringResource(R.string.remove_cancel),
+            onConfirm = {
+                deleting = false
+                onBack()
+                lifecycle.launch {
+                    if (withContext(NonCancellable) { huddle.deleteHistory(friendId) }) {
+                        toasts.show(Toast(resources.getString(R.string.huddle_history_deleted, name), R.drawable.ic_delete))
+                    } else {
+                        toasts.show(Toast(resources.getString(R.string.lib_not_saved), R.drawable.ic_error, Tone.ERROR))
+                    }
+                }
+            },
+            onDismiss = { deleting = false },
+        )
+    }
 }
 
 /**
  * Sent to you's View all: every card friends sent, kept on the phone, the newest first, as the page's postcards (New until
- * opened). A tap opens the card, its play button plays it, Send back answers the friend.
+ * opened), a past friend's too. A tap opens the card, its play button plays it, Send back answers the friend.
  */
 @Composable
 private fun CardsPage(onBack: () -> Unit) {
@@ -154,7 +220,8 @@ private fun CardsPage(onBack: () -> Unit) {
     var opened by rememberSaveable { mutableStateOf<String?>(null) }
     var playNow by rememberSaveable { mutableStateOf(false) }
     val player = { nav.show(FullScreen.Player) }
-    val names = state?.friends.orEmpty().associate { it.id to it.shownName }
+    // Friends here and past friends, whose cards stay: each card under the name you saw them by.
+    val names = state?.friends.orEmpty().associate { it.id to it.shownName } + state?.past.orEmpty().associate { it.id to it.name }
     PageFrame(topBar = { under, backdrop -> BackTopBar(stringResource(R.string.huddle_inbox_title), under, backdrop, onBack = onBack) }) { padding ->
         LazyColumn(
             state = list,
@@ -166,7 +233,7 @@ private fun CardsPage(onBack: () -> Unit) {
                     EmptyState(EmptyArt.Icon(R.drawable.ic_send), stringResource(R.string.huddle_cards_empty), text = stringResource(R.string.huddle_cards_empty_text))
                 }
             }
-            // Only friends still here: one gone took their cards along, which the history lets go of.
+            // Once Huddle is read; a card whose history was deleted meanwhile goes as the list is read again.
             itemsIndexed(cards.orEmpty().filter { it.friend in names }, key = { _, it -> it.id }, contentType = { _, _ -> "card" }) { at, received ->
                 Box(Modifier.fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 8.dp)) {
                     KeptPostcard(
@@ -196,7 +263,8 @@ private fun CardsPage(onBack: () -> Unit) {
  * "What <name> played": the friend [friendId]'s plays of the last year, by day (Today, Yesterday, then the date), the
  * newest first, each with its time: your cover when you have the song, else their colour's pattern, with whether it is
  * here and when it was one of their favourites. A tap plays it as their song's Play it does ([playIt]); a loose match
- * asks "Is this the song?" first, and one not here opens YouTube's search. Once they are gone, the page says so under Back.
+ * asks "Is this the song?" first, and one not here opens YouTube's search. A past friend's stays, under the name you saw
+ * them by, and says they are no longer friends. Once they are gone with their history, the page says so under Back.
  */
 @Composable
 private fun PlaysPage(friendId: String, onBack: () -> Unit) {
@@ -214,12 +282,13 @@ private fun PlaysPage(friendId: String, onBack: () -> Unit) {
     var asking by remember { mutableStateOf<Pair<FriendPlay, Song>?>(null) }
     val player = { nav.show(FullScreen.Player) }
     val friend = state?.friends?.firstOrNull { it.id == friendId }
-    val name = friend?.shownName.orEmpty()
+    val past = state?.past?.firstOrNull { it.id == friendId }
+    val name = friend?.shownName ?: past?.name.orEmpty()
     val color = friendColor(friendId)
     val zone = ZoneId.systemDefault()
-    PageFrame(topBar = { under, backdrop -> BackTopBar(if (friend == null) "" else stringResource(R.string.huddle_played_title, name), under, backdrop, onBack = onBack) }) { padding ->
-        if (state != null && friend == null) {
-            // Gone meanwhile (removed, or they removed you): said under Back, as an album that went is (MissingPage).
+    PageFrame(topBar = { under, backdrop -> BackTopBar(if (friend == null && past == null) "" else stringResource(R.string.huddle_played_title, name), under, backdrop, onBack = onBack) }) { padding ->
+        if (state != null && friend == null && past == null) {
+            // Gone meanwhile with their history (deleted): said under Back, as an album that went is (MissingPage).
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 EmptyState(EmptyArt.Icon(R.drawable.ic_person_off), stringResource(R.string.huddle_gone_title), text = stringResource(R.string.huddle_gone))
             }
@@ -229,6 +298,9 @@ private fun PlaysPage(friendId: String, onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp),
             ) {
+                if (past != null) {
+                    item(key = "past", contentType = "past") { Fact(R.drawable.ic_person_off, stringResource(R.string.huddle_past_note), Modifier.padding(horizontal = ScreenPadding, vertical = 8.dp)) }
+                }
                 if (plays?.isEmpty() == true) {
                     item(key = "empty", contentType = "empty") {
                         EmptyState(EmptyArt.Icon(R.drawable.ic_history), stringResource(R.string.huddle_played_empty), text = stringResource(R.string.huddle_played_empty_text, name))
@@ -299,6 +371,35 @@ private fun PlaysPage(friendId: String, onBack: () -> Unit) {
         )
     }
     youtube?.let { query -> YouTubeSearchSheet(query, onDismiss = { youtube = null }, onStarted = { youtube = null }) }
+}
+
+/**
+ * Past friends: friends who left Huddle or whom you removed, the last to leave first, under the name you saw them by and
+ * until when you were friends, as the Huddle page lists friends; each opens "You and <name>", where your history with them
+ * stays until you delete it.
+ */
+@Composable
+private fun PastPage(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val nav = LocalNavigator.current
+    val state = rememberHuddleState()
+    PageFrame(topBar = { under, backdrop -> BackTopBar(stringResource(R.string.huddle_past_title), under, backdrop, onBack = onBack) }) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp),
+        ) {
+            if (state?.past?.isEmpty() == true) {
+                item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_person_off), stringResource(R.string.huddle_past_empty)) }
+            }
+            items(state?.past.orEmpty().sortedByDescending { it.leftAt }, key = { it.id }, contentType = { "friend" }) { past ->
+                NavRow(
+                    title = past.name,
+                    sub = stringResource(R.string.huddle_friends_until, DateUtils.formatDateTime(context, past.leftAt, DateUtils.FORMAT_SHOW_DATE)),
+                    lead = { FriendFace(past.name, friendColor(past.id), 44.dp, ring = FaceRing.IDLE) },
+                ) { nav.open(Page.HuddleThread(past.id)) }
+            }
+        }
+    }
 }
 
 /**

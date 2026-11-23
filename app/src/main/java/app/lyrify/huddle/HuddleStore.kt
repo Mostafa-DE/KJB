@@ -82,6 +82,14 @@ data class Friend(
 }
 
 /**
+ * A friend who left (their goodbye, or you removed them) [leftAt], under the [name] you saw them by then
+ * ([Friend.shownName]). Their keys and mailboxes went; your history with them stays on the phone ([HuddleLog]) until you
+ * delete it.
+ */
+@Serializable
+data class PastFriend(val id: String, val name: String, val leftAt: Long)
+
+/**
  * An invite no friend joined yet: its key pair and token (base64url), its [owner] id on the server (only this phone
  * knows it: it reads and deletes the invite), when it was made, and a [card] to send once joined; [linked]: the card the
  * link itself carries, kept in the history as sent once a friend joins.
@@ -181,6 +189,8 @@ data class HuddleState(
     val backupKey: BackupKey? = null,
     /** Friends who joined your invites, by id, not yet greeted ("<name> joined your Huddle!", once each). */
     val joined: List<String> = emptyList(),
+    /** Friends who left, the oldest first: the Huddle page's Past friends, each with their history kept ([PastFriend]). */
+    val past: List<PastFriend> = emptyList(),
     /**
      * Each friend's newest now ([Message.Now], its time as received), by friend id: worth seconds, so kept in memory only
      * ([Huddle.state] adds it), never in huddle.json or a backup.
@@ -390,16 +400,20 @@ object HuddleBackup {
 /**
  * This phone's state with [backup]'s restored into it: friends and invites it does not have yet, each friend's latest
  * play of the two, its own name and Listen privately kept when set, and [key] (the passphrase the restore was opened with)
- * kept for the next backups. The backup's cards and plays go to the history (Huddle.restore).
+ * kept for the next backups. The backup's past friends it does not know come back as past friends, and a friend who left
+ * this phone stays left, their latest play too (a backup made before). The backup's cards and plays go to the history
+ * (Huddle.restore).
  */
 fun HuddleState.restored(backup: HuddleState, key: BackupKey): HuddleState {
     val boxes = friends.map { it.inBox }.toSet()
     val tokens = invites.map { it.token }.toSet()
+    val left = past.map { it.id }.toSet()
     return copy(
         name = name ?: backup.name,
-        friends = friends + backup.friends.filter { it.inBox !in boxes },
+        friends = friends + backup.friends.filter { it.inBox !in boxes && it.id !in left },
+        past = past + backup.past.filter { gone -> gone.id !in left && friends.none { it.id == gone.id } },
         invites = invites + backup.invites.filter { it.token !in tokens },
-        plays = latestPlays(plays + backup.plays),
+        plays = latestPlays(plays + backup.plays.filter { it.friend !in left }),
         privateUntil = privateUntil ?: backup.privateUntil,
         backupKey = key,
     )
@@ -530,7 +544,7 @@ interface HuddleLog {
     /** The card [id] a friend sent was played or looked at; [dismissed]: put away from the start screen too. */
     suspend fun opened(id: String, dismissed: Boolean): Boolean
 
-    /** Every card and play of [friend] let go: they were removed, or removed you. */
+    /** Every card and play of [friend] let go: Delete history on a past friend's page, or a friend who could not be written. */
     suspend fun forget(friend: String): Boolean
 
     companion object {

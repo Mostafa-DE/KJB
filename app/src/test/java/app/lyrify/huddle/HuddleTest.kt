@@ -54,6 +54,9 @@ class HuddleTest {
     /** The cards friends sent [this] phone, the newest first, as Sent to you's See all lists them. */
     private suspend fun Huddle.cards(): List<Received> = received(0, 100)
 
+    /** Made-up friends [ids] as huddle.json holds them: Suggestions read the plays of friends still here. */
+    private fun friendsOf(vararg ids: String): List<Friend> = ids.map { Friend(it, "Friend $it", "out-$it", "in-$it", "ok", "ik", "join-$it", addedAt = 0) }
+
     /** [huddle]'s new invite link with [card]. */
     private suspend fun link(huddle: Huddle, card: Card? = null): String = (huddle.invite(card) as Invited.Link).text
 
@@ -493,7 +496,7 @@ class HuddleTest {
     }
 
     @Test
-    fun `removing a friend tells them, and the friendship goes from both phones and the server`() = runTest {
+    fun `removing a friend tells them, the friendship goes from both phones and the server, and each keeps the history as a past friend`() = runTest {
         val (wren, wrenState) = phone("Wren")
         val (juniper, juniperState) = phone("Juniper")
         val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
@@ -508,13 +511,121 @@ class HuddleTest {
         assertTrue(wren.remove(juniperOnWren.id))
         assertTrue(wrenState.now.friends.isEmpty())
         assertFalse(juniperOnWren.inBox in server.boxes)
-        assertTrue("what went between you goes from the history", wren.thread(juniperOnWren.id, 0, 10).isEmpty())
-        assertTrue(wren.friendPlays(juniperOnWren.id, 0, 10).isEmpty())
+        // Changed on purpose (user 2026-11-23, item 59): what went between you stays, under the name you saw them by.
+        assertEquals(listOf(juniperOnWren.id to "Juniper"), wrenState.now.past.map { it.id to it.name })
+        assertEquals("what went between you stays", listOf(song), wren.thread(juniperOnWren.id, 0, 10).map { it.card })
+        assertEquals(listOf(lantern), wren.friendPlays(juniperOnWren.id, 0, 10).map { it.song })
         juniper.sync()
         assertTrue(juniperState.now.friends.isEmpty())
-        assertTrue("their cards go with them", juniper.cards().isEmpty())
-        assertTrue("and their plays", juniper.friendPlays(wrenOnJuniper.id, 0, 10).isEmpty())
+        assertEquals("their goodbye: a past friend on their phone too", listOf(wrenOnJuniper.id to "Wren"), juniperState.now.past.map { it.id to it.name })
+        assertEquals("their cards stay", listOf(song), juniper.cards().map { it.card })
+        assertEquals("and their plays", listOf(bell), juniper.friendPlays(wrenOnJuniper.id, 0, 10).map { it.song })
         assertTrue(server.boxes.values.all { it.isEmpty() })
+        assertTrue("nothing waits to go to them", wrenState.now.outbox.isEmpty() && juniperState.now.outbox.isEmpty())
+    }
+
+    @Test
+    fun `a goodbye keeps the history under the name you saw them by, drops what came after it unkept, and their mailbox is never read again`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper, song)
+        assertTrue(wren.rename(juniperOnWren.id, "June"))
+        juniper.played(lantern, now + testScheduler.currentTime)
+        // Later than the invite's card, so the thread's order is known.
+        advanceTimeBy(1_000)
+        juniper.send(wrenOnJuniper.id, Card(CardKind.SONG, listOf(bell), note = "one more"))
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        assertTrue(juniper.remove(wrenOnJuniper.id))
+        // After their goodbye, in the same mailbox (a second phone of theirs, a KJB gone wrong): sealed as their KJB seals.
+        server.replay(wrenOnJuniper.outBox, HuddleCrypto.encode(HuddleCrypto.seal(HuddleCrypto.decode(wrenOnJuniper.outKey)!!, Messages.encode(Message.Share("late-card", now + testScheduler.currentTime, Card(CardKind.SONG, listOf(bell), note = "after the goodbye"))), wrenOnJuniper.outBox.encodeToByteArray(), random)))
+        server.replay(wrenOnJuniper.outBox, HuddleCrypto.encode(HuddleCrypto.seal(HuddleCrypto.decode(wrenOnJuniper.outKey)!!, Messages.encode(Message.Play("late-play", now + testScheduler.currentTime, bell)), wrenOnJuniper.outBox.encodeToByteArray(), random)))
+        assertTrue(wren.sync())
+        assertTrue(wrenState.now.friends.isEmpty())
+        assertEquals(listOf(juniperOnWren.id to "June"), wrenState.now.past.map { it.id to it.name })
+        assertEquals("both ways, the newest first", listOf("one more", "for the drive"), wren.thread(juniperOnWren.id, 0, 10).map { it.card.note })
+        assertEquals(listOf(lantern), wren.friendPlays(juniperOnWren.id, 0, 10).map { it.song })
+        assertNull("a card after their goodbye is never kept", wren.card("late-card"))
+        server.replay(wrenOnJuniper.outBox, HuddleCrypto.encode(HuddleCrypto.seal(HuddleCrypto.decode(wrenOnJuniper.outKey)!!, Messages.encode(Message.Share("later-card", now + testScheduler.currentTime, Card(CardKind.SONG, listOf(bell), note = "later still"))), wrenOnJuniper.outBox.encodeToByteArray(), random)))
+        val reads = server.fetches
+        assertTrue(wren.sync())
+        assertEquals("a past friend's mailbox is not asked for", reads, server.fetches)
+        assertNull(wren.card("later-card"))
+        assertEquals(1, wrenState.now.past.size)
+    }
+
+    @Test
+    fun `only friends still here reach Suggestions, never the plays of a restore whose friends could not be written`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        friends(wren, juniper)
+        juniper.played(lantern, now + testScheduler.currentTime)
+        wren.sync()
+        wrenState.change { it.copy(backupKey = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)) }
+        val section = wren.backupSection()!!
+        val (newPhone, newState) = phone()
+        // The history takes the backup's plays first, then huddle.json cannot be written: nobody is a friend here.
+        newState.writable = false
+        assertNull(newPhone.restore(section, "correct horse".toCharArray()))
+        newState.writable = true
+        assertTrue(newState.now.friends.isEmpty())
+        assertTrue(HuddleFriends(newPhone).since(0).isEmpty())
+    }
+
+    @Test
+    fun `Delete history lets a past friend's cards and plays go from the phone and them from Past friends, nobody else's`() = runTest {
+        val history = history()
+        val (wren, wrenState) = phone("Wren", history = history)
+        val (juniper, _) = phone("Juniper")
+        val (rook, _) = phone("Rook")
+        val (juniperOnWren, _) = friends(wren, juniper, song)
+        val (wrenOnRook, rookOnWren) = friends(rook, wren)
+        juniper.played(lantern, now + testScheduler.currentTime)
+        rook.played(bell, now + testScheduler.currentTime)
+        rook.send(wrenOnRook.id, Card(CardKind.SONG, listOf(bell), note = "from Rook"))
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        wren.sync()
+        assertFalse("a friend still here has no Delete history", wren.deleteHistory(rookOnWren.id))
+        assertTrue(wren.remove(juniperOnWren.id))
+        history.forgetFails = true
+        assertFalse("nothing changes while the history cannot let go", wren.deleteHistory(juniperOnWren.id))
+        assertEquals(listOf(juniperOnWren.id), wrenState.now.past.map { it.id })
+        assertEquals(1, wren.thread(juniperOnWren.id, 0, 10).size)
+        history.forgetFails = false
+        val written = wren.cardsWritten.value to wren.playsWritten.value
+        assertTrue(wren.deleteHistory(juniperOnWren.id))
+        assertTrue(wrenState.now.past.isEmpty())
+        assertTrue(wren.thread(juniperOnWren.id, 0, 10).isEmpty())
+        assertTrue(wren.friendPlays(juniperOnWren.id, 0, 10).isEmpty())
+        assertTrue("the open lists read again", wren.cardsWritten.value > written.first && wren.playsWritten.value > written.second)
+        assertEquals("Rook's stay", listOf("from Rook"), wren.thread(rookOnWren.id, 0, 10).map { it.card.note })
+        assertEquals(listOf(bell), wren.friendPlays(rookOnWren.id, 0, 10).map { it.song })
+        assertFalse("once is enough", wren.deleteHistory(juniperOnWren.id))
+        // The rows go before Past friends is written: one that cannot be written keeps the person listed, with nothing
+        // left to show, and Delete history again finishes.
+        assertTrue(wren.remove(rookOnWren.id))
+        wrenState.writable = false
+        assertFalse(wren.deleteHistory(rookOnWren.id))
+        wrenState.writable = true
+        assertEquals(listOf(rookOnWren.id), wrenState.now.past.map { it.id })
+        assertTrue(wren.thread(rookOnWren.id, 0, 10).isEmpty())
+        assertTrue(wren.deleteHistory(rookOnWren.id))
+        assertTrue(wrenState.now.past.isEmpty())
+    }
+
+    @Test
+    fun `a past friend's plays stay for What they played but no longer reach Suggestions`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (rook, _) = phone("Rook")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        val (_, rookOnWren) = friends(rook, wren)
+        juniper.played(lantern, now + testScheduler.currentTime)
+        rook.played(bell, now + testScheduler.currentTime)
+        wren.sync()
+        assertEquals(setOf(juniperOnWren.id, rookOnWren.id), HuddleFriends(wren).since(0).map { it.friend }.toSet())
+        assertTrue(wren.remove(juniperOnWren.id))
+        assertEquals(listOf(lantern), wren.friendPlays(juniperOnWren.id, 0, 10).map { it.song })
+        assertEquals(listOf(rookOnWren.id), HuddleFriends(wren).since(0).map { it.friend })
     }
 
     @Test
@@ -1222,8 +1333,9 @@ class HuddleTest {
     @Test
     fun `friends' plays reach Suggestions the oldest first, from the time asked`() = runTest {
         val plays = listOf(FriendPlay("f1", now - 100, bell, favourite = true), FriendPlay("f2", now - 200, lantern), FriendPlay("f1", now - 300, lantern))
-        // Changed on purpose: the plays come from the history, here as huddle.json kept them before and moved once.
-        val (wren, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", plays = plays)))
+        // Changed on purpose: the plays come from the history, here as huddle.json kept them before and moved once; and
+        // (HY2) only friends still here reach Suggestions, so the state names them.
+        val (wren, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", friends = friendsOf("f1", "f2"), plays = plays)))
         assertEquals(
             listOf(
                 SuggestionsPlay("f2", lantern.title, lantern.artist, lantern.album, lantern.durationMs, now - 200),
@@ -1231,7 +1343,7 @@ class HuddleTest {
             ),
             HuddleFriends(wren).since(now - 200),
         )
-        val (rook, _) = phone(storage = MemoryHuddle(HuddleState(name = "Rook", plays = listOf(FriendPlay("f1", now, bell.copy(durationMs = 0))))))
+        val (rook, _) = phone(storage = MemoryHuddle(HuddleState(name = "Rook", friends = friendsOf("f1"), plays = listOf(FriendPlay("f1", now, bell.copy(durationMs = 0))))))
         assertEquals(null, HuddleFriends(rook).since(0).single().durationMs)
         assertTrue(HuddleFriends(phone("Kai").first).since(0).isEmpty())
     }
@@ -1246,7 +1358,7 @@ class HuddleTest {
         val before = plays.filter { it.at >= from }.sortedBy { it.at }.map { play ->
             SuggestionsPlay(play.friend, play.song.title, play.song.artist, play.song.album, play.song.durationMs.takeIf { it > 0 }, play.at, play.favourite)
         }
-        val (wren, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", plays = plays)))
+        val (wren, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", friends = friendsOf("f0", "f1", "f2"), plays = plays)))
         assertEquals(before, HuddleFriends(wren).since(from))
     }
 
@@ -1266,7 +1378,8 @@ class HuddleTest {
         // KJB again (a new run over the same files), and a run whose huddle.json write was lost after the history's.
         val (again, _) = phone(storage = storage, history = history)
         assertEquals(inbox, again.cards())
-        val (lost, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", inbox = inbox, plays = plays)), history = history)
+        // (HY2) Suggestions read friends still here: this state names them.
+        val (lost, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", friends = friendsOf("f1", "f2"), inbox = inbox, plays = plays)), history = history)
         assertEquals(inbox, lost.cards())
         assertEquals(2_500, lost.friendPlays("f1", 0, 10_000).size)
         assertEquals(plays.size, HuddleFriends(lost).since(0).size)
@@ -1639,33 +1752,62 @@ class HuddleTest {
     }
 
     @Test
-    fun `a friend whose history cannot be let go is not removed, and goes with it once it can`() = runTest {
+    fun `a friend is removed while plays_db cannot be written, and the history is there once it can be read`() = runTest {
+        // Changed on purpose (user 2026-11-23, item 59): removing a friend no longer lets their history go, so it needs none of it.
         val history = history()
         val (wren, wrenState) = phone("Wren", history = history)
         val (juniper, _) = phone("Juniper")
         val (juniperOnWren, _) = friends(wren, juniper, song)
-        history.forgetFails = true
-        assertFalse(wren.remove(juniperOnWren.id))
-        assertEquals(listOf(juniperOnWren.id), wrenState.now.friends.map { it.id })
-        history.forgetFails = false
+        history.failing = true
         assertTrue(wren.remove(juniperOnWren.id))
         assertTrue(wrenState.now.friends.isEmpty())
-        assertTrue(history.cards(0, 10).orEmpty().isEmpty())
+        assertEquals(listOf(juniperOnWren.id), wrenState.now.past.map { it.id })
+        history.failing = false
+        assertEquals(listOf(song), wren.thread(juniperOnWren.id, 0, 10).map { it.card })
     }
 
     @Test
-    fun `a goodbye whose friend's history cannot be let go is read again, and the friend goes with their history once it can`() = runTest {
+    fun `a goodbye read while plays_db cannot be written is read again, and the friend is past with all they sent once it can`() = runTest {
+        // Changed on purpose (user 2026-11-23, item 59): a goodbye keeps the history; what came with it is kept first.
         val history = history()
         val (wren, wrenState) = phone("Wren", history = history)
         val (juniper, _) = phone("Juniper")
-        val (_, wrenOnJuniper) = friends(wren, juniper, song)
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper, song)
+        advanceTimeBy(1_000)
+        juniper.send(wrenOnJuniper.id, Card(CardKind.SONG, listOf(bell), note = "last one"))
+        advanceTimeBy(Huddle.UNDO_MS + 1)
         assertTrue(juniper.remove(wrenOnJuniper.id))
-        history.forgetFails = true
+        history.failing = true
         assertFalse(wren.sync())
-        assertEquals("a friend until their history goes", 1, wrenState.now.friends.size)
-        history.forgetFails = false
+        assertEquals("a friend until what came is kept", 1, wrenState.now.friends.size)
+        history.failing = false
         assertTrue(wren.sync())
         assertTrue(wrenState.now.friends.isEmpty())
-        assertTrue(history.cards(0, 10).orEmpty().isEmpty())
+        assertEquals(listOf(juniperOnWren.id), wrenState.now.past.map { it.id })
+        assertEquals(listOf("last one", "for the drive"), wren.thread(juniperOnWren.id, 0, 10).map { it.card.note })
+    }
+
+    @Test
+    fun `a backup keeps past friends and their history, and a restore brings them back as past friends, never as friends again`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper, song)
+        juniper.played(lantern, now + testScheduler.currentTime)
+        wren.sync()
+        wrenState.change { it.copy(backupKey = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)) }
+        // Made while they were friends.
+        val older = wren.backupSection()!!
+        assertTrue(wren.remove(juniperOnWren.id))
+        val section = wren.backupSection()!!
+        val (newPhone, newState) = phone()
+        assertEquals(0, newPhone.restore(section, "correct horse".toCharArray()))
+        assertEquals(listOf(juniperOnWren.id), newState.now.past.map { it.id })
+        assertEquals(wrenState.now.past, newState.now.past)
+        assertTrue(newState.now.friends.isEmpty())
+        assertEquals(wren.thread(juniperOnWren.id, 0, 10), newPhone.thread(juniperOnWren.id, 0, 10))
+        assertEquals(listOf(lantern), newPhone.friendPlays(juniperOnWren.id, 0, 10).map { it.song })
+        assertEquals(1, wren.restore(older, "correct horse".toCharArray()))
+        assertTrue("left on this phone, they stay left", wrenState.now.friends.isEmpty())
+        assertEquals(listOf(juniperOnWren.id), wrenState.now.past.map { it.id })
     }
 }
