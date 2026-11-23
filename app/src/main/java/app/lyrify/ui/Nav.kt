@@ -294,13 +294,14 @@ data class NavState(
 
     /**
      * A dock tap: another tab (the one left joins the history), or the tab shown popped to its root, or at its root to
-     * the top. Opening Search also counts for Search: its field takes focus whenever the tab opens. Library's icon always
-     * lands on the tab Library opens on (KJB 3.1: no longer always Songs): wherever it shows Library's root, that is its
-     * top tab, and only a tap while there goes to the top. A page left open on Library keeps the top tab under it.
+     * the top. Search always lands on its field, the pages opened there dropped (its words and results stay), and every
+     * tap on it counts: its field takes the focus with its words selected. Library's icon always lands on the tab Library
+     * opens on (KJB 3.1: no longer always Songs): wherever it shows Library's root, that is its top tab, and only a tap
+     * while there goes to the top. A page left open on Library keeps the top tab under it.
      */
     fun select(tab: DockTab): NavState = with(copy(views = emptyList(), reopen = null)) {
         when {
-            tab == DockTab.SEARCH && tab != this.tab -> visit(tab).copy(reselects = reselects + (tab to reselectsOf(tab) + 1))
+            tab == DockTab.SEARCH -> visit(tab).copy(stacks = stacks - tab, reselects = reselects + (tab to reselectsOf(tab) + 1))
             tab != this.tab -> visit(tab).onFirstTab()
             pages.isNotEmpty() -> copy(stacks = stacks - tab).onFirstTab()
             tab == DockTab.LIBRARY && libraryTab != null -> copy(libraryTab = null)
