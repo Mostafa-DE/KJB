@@ -305,7 +305,7 @@ fun TonesScreen(ledger: LedgerState, contentPadding: PaddingValues, toasts: Toas
     }
 
     if (picking) {
-        TonePicker(ledger, onDismiss = { picking = false }) {
+        SongPickerScreen(ledger, onDismiss = { picking = false }) {
             picking = false
             editing = it.path
         }
@@ -454,9 +454,9 @@ private fun DefaultPill(kind: ToneKind) {
     }
 }
 
-/** The song picker: the Songs list with its search, filters and covers, full screen; a tap picks the song. */
+/** The song picker: the Songs list with its search, filters and covers, full screen; a tap picks the song (a tone's, a song for a friend). */
 @Composable
-private fun TonePicker(ledger: LedgerState, onDismiss: () -> Unit, onPick: (LedgerEntry) -> Unit) {
+internal fun SongPickerScreen(ledger: LedgerState, onDismiss: () -> Unit, onPick: (LedgerEntry) -> Unit) {
     FullScreen(onDismiss) {
         var query by rememberSaveable(stateSaver = SongQuery.Saver) { mutableStateOf(SongQuery()) }
         val focus = remember { FocusRequester() }

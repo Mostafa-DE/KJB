@@ -414,7 +414,7 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     // Files another app opened, Shuffle all and Resume: they play, then the player shows.
     LaunchWork(opened.launch, opened.onLaunchDone, opened.onPlayer)
     // Huddle: its syncs while KJB is in front, and an invite link another app opened.
-    HuddleHost(opened.invite, opened.onInviteTaken)
+    HuddleHost(opened.invite, opened.onInviteTaken, opened.onPlayer, state)
     // KJB's update, when the check finds one; the check runs when KJB comes to the front and each hour it stays there.
     UpdateHost()
     LifecycleStartEffect(context) {

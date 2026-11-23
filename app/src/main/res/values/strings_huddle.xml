@@ -14,27 +14,25 @@
     </plurals>
 
     <!-- The Huddle page -->
-    <string name="huddle_empty_title">No friends yet</string>
-    <string name="huddle_empty_text">Invite a friend with a link in any chat. Once they open it, you can send each other songs.</string>
+    <string name="huddle_empty_title">Your Huddle has room for friends</string>
+    <string name="huddle_empty_text">Invite a friend with a link. When they play music, it shows up here.</string>
     <string name="huddle_invite">Invite a friend</string>
     <string name="huddle_paste">Paste invite</string>
     <string name="huddle_paste_none">No invite on your clipboard. Copy the link your friend sent, then try again.</string>
-    <string name="huddle_friends_title">Friends</string>
     <string name="huddle_inbox_title">Sent to you</string>
     <string name="huddle_waiting_title">Invites waiting</string>
     <!-- An invite no friend has joined yet: when it was sent ("Sent 2 hours ago"). -->
     <string name="huddle_waiting_row">Sent %1$s</string>
     <string name="huddle_cancel_invite">Cancel invite</string>
     <string name="huddle_no_answer">Couldn\'t reach Huddle. Check your connection and try again.</string>
-    <!-- A friend's line: what they play now, or played last ("Played Paper Lantern, 2 hours ago"). -->
-    <string name="huddle_playing">Playing %1$s</string>
+    <!-- A friend not playing now: what they played last ("Played Paper Lantern by Kit Calloway, 2 hours ago"). -->
     <string name="huddle_played">Played %1$s, %2$s</string>
     <string name="huddle_friend_more">More for %1$s</string>
     <string name="huddle_rename_title">Rename %1$s</string>
     <string name="huddle_share_plays">Share what I play</string>
     <string name="huddle_share_plays_on">%1$s sees each song you play</string>
     <string name="huddle_share_plays_off">%1$s doesn\'t see what you play</string>
-    <string name="huddle_remove">Remove friend</string>
+    <string name="huddle_remove">Remove from Huddle</string>
     <string name="huddle_remove_title">Remove %1$s?</string>
     <string name="huddle_remove_text">You stop sending each other songs. What they sent leaves this phone, and their KJB removes you too.</string>
     <string name="huddle_removed">Removed %1$s</string>
@@ -42,8 +40,6 @@
     <!-- Listen privately: no play is shared for a while. -->
     <string name="huddle_private">Listen privately</string>
     <string name="huddle_private_off">Friends you share with see what you play</string>
-    <string name="huddle_private_until">On until %1$s</string>
-    <string name="huddle_private_forever">On until you turn it off</string>
     <string name="huddle_private_hour">For an hour</string>
     <string name="huddle_private_always">Until I turn it off</string>
 
@@ -67,7 +63,7 @@
 
     <!-- What leaves your phone. -->
     <string name="huddle_privacy_title">What leaves your phone</string>
-    <string name="huddle_privacy">What you send goes through Huddle\'s server sealed, so only your friend\'s phone can read it: each song\'s title, artist, album and length, your note and your name, never the file. With Share what I play on, so does each song you play, unless you listen privately. The server keeps no names, accounts or phone numbers. It sees that two phones exchange messages, and when.</string>
+    <string name="huddle_privacy">What you send goes through Huddle\'s server sealed, so only your friend\'s phone can read it: each song\'s title, artist, album and length, your note and your name, never the file. Share what I play is on for each friend from the moment they join, so each song you play goes to them too, unless you stop sharing with them or listen privately. The server keeps no names, accounts or phone numbers. It sees that two phones exchange messages, and when.</string>
 
     <!-- Send to a friend: the song sheet, the player, an album's and a playlist's menu. -->
     <string name="huddle_send">Send to a friend</string>
@@ -85,9 +81,6 @@
 
     <!-- The start screen's row, and a card sent to you. -->
     <string name="huddle_from">From %1$s</string>
-    <string name="huddle_dismiss">Dismiss</string>
-    <!-- TalkBack: a card not opened yet, the one shown in coral. -->
-    <string name="huddle_new">New</string>
     <string name="huddle_play">Play</string>
     <plurals name="huddle_play_found">
         <item quantity="one">Play the one you have</item>
@@ -114,20 +107,139 @@
 
     <!-- Opening an invite link. -->
     <string name="huddle_accept_title">%1$s invites you to Huddle</string>
-    <string name="huddle_accept_text">You can send each other songs. Only song details travel, never the files.</string>
-    <string name="huddle_accept_song">%1$s sent you %2$s</string>
-    <string name="huddle_accept">Add %1$s</string>
-    <string name="huddle_accept_play">Play and add %1$s</string>
+    <string name="huddle_accept_text">Friends in a Huddle see what each other plays and send each other songs.</string>
     <string name="huddle_not_now">Not now</string>
     <string name="huddle_accept_taken">Someone already used this invite. Ask %1$s for a new one.</string>
     <string name="huddle_accept_expired">This invite has expired. Ask %1$s for a new one.</string>
     <string name="huddle_accept_own">This is your own invite. Send it to a friend.</string>
     <string name="huddle_accept_bad">This invite link doesn\'t work. It may have been cut short.</string>
     <string name="huddle_joined">%1$s is your friend now</string>
+    <string name="huddle_accept_sent">%1$s sent you</string>
+    <string name="huddle_join">Join</string>
+    <!-- "Join and play Paper Lantern". -->
+    <string name="huddle_join_play">Join and play %1$s</string>
+    <string name="huddle_join_sees">%1$s will see what you play, and you\'ll see theirs.</string>
+    <string name="huddle_join_stop">Stop sharing with %1$s, or listen privately, any time.</string>
+    <string name="huddle_join_name_hint">%1$s sees this name. You can change it later.</string>
+    <!-- Your own empty seat on the join screen. -->
+    <string name="huddle_you">You</string>
     <string name="huddle_already">You\'re already friends with %1$s</string>
 
     <!-- Restore: the backup's friends, with the passphrase. -->
     <string name="huddle_restore_row">Huddle friends</string>
     <string name="huddle_restore_wrong">That passphrase doesn\'t open your Huddle friends. Try again, or untick Huddle friends.</string>
     <string name="huddle_restore_one_phone">Bring them back on one phone only: two phones with the same friends would take each other\'s songs.</string>
+
+    <!-- Your name, asked before anything else the first time; never removed, only changed. -->
+    <string name="huddle_gate_title">Pick your name</string>
+    <string name="huddle_gate_text">Friends in your Huddle see this name. You can change it later, but not remove it.</string>
+    <!-- A friend already has a friend with your name ("Wren already has a friend called Juniper..."). -->
+    <string name="huddle_new_name_title">Pick another name</string>
+    <string name="huddle_new_name_text">%1$s already has a friend called %2$s. Pick another name so they can tell you apart.</string>
+    <string name="huddle_new_name_action">Pick a name</string>
+    <!-- A friend shown under a stand-in name: "Shown as Juniper 2 until they pick another name than Juniper". -->
+    <string name="huddle_taken_note">Shown as %1$s until they pick another name than %2$s</string>
+
+    <!-- The Huddle page: Listening now, Sent to you, Not playing. -->
+    <string name="huddle_listening_now">Listening now</string>
+    <string name="huddle_playing_now">Playing now</string>
+    <string name="huddle_play_along">Play along</string>
+    <string name="huddle_not_playing">Not playing</string>
+    <string name="huddle_nothing_yet">Nothing shared yet</string>
+    <string name="huddle_nobody_playing">Nobody\'s playing right now</string>
+    <string name="huddle_nobody_playing_text">When a friend plays music, they show up here.</string>
+    <string name="huddle_invite_card_text">They show up here when they play</string>
+    <plurals name="huddle_new_count">
+        <item quantity="one">%d new</item>
+        <item quantity="other">%d new</item>
+    </plurals>
+    <string name="huddle_new">New</string>
+    <!-- A note a friend wrote, in quotes. -->
+    <string name="huddle_note_quoted">\u201C%1$s\u201D</string>
+    <!-- A postcard's play button: "Play Paper Lantern · Kit Calloway". -->
+    <string name="huddle_play_card">Play %1$s</string>
+    <string name="huddle_found_some">%1$d of %2$d in your library</string>
+    <!-- The faded example postcard, before anyone sent a song. -->
+    <string name="huddle_example">What it looks like</string>
+    <string name="huddle_example_note">For your walk home</string>
+    <string name="huddle_example_friend">a friend</string>
+    <string name="huddle_example_song">A song · Its artist</string>
+
+    <!-- Listen privately, on the page and in its sheet. -->
+    <plurals name="huddle_private_sees">
+        <item quantity="one">%d friend sees what you play</item>
+        <item quantity="other">%d friends see what you play</item>
+    </plurals>
+    <string name="huddle_private_nobody">Nobody sees what you play</string>
+    <string name="huddle_private_row_until">On until %1$s. Friends see nothing you play</string>
+    <string name="huddle_private_row_forever">On until you turn it off. Friends see nothing you play</string>
+    <string name="huddle_private_text">Friends stop seeing what you play. Songs they send still arrive.</string>
+    <string name="huddle_private_hour_until">Until %1$s</string>
+    <string name="huddle_private_always_text">Stays on until you switch it back</string>
+    <string name="huddle_private_stop">Share again now</string>
+
+    <!-- Library's friends row (each word fits under a face). -->
+    <string name="huddle_row_invite">Invite</string>
+    <string name="huddle_row_invite_line">a friend</string>
+    <string name="huddle_row_private">Private</string>
+    <string name="huddle_row_private_until">Until %1$s</string>
+    <string name="huddle_row_private_on">On</string>
+    <string name="huddle_private_desc">Listening privately, %1$s</string>
+    <!-- What TalkBack reads for a face: "Wren, playing Paper Lantern by Kit Calloway". -->
+    <string name="huddle_row_playing">%1$s, playing %2$s</string>
+    <string name="huddle_row_played">%1$s, played %2$s, %3$s</string>
+    <string name="huddle_sent_you">sent you a song</string>
+
+    <!-- A card a friend sent. -->
+    <string name="huddle_sent_song">%1$s sent you a song</string>
+    <string name="huddle_sent_album">%1$s sent you an album</string>
+    <string name="huddle_sent_playlist">%1$s sent you a playlist</string>
+    <string name="huddle_open_card">Open</string>
+    <string name="huddle_hide">Hide</string>
+    <string name="huddle_send_back">Send back</string>
+
+    <!-- A friend's song, from their face or card. -->
+    <string name="huddle_play_it">Play it</string>
+    <string name="huddle_send_song">Send a song</string>
+    <string name="huddle_their_favourite">One of %1$s\'s favourites</string>
+    <!-- "Play along starts at 1:12, where Wren is now. Play it starts from the top." -->
+    <string name="huddle_play_along_foot">Play along starts at %1$s, where %2$s is now. Play it starts from the top.</string>
+
+    <!-- A friend's menu. -->
+    <string name="huddle_send_song_to">Send %1$s a song</string>
+    <!-- "Friends since 3 November · sees what you play". -->
+    <string name="huddle_friends_since_sees">Friends since %1$s · sees what you play</string>
+    <string name="huddle_friends_since">Friends since %1$s</string>
+    <string name="huddle_stop_sharing">Stop sharing with %1$s</string>
+    <string name="huddle_stop_sharing_text">%1$s stops seeing what you play. Songs still go both ways.</string>
+    <string name="huddle_share_again">Share with %1$s again</string>
+    <string name="huddle_rename_text">Only on your phone</string>
+    <string name="huddle_remove_row_text">You stop sending each other songs, and %1$s\'s KJB removes you too.</string>
+
+    <!-- The invite ticket. -->
+    <string name="huddle_ticket_text">Send this ticket in any chat.</string>
+    <string name="huddle_ticket_kicker">Huddle ticket</string>
+    <!-- "A seat in Kai's Huddle". -->
+    <string name="huddle_ticket_seat">A seat in %1$s\'s Huddle</string>
+    <string name="huddle_ticket_once">Works once, for one friend. Ends in 7\u00A0days.</string>
+    <string name="huddle_ticket_song">Comes with</string>
+    <string name="huddle_ticket_admit">Admit one</string>
+    <string name="huddle_ticket_sees">Once they join, you see what each other plays. Sharing is on for both of you.</string>
+    <string name="huddle_ticket_stop">Stop sharing with anyone, or listen privately, whenever you like.</string>
+    <string name="huddle_ticket_details">Only song details travel, never the files.</string>
+    <string name="huddle_share_link">Share link</string>
+    <string name="huddle_copy_link">Copy link</string>
+    <string name="huddle_link_copied">Link copied</string>
+
+    <!-- A friend joined your invite. -->
+    <string name="huddle_joined_title">%1$s joined your Huddle!</string>
+    <string name="huddle_joined_text">You see each other\'s music now, and can send each other songs.</string>
+    <string name="huddle_joined_sharing_on">On. %1$s sees each song you play</string>
+    <!-- A friend playing what you play: the player's line and the Now bar's face ("Wren is playing this too"). -->
+    <string name="huddle_on_song">%1$s is playing this too</string>
+    <!-- "Omar is playing Kestrel too": the same artist. -->
+    <string name="huddle_on_artist">%1$s is playing %2$s too</string>
+    <!-- The bar's Huddle item, for TalkBack while a friend plays now. -->
+    <string name="huddle_live_dot">a friend is playing</string>
+    <string name="huddle_joined_sharing_off">Off. %1$s doesn\'t see what you play. Songs still go both ways</string>
 </resources>

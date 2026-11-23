@@ -190,6 +190,7 @@ internal fun BooksTab(library: Library, padding: PaddingValues, reselect: Int, i
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (inLibrary) recapCard(LibraryTab.BOOKS)
+        if (inLibrary) huddleFriends(LibraryTab.BOOKS)
         if (going != null) {
             item(key = "continue heading", span = { GridItemSpan(maxLineSpan) }, contentType = "heading") {
                 Box(rowMotion(reduced)) { BooksHeading(stringResource(R.string.books_continue)) }

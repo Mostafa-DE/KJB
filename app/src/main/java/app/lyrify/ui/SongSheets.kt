@@ -225,7 +225,7 @@ private val SheetSongTitle = display(21, 26, -0.01)
 
 /** A row of a sheet: its icon, its words (and a [supporting] line under them), maybe a value and a chevron; 52 dp tall; [danger] in red. */
 @Composable
-private fun ActionRow(
+internal fun ActionRow(
     @DrawableRes icon: Int,
     text: String,
     modifier: Modifier = Modifier,
@@ -456,7 +456,10 @@ internal fun SelectionMoreSheet(count: Int, onInfo: (() -> Unit)?, onEditTags: (
     }
 }
 
-/** A name for something new or renamed: a field that starts at [start] ([NameField]); Create (or [confirm]) waits for a name. */
+/**
+ * A name for something new or renamed: a field that starts at [start] ([NameField]), maybe a [text] saying why; Create
+ * (or [confirm]) waits for a name.
+ */
 @Composable
 internal fun NameDialog(
     title: String,
@@ -464,6 +467,7 @@ internal fun NameDialog(
     @DrawableRes icon: Int,
     onDismiss: () -> Unit,
     @StringRes confirm: Int = R.string.lib_create,
+    text: String? = null,
     onName: (String) -> Unit,
 ) {
     var name by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(nameField(start)) }
@@ -473,6 +477,7 @@ internal fun NameDialog(
         dismiss = stringResource(R.string.remove_cancel),
         onConfirm = { onName(name.text.trim()) },
         onDismiss = onDismiss,
+        text = text,
         icon = icon,
         destructive = false,
         confirmEnabled = name.text.isNotBlank(),

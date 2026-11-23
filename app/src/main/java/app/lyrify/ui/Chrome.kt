@@ -10,7 +10,10 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -241,6 +244,7 @@ val DockTab.label: Int
         DockTab.DOWNLOADS -> R.string.nav_downloads
         DockTab.BOOKS -> R.string.nav_books
         DockTab.INSIGHTS -> R.string.nav_insights
+        DockTab.HUDDLE -> R.string.huddle_title
         DockTab.SEARCH -> R.string.nav_search
         DockTab.TOOLS -> R.string.nav_tools
     }
@@ -255,6 +259,7 @@ val DockTab.icon: Int
         DockTab.DOWNLOADS -> R.drawable.ic_download
         DockTab.BOOKS -> R.drawable.ic_auto_stories
         DockTab.INSIGHTS -> R.drawable.ic_bar_chart
+        DockTab.HUDDLE -> R.drawable.ic_group
         DockTab.SEARCH -> R.drawable.ic_search
         DockTab.TOOLS -> R.drawable.ic_handyman
     }
@@ -282,11 +287,22 @@ fun tabSlide(from: DockTab, to: DockTab, order: List<DockTab> = DOCK_TABS): Int 
     return place(to).compareTo(place(from)).coerceIn(-1, 1)
 }
 
-/** The dot on a dock item: it pops in and out, never appearing at once. */
+/**
+ * The dot on a dock item: it pops in and out, never appearing at once. [ping]: a ring spreads from it and fades, again
+ * and again (Huddle's "a friend is playing now"); not when motion is off.
+ */
 @Composable
-private fun DockDot(dot: Boolean, modifier: Modifier) {
+private fun DockDot(dot: Boolean, modifier: Modifier, ping: Boolean = false) {
     val reduced = LocalReducedMotion.current
-    AnimatedVisibility(dot, modifier, enter = badgeIn(reduced), exit = badgeOut(reduced)) { DotBadge() }
+    val highlight = LocalBrandColors.current.highlight
+    AnimatedVisibility(dot, modifier, enter = badgeIn(reduced), exit = badgeOut(reduced)) {
+        val spread = if (ping && !reduced) rememberInfiniteTransition(label = "ping").animateFloat(0f, 1f, infiniteRepeatable(tween(PING_MS, easing = Motion.EmphasizedIn)), label = "spread") else null
+        DotBadge(
+            Modifier.drawBehind {
+                spread?.let { drawCircle(highlight.copy(alpha = 0.7f * (1f - it.value)), radius = size.minDimension / 2 * (1f + 1.6f * it.value)) }
+            },
+        )
+    }
 }
 
 /** A dock item's name for TalkBack: its label, then its dot when it has one. */
@@ -294,15 +310,16 @@ fun dockItemName(vararg parts: String?): String = parts.filterNotNull().joinToSt
 
 /**
  * The dock: a glass capsule with the user's [items] (Library, Playlists, Search and Tools by default), the selected one
- * marked by the sung line, none while the tab shown is off the bar; a dot on Tools when something there needs the user.
+ * marked by the sung line, none while the tab shown is off the bar; a dot on Tools when something there needs the user,
+ * and a pinging one on Huddle while a friend plays now ([live]).
  * [style]: Standard, 64 dp, each icon over its name (all names a little smaller when one would not fit, else icons
  * only), or Slim, 48 dp, icons only (user 2026-11-18); without names, holding an icon shows its name. TalkBack hears
  * every item's name either way.
  */
 @Composable
-fun Dock(items: List<DockTab>, selected: DockTab, style: DockStyle, dot: Boolean, onSelect: (DockTab) -> Unit, modifier: Modifier = Modifier) {
+fun Dock(items: List<DockTab>, selected: DockTab, style: DockStyle, dot: Boolean, onSelect: (DockTab) -> Unit, modifier: Modifier = Modifier, live: Boolean = false) {
     GlassSurface(null, CircleShape, modifier.fillMaxWidth().padding(horizontal = 12.dp).tourChrome(), solid = true) {
-        DockItems(items, selected, style, dot, onSelect)
+        DockItems(items, selected, style, dot, onSelect, live)
     }
 }
 
@@ -312,7 +329,7 @@ fun Dock(items: List<DockTab>, selected: DockTab, style: DockStyle, dot: Boolean
  * grows past its room when picked.
  */
 @Composable
-private fun DockItems(items: List<DockTab>, selected: DockTab, style: DockStyle, dot: Boolean, onSelect: (DockTab) -> Unit) {
+private fun DockItems(items: List<DockTab>, selected: DockTab, style: DockStyle, dot: Boolean, onSelect: (DockTab) -> Unit, live: Boolean) {
     val highlight = LocalBrandColors.current.highlight
     val reduced = LocalReducedMotion.current
     val density = LocalDensity.current
@@ -347,7 +364,7 @@ private fun DockItems(items: List<DockTab>, selected: DockTab, style: DockStyle,
         Layout(
             content = {
                 items.forEachIndexed { index, tab ->
-                    DockItem(tab, labels[index], tab == selected, dot && tab == DockTab.TOOLS, names, height, Modifier.tourTarget(dockStop(tab))) { onSelect(tab) }
+                    DockItem(tab, labels[index], tab == selected, dot && tab == DockTab.TOOLS, live && tab == DockTab.HUDDLE, names, height, Modifier.tourTarget(dockStop(tab))) { onSelect(tab) }
                 }
             },
             modifier = Modifier
@@ -390,12 +407,12 @@ private fun DockItems(items: List<DockTab>, selected: DockTab, style: DockStyle,
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DockItem(tab: DockTab, label: String, selected: Boolean, dot: Boolean, names: TextStyle?, height: Dp, modifier: Modifier, onClick: () -> Unit) {
+private fun DockItem(tab: DockTab, label: String, selected: Boolean, dot: Boolean, live: Boolean, names: TextStyle?, height: Dp, modifier: Modifier, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
     // The label and icon take the selected look over the line's own travel time, never at once.
     val lit by animateFloatAsState(if (selected) 1f else 0f, motion(tween(Motion.SHORT_MS, easing = Motion.Standard), LocalReducedMotion.current), label = "dock item")
-    val name = dockItemName(label, if (dot) stringResource(R.string.nav_attention) else null)
+    val name = dockItemName(label, if (dot) stringResource(R.string.nav_attention) else null, if (live) stringResource(R.string.huddle_live_dot) else null)
     val press = PressIndication(RoundedCornerShape(20.dp), 0.92f)
     val icon: @Composable () -> Unit = {
         Box(Modifier.testTag(DOCK_ICON_TAG)) {
@@ -405,7 +422,7 @@ private fun DockItem(tab: DockTab, label: String, selected: Boolean, dot: Boolea
                 tint = lerp(colors.onSurfaceVariant, brand.highlight, lit),
                 modifier = Modifier.size(24.dp),
             )
-            DockDot(dot, Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp))
+            DockDot(dot || live, Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp), ping = live)
         }
     }
     if (names != null) {
@@ -976,6 +993,9 @@ private val GLASS_BLUR = 24.dp
 private val GLASS_SHADOW = 16.dp
 private val BAR_HEIGHT = 64.dp
 private const val BAND_FADE_MS = 180
+
+/** One spread of the live dot's ring (the mockup's ping). */
+private const val PING_MS = 1_800
 
 /** The sung line sits this far above the capsule's bottom edge, under the labels; on the Slim bar a little lower. */
 private val LINE_BOTTOM = 7.dp

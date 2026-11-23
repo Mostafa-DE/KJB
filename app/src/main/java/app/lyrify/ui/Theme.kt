@@ -88,6 +88,46 @@ val BrandInkBorder: Color = Color(0xFF5A50AE)
 /** The coral of the K's note: a toast's action. */
 val LauncherCoral: Color = Color(0xFFFF8A70)
 
+// Huddle (the approved mockup, handoff/huddle/preview-huddle-v4.html): its friends' faces and its own grounds
+
+/**
+ * Friends' colours (the mockup's hues, a little deeper): a face's ground, its ring, its postcard's
+ * stamp and a song's pattern when you do not have it. Lilac initials read on each at 4.5:1 or more (HuddleScreenTest).
+ */
+val FriendColors: List<Color> = listOf(
+    Color(0xFFB4462D),
+    Color(0xFF0E766B),
+    Color(0xFF7A4FD0),
+    Color(0xFF8F5D10),
+    Color(0xFFB83672),
+    Color(0xFF2A66C4),
+    Color(0xFF23784A),
+)
+
+/** Your own face: the brand's ink violet, apart from every friend's. */
+val OwnFaceColor: Color = Color(0xFF4B3AA8)
+
+/** The gold of a live ring, a spark, confetti and the join screen's note, with [OnHuddleGold] on it. */
+val HuddleGold: Color = Color(0xFFFFB547)
+val OnHuddleGold: Color = Color(0xFF2A1A00)
+
+/** A postcard's paper and its dashed lines, warmer than the page; the page's inks keep 4.5:1 on it (HuddleScreenTest). */
+@Immutable
+data class PaperColors(val paper: Color, val line: Color)
+
+val LightPaper: PaperColors = PaperColors(Color(0xFFFFF8EC), Color(0xFFEADFCB))
+val DarkPaper: PaperColors = PaperColors(Color(0xFF221E27), Color(0xFF39323F))
+
+/**
+ * Huddle's dark grounds, the same in both themes, with [BrandLilac] words: a friend's card under its glowing cover and
+ * the shade over the glow, the empty card's ground and its coral, violet and teal glows, and the ticket's ink to pink.
+ */
+val HuddleCardGround: Color = Color(0xFF241C33)
+val HuddleCardShade: Color = Color(0xFF0C0818)
+val HuddleEmptyGround: Color = Color(0xFF2A1F5C)
+val HuddleEmptyGlows: List<Color> = listOf(Color(0xFFD4573B), Color(0xFF7A4FD0), Color(0xFF0F7F74))
+val HuddleTicket: List<Color> = listOf(Color(0xFF4B3AA8), Color(0xFF8A3AA0), Color(0xFFB83672))
+
 /** Side margin of every screen (M3 compact window margin). */
 val ScreenPadding = 16.dp
 

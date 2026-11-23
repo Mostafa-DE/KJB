@@ -314,7 +314,7 @@ class ChromeTest {
         assertEquals(
             mapOf(
                 "LibraryScreen.kt" to 2, "SearchScreen.kt" to 1, "ToolsScreen.kt" to 1, "QueueScreens.kt" to 1, "CollectionScreens.kt" to 1, "DownloadsScreen.kt" to 1, "BooksScreen.kt" to 1,
-                "ListeningScreen.kt" to 1,
+                "ListeningScreen.kt" to 1, "HuddleScreen.kt" to 1,
             ),
             uses,
         )
@@ -322,6 +322,7 @@ class ChromeTest {
         listOf(
             "LibraryScreen.kt" to "DockTab.LIBRARY", "LibraryScreen.kt" to "DockTab.PLAYLISTS", "SearchScreen.kt" to "DockTab.SEARCH", "ToolsScreen.kt" to "DockTab.TOOLS",
             "QueueScreens.kt" to "DockTab.QUEUES", "DownloadsScreen.kt" to "DockTab.DOWNLOADS", "BooksScreen.kt" to "DockTab.BOOKS", "ListeningScreen.kt" to "DockTab.INSIGHTS",
+            "HuddleScreen.kt" to "DockTab.HUDDLE",
         ).forEach { (file, tab) -> assertTrue("$file $tab", "MainTopBar($tab" in ui.getValue(file)) }
         // The inner pages' bars keep their Back.
         assertTrue(Regex("LyrifyTopBar\\(").findAll(ui.getValue("CollectionScreens.kt") + ui.getValue("SettingsScreen.kt") + ui.getValue("CoversTagsScreen.kt")).count() >= 4)

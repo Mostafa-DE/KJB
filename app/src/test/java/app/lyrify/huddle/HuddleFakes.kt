@@ -16,6 +16,9 @@ class FakeServer : HuddleServer {
     var online: Boolean = true
     var silent: Set<String> = emptySet()
     var lostAccepts: Int = 0
+
+    /** How long an accept's answer takes (virtual time): two joins of one link can run at once. */
+    var acceptDelay: Long = 0
     var slowMs: Long = 0
     /** Invite id to its owner id and the accept's data, null while waiting. */
     val invites = HashMap<String, Pair<String, String?>>()
@@ -36,6 +39,7 @@ class FakeServer : HuddleServer {
 
     override suspend fun acceptInvite(invite: String, data: String): JoinAnswer {
         requests += "acceptInvite"
+        if (acceptDelay > 0) delay(acceptDelay)
         if (!online) return JoinAnswer.NO_ANSWER
         val (owner, accepted) = invites[invite] ?: return JoinAnswer.GONE
         if (accepted != null) return if (accepted == data) JoinAnswer.JOINED else JoinAnswer.TAKEN

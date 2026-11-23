@@ -249,22 +249,23 @@ fun barPlayPause(bar: NowBarShows, ownPlayPause: () -> Unit, otherPlayback: Othe
  * Album" (each tag's placeholder when it is missing), or "In Samsung Music" for another app's song, and Play/Pause. A
  * tap or a swipe up opens the player (growing out of the bar), or for another app's song the Companion Now screen.
  * Without the other app's session, its Play/Pause is left out. It rises in when a song loads and fades away when
- * nothing is left, keeping its last song while it leaves.
+ * nothing is left, keeping its last song while it leaves. [friend]: before Play/Pause on KJB's own song, a friend playing
+ * it or its artist now (Huddle's face, [NowBarFriend]).
  */
 @Composable
-fun NowBar(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?, modifier: Modifier = Modifier) {
+fun NowBar(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?, modifier: Modifier = Modifier, friend: (@Composable (OwnNow) -> Unit)? = null) {
     val reduced = LocalReducedMotion.current
     val kept = remember { Kept(shows) }
     if (shows != NowBarShows.Hidden) kept.value = shows
     AnimatedVisibility(shows != NowBarShows.Hidden, modifier, enter = barEnter(reduced), exit = barExit(reduced)) {
         // The gap above the dock goes with the bar, so nothing is left where it was.
         // The tour's Play a song points at the bar itself, above its gap; a tap there opens the player as the bar does.
-        Box(Modifier.padding(bottom = 8.dp).tourTarget(TourStop.NOW_BAR, stringResource(R.string.tour_open_player), onOpen)) { BarFor(kept.value, ledger, other, onOpen, onPlayPause) }
+        Box(Modifier.padding(bottom = 8.dp).tourTarget(TourStop.NOW_BAR, stringResource(R.string.tour_open_player), onOpen)) { BarFor(kept.value, ledger, other, onOpen, onPlayPause, friend) }
     }
 }
 
 @Composable
-private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?) {
+private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?, friend: (@Composable (OwnNow) -> Unit)?) {
     val ink = barInk(MaterialTheme.colorScheme)
     when (shows) {
         NowBarShows.Hidden -> Unit
@@ -286,6 +287,7 @@ private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback
                 onOpen = onOpen,
                 onPlayPause = onPlayPause,
                 sharedCover = true,
+                friend = friend?.let { { it(now) } },
             )
         }
         is NowBarShows.Companion -> {
@@ -357,6 +359,7 @@ private fun BarRow(
     onOpen: () -> Unit,
     onPlayPause: (() -> Unit)?,
     sharedCover: Boolean,
+    friend: (@Composable () -> Unit)? = null,
 ) {
     val swipe = with(LocalDensity.current) { SWIPE_UP.toPx() }
     val ink = barInk(MaterialTheme.colorScheme)
@@ -393,6 +396,7 @@ private fun BarRow(
                         line()
                     }
                 }
+                friend?.invoke()
                 if (onPlayPause != null) {
                     Box(
                         contentAlignment = Alignment.Center,

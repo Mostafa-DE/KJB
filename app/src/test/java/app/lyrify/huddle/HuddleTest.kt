@@ -2,6 +2,7 @@ package app.lyrify.huddle
 
 import app.lyrify.suggestions.FriendPlay as SuggestionsPlay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -188,20 +189,247 @@ class HuddleTest {
     }
 
     @Test
-    fun `plays go only to the friends you share them with`() = runTest {
+    fun `sharing plays is on for both phones from the join, and a friend you stop sharing with gets nothing`() = runTest {
         val (wren, wrenState) = phone("Wren")
         val (juniper, _) = phone("Juniper")
         val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
-        juniper.played(bell, now)
-        assertTrue(server.waiting(wrenOnJuniper.outBox).isEmpty())
-
-        assertTrue(juniper.sharePlays(wrenOnJuniper.id, true))
+        assertTrue("the inviter shares", juniperOnWren.sharePlays)
+        assertTrue("the friend who joined shares", wrenOnJuniper.sharePlays)
         juniper.played(bell, now - 1, favourite = true)
         assertEquals(1, server.waiting(wrenOnJuniper.outBox).size)
         assertEquals(Kind.PLAY, server.kinds.values.last())
         wren.sync()
         assertEquals(listOf(FriendPlay(juniperOnWren.id, now - 1, bell, favourite = true)), wrenState.now.plays)
         assertTrue("a play is gone from the server once read", server.waiting(wrenOnJuniper.outBox).isEmpty())
+
+        assertTrue(juniper.sharePlays(wrenOnJuniper.id, false))
+        juniper.played(lantern, now)
+        assertTrue(server.waiting(wrenOnJuniper.outBox).isEmpty())
+    }
+
+    @Test
+    fun `one ticket is one invite, however often its link is shared or copied, and another ticket is another`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val first = wren.ticketLink("ticket-1", song) as Invited.Link
+        assertEquals(first, wren.ticketLink("ticket-1", song))
+        assertEquals(1, wrenState.now.invites.size)
+        assertEquals(1, server.invites.size)
+        val other = wren.ticketLink("ticket-2", null) as Invited.Link
+        assertTrue(other != first)
+        assertEquals(2, server.invites.size)
+    }
+
+    @Test
+    fun `the same link joined twice at once, a turn of the phone mid-join, makes one friend`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val invite = checkNotNull(juniper.parse(link(wren)))
+        server.acceptDelay = 1_000
+        val one = async { juniper.accept(invite) }
+        val two = async { juniper.accept(invite) }
+        val answers = listOf(one.await(), two.await())
+        assertEquals(1, juniperState.now.friends.size)
+        assertEquals(1, answers.count { it is Accepted.Joined })
+        assertEquals(1, answers.count { it is Accepted.Already })
+    }
+
+    @Test
+    fun `a play without an answer is sent again after 30 s, 2 min and 10 min from the player, with KJB not in front`() = runTest {
+        val logged = ArrayList<String>()
+        val (wren, _) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper", log = { logged += it })
+        val (_, wrenOnJuniper) = friends(wren, juniper)
+        server.online = false
+        val sends = server.requests.count { it == "send" }
+        // No syncWhileInFront here: the screen is off, the music plays.
+        juniper.played(bell, now)
+        assertEquals(sends + 1, server.requests.count { it == "send" })
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(sends + 2, server.requests.count { it == "send" })
+        assertTrue(logged.toString(), "huddle: play not sent, next try in 30 s" in logged)
+        advanceTimeBy(2 * 60_000L)
+        runCurrent()
+        assertEquals(sends + 3, server.requests.count { it == "send" })
+        server.online = true
+        advanceTimeBy(10 * 60_000L - 1)
+        runCurrent()
+        assertTrue(server.waiting(wrenOnJuniper.outBox).isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(1, server.waiting(wrenOnJuniper.outBox).size)
+        assertTrue(juniperState.now.outbox.isEmpty())
+        advanceTimeBy(Huddle.HOUR_MS)
+        runCurrent()
+        assertEquals("sent once, then no more tries", sends + 4, server.requests.count { it == "send" })
+    }
+
+    @Test
+    fun `a newcomer named as a friend you have shows under a stand-in name and is asked for another, until they pick one`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (other, otherState) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        val accepted = other.accept(checkNotNull(other.parse(link(wren)))) as Accepted.Joined
+        assertTrue(wren.sync())
+        val newcomer = wrenState.now.friends.single { it.id != juniperOnWren.id }
+        assertEquals("the name they gave is kept", "Juniper", newcomer.name)
+        assertEquals("Juniper 2", newcomer.taken)
+        assertEquals("Juniper 2", newcomer.shownName)
+        assertEquals("the friend from before is left as they were", juniperOnWren, wrenState.now.friends.single { it.id == juniperOnWren.id })
+        assertEquals(Kind.PROFILE, server.kinds.values.last())
+
+        // The newcomer's KJB hears it, and asks them for another name.
+        assertTrue(other.sync())
+        val wrenOnOther = otherState.now.friends.single()
+        assertTrue(wrenOnOther.asksNewName)
+        assertEquals(accepted.friend.id, wrenOnOther.id)
+        assertEquals("Wren", wrenOnOther.name)
+
+        // Another name that is taken too (case aside) keeps the stand-in, and asks again.
+        assertTrue(other.setName("JUNIPER"))
+        assertFalse(otherState.now.friends.single().asksNewName)
+        wren.sync()
+        assertEquals("Juniper 2", wrenState.now.friends.single { it.id == newcomer.id }.shownName)
+        other.sync()
+        assertTrue(otherState.now.friends.single().asksNewName)
+
+        // A free one is shown as it is, and nobody asks any more.
+        assertTrue(other.setName("Juniper Vale"))
+        wren.sync()
+        val renamed = wrenState.now.friends.single { it.id == newcomer.id }
+        assertEquals("Juniper Vale", renamed.name)
+        assertNull(renamed.taken)
+        assertEquals("Juniper Vale", renamed.shownName)
+        other.sync()
+        assertFalse(otherState.now.friends.single().asksNewName)
+    }
+
+    @Test
+    fun `an inviter named as a friend the joiner has is the newcomer on the joiner's phone, and is asked for another`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (rook, rookState) = phone("Rook")
+        val (other, _) = phone("wren")
+        friends(wren, rook)
+        val joined = rook.accept(checkNotNull(rook.parse(link(other)))) as Accepted.Joined
+        assertEquals("wren 2", joined.friend.shownName)
+        assertEquals(listOf("Wren", "wren 2"), rookState.now.friends.map { it.shownName })
+        runCurrent()
+        other.sync()
+        assertTrue(other.state.first().friends.single().asksNewName)
+        assertFalse(wrenState.now.friends.single().asksNewName)
+    }
+
+    @Test
+    fun `a newcomer who changes to another friend's name shows under a stand-in of that name, and is asked again`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (rook, _) = phone("Rook")
+        val (other, otherState) = phone("Juniper")
+        friends(wren, juniper)
+        rook.accept(checkNotNull(rook.parse(link(wren))))
+        other.accept(checkNotNull(other.parse(link(wren))))
+        wren.sync()
+        val newcomer = wrenState.now.friends.single { it.taken != null }
+        assertEquals("Juniper 2", newcomer.shownName)
+        other.sync()
+        assertTrue(other.setName("rook"))
+        wren.sync()
+        assertEquals("rook 2", wrenState.now.friends.single { it.id == newcomer.id }.shownName)
+        other.sync()
+        assertTrue(otherState.now.friends.single().asksNewName)
+    }
+
+    @Test
+    fun `a stand-in under a name you gave the friend stays taken, so the next newcomer gets another`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (second, _) = phone("Juniper")
+        val (third, _) = phone("Juniper")
+        friends(wren, juniper)
+        second.accept(checkNotNull(second.parse(link(wren))))
+        wren.sync()
+        val renamed = wrenState.now.friends.single { it.taken != null }
+        assertTrue(wren.rename(renamed.id, "June"))
+        third.accept(checkNotNull(third.parse(link(wren))))
+        wren.sync()
+        assertEquals("Juniper 3", wrenState.now.friends.single { it.id != renamed.id && it.taken != null }.taken)
+        // Your name for them taken back: every friend shows a name of their own.
+        assertTrue(wren.rename(renamed.id, null))
+        assertEquals(3, wrenState.now.friends.map { it.shownName.lowercase() }.distinct().size)
+    }
+
+    @Test
+    fun `a join written on a second try, after the friend of the same name left, gets no stand-in and asks nothing`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (other, otherState) = phone("wren")
+        val rookState = MemoryHuddle(HuddleState(name = "Rook"))
+        // The friend who leaves while the first write of a new friend fails (a full disk): the change runs again.
+        var leaves: String? = null
+        val storage = object : HuddleStorage {
+            override val state = rookState.state
+
+            override suspend fun change(change: (HuddleState) -> HuddleState): Boolean {
+                val gone = leaves
+                if (gone != null && change(rookState.now).friends.size > rookState.now.friends.size) {
+                    leaves = null
+                    rookState.change { state -> state.copy(friends = state.friends.filterNot { it.id == gone }) }
+                }
+                return rookState.change(change)
+            }
+        }
+        val rook = Huddle(storage, server, host, hosts, { now + testScheduler.currentTime }, random, backgroundScope)
+        leaves = friends(wren, rook).second.id
+        val joined = rook.accept(checkNotNull(rook.parse(link(other)))) as Accepted.Joined
+        assertNull(joined.friend.taken)
+        assertEquals(listOf("wren"), rookState.now.friends.map { it.shownName })
+        runCurrent()
+        other.sync()
+        assertFalse(otherState.now.friends.single().asksNewName)
+    }
+
+    @Test
+    fun `your new name reaches every friend, and a name you gave a friend still wins on your phone`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val (rook, rookState) = phone("Rook")
+        val (_, wrenOnJuniper) = friends(wren, juniper)
+        rook.accept(checkNotNull(rook.parse(link(wren))))
+        wren.sync()
+        assertTrue(wren.setName("  Wren   Calloway "))
+        juniper.sync()
+        rook.sync()
+        assertEquals("Wren Calloway", juniperState.now.friends.single().name)
+        assertEquals("Wren Calloway", rookState.now.friends.single().name)
+        juniper.rename(wrenOnJuniper.id, "W")
+        assertTrue(wren.setName("Wren"))
+        juniper.sync()
+        assertEquals("Wren", juniperState.now.friends.single().name)
+        assertEquals("W", juniperState.now.friends.single().shownName)
+        // The same name again, or none, changes and sends nothing.
+        val sends = server.requests.count { it == "send" }
+        assertTrue(wren.setName("Wren"))
+        assertFalse(wren.setName("  ‎ "))
+        assertEquals(sends, server.requests.count { it == "send" })
+    }
+
+    @Test
+    fun `a friend who joined your invite is celebrated once, on the inviter's phone only`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        assertEquals(listOf(juniperOnWren.id), wrenState.now.joined)
+        assertTrue(juniperState.now.joined.isEmpty())
+        assertTrue(wren.celebrated(juniperOnWren.id))
+        assertTrue(wrenState.now.joined.isEmpty())
+        // Removed before it was shown: nothing is left to show.
+        val (rook, _) = phone("Rook")
+        rook.accept(checkNotNull(rook.parse(link(wren))))
+        wren.sync()
+        val rookOnWren = wrenState.now.friends.single { it.name == "Rook" }
+        assertEquals(listOf(rookOnWren.id), wrenState.now.joined)
+        wren.remove(rookOnWren.id)
+        assertTrue(wrenState.now.joined.isEmpty())
     }
 
     @Test
@@ -326,7 +554,7 @@ class HuddleTest {
     }
 
     @Test
-    fun `in front KJB asks when it opens and each hour, every 30 s while the Huddle page is open, and stops when it goes`() = runTest {
+    fun `in front KJB asks when it opens and every 30 s on any page, never in the background, and stops when it goes`() = runTest {
         val (wren, _) = phone("Wren")
         val (juniper, _) = phone("Juniper")
         friends(wren, juniper)
@@ -334,33 +562,19 @@ class HuddleTest {
         val front = wren.syncWhileInFront()
         runCurrent()
         assertEquals(before + 1, server.fetches)
-        advanceTimeBy(Huddle.HOUR_MS - 1)
-        runCurrent()
-        assertEquals(before + 1, server.fetches)
-        advanceTimeBy(1)
-        runCurrent()
-        assertEquals(before + 2, server.fetches)
-
-        wren.pageOpen.value = true
-        runCurrent()
-        assertEquals("opening the page asks at once", before + 3, server.fetches)
-        advanceTimeBy(Huddle.FAST_MS)
-        runCurrent()
-        assertEquals(before + 4, server.fetches)
-        wren.pageOpen.value = false
-        runCurrent()
-        assertEquals(before + 4, server.fetches)
-        advanceTimeBy(Huddle.HOUR_MS - 1)
-        runCurrent()
-        assertEquals(before + 4, server.fetches)
-        advanceTimeBy(1)
-        runCurrent()
-        assertEquals(before + 5, server.fetches)
+        for (step in 1..3) {
+            advanceTimeBy(Huddle.FAST_MS - 1)
+            runCurrent()
+            assertEquals(before + step, server.fetches)
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals(before + step + 1, server.fetches)
+        }
 
         front.cancel()
         advanceTimeBy(3 * Huddle.HOUR_MS)
         runCurrent()
-        assertEquals(before + 5, server.fetches)
+        assertEquals(before + 4, server.fetches)
     }
 
     @Test
@@ -410,13 +624,13 @@ class HuddleTest {
         runCurrent()
         assertEquals("hourly from then on", before + 6, server.fetches)
 
-        // KJB goes and comes back (the other profile, another app): it asks at once, and with an answer each hour again.
+        // KJB goes and comes back (the other profile, another app): it asks at once, and with an answer every 30 s again.
         front.cancel()
         server.online = true
         val again = wren.syncWhileInFront()
         runCurrent()
         assertEquals(before + 7, server.fetches)
-        advanceTimeBy(Huddle.HOUR_MS - 1)
+        advanceTimeBy(Huddle.FAST_MS - 1)
         runCurrent()
         assertEquals(before + 7, server.fetches)
         advanceTimeBy(1)
@@ -489,6 +703,26 @@ class HuddleTest {
     }
 
     @Test
+    fun `a card that joins another card's tries late gets a full set of its own after them`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        server.online = false
+        // The first card's tries come at 35 s, 155 s and 755 s; the second gets no answer at 550 s and joins them.
+        wren.send(juniperOnWren.id, song)
+        advanceTimeBy(545_000)
+        wren.send(juniperOnWren.id, Card(CardKind.SONG, listOf(bell)))
+        advanceTimeBy(760_000 - testScheduler.currentTime)
+        assertEquals(2, wrenState.now.outbox.size)
+        server.online = true
+        // The tries start over for the second card: 30 s after the last one.
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertTrue(wrenState.now.outbox.isEmpty())
+        assertEquals(2, server.waiting(juniperOnWren.outBox).size)
+    }
+
+    @Test
     fun `an inbox kept but not acknowledged is a sync without an answer, and the next acknowledges it`() = runTest {
         val (wren, wrenState) = phone("Wren")
         val (juniper, _) = phone("Juniper")
@@ -538,6 +772,49 @@ class HuddleTest {
         assertEquals(1, wrenState.now.friends.single().notOpenedReads)
         val secret = listOf("Wren", "Juniper", lantern.title, bell.title, juniperOnWren.id, juniperOnWren.inBox, juniperOnWren.outBox)
         assertTrue(logged.none { line -> secret.any { it in line } })
+    }
+
+    @Test
+    fun `a read that finds none that does not open starts the count over, the inbox empty or not`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        val (rook, rookState) = phone("Rook")
+        rook.accept(rook.parse(link(wren))!!)
+        assertTrue(wren.sync())
+        val count = { wrenState.now.friends.single { it.id == juniperOnWren.id }.notOpenedReads }
+        // One that does not open, then gone from the server unacknowledged (a play goes once read, a card after 30 days).
+        server.replay(juniperOnWren.inBox, HuddleCrypto.encode(ByteArray(120) { 7 }))
+        assertTrue(wren.sync())
+        assertEquals(1, count())
+        server.boxes.getValue(juniperOnWren.inBox).clear()
+        rook.send(rookState.now.friends.single().id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        assertTrue(wren.sync())
+        assertEquals("a read with only another friend's card", 0, count())
+
+        server.replay(juniperOnWren.inBox, HuddleCrypto.encode(ByteArray(120) { 7 }))
+        assertTrue(wren.sync())
+        assertEquals(1, count())
+        server.boxes.getValue(juniperOnWren.inBox).clear()
+        assertTrue(wren.sync())
+        assertEquals("a read with nothing at all", 0, count())
+    }
+
+    @Test
+    fun `a message let go whose acknowledgement got no answer is let go again at the next read`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        server.replay(juniperOnWren.inBox, HuddleCrypto.encode(ByteArray(120) { 7 }))
+        repeat(Huddle.NOT_OPENED_RETRIES) { assertTrue(wren.sync()) }
+        server.silent = setOf("ack")
+        assertFalse(wren.sync())
+        assertEquals(1, server.waiting(juniperOnWren.inBox).size)
+        server.silent = emptySet()
+        assertTrue(wren.sync())
+        assertTrue("let go at once, not after 3 more reads", server.waiting(juniperOnWren.inBox).isEmpty())
+        assertEquals(0, wrenState.now.friends.single().notOpenedReads)
     }
 
     @Test

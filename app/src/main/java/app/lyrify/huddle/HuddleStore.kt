@@ -32,8 +32,9 @@ import java.nio.file.StandardOpenOption
 import java.security.SecureRandom
 
 /**
- * A friend: the [name] they gave, the one you gave them ([rename]), and the friendship's mailboxes and keys (base64url).
- * [id] is KJB's own, random. [joinId]: the join mailbox of the invite that made the friendship.
+ * A friend: the [name] they gave (and changed since, through their profile), the one you gave them ([rename]), and the
+ * friendship's mailboxes and keys (base64url). [id] is KJB's own, random. [joinId]: the join mailbox of the invite that
+ * made the friendship.
  */
 @Serializable
 data class Friend(
@@ -46,18 +47,26 @@ data class Friend(
     val joinId: String,
     val addedAt: Long,
     val rename: String? = null,
-    /** You share each play with them (Friends sharing): off until you turn it on. */
-    val sharePlays: Boolean = false,
+    /** You share each play with them (Friends sharing): on from the join, until you stop sharing with them. */
+    val sharePlays: Boolean = true,
     val lastSentAt: Long? = null,
     /** The ids of their latest messages: a copy the server sends again is dropped. */
     val seen: List<String> = emptyList(),
     /**
+     * While their [name] is the name of another of your friends (names are one per friend list): the name KJB shows
+     * instead ("Juniper 2"), as they were asked to pick another; null once they did.
+     */
+    val taken: String? = null,
+    /** They told you your name is the name of another of their friends: KJB asks you to pick another. */
+    val asksNewName: Boolean = false,
+    /**
      * Reads of their mailbox in a row that found a message that does not open: it waits on the server, unacknowledged, for
-     * [Huddle.NOT_OPENED_RETRIES] more reads, then goes and this is 0 again, as it is after a read that found none.
+     * [Huddle.NOT_OPENED_RETRIES] more reads, then is let go. 0 again once the server took that acknowledgement, or after
+     * a read that found none.
      */
     val notOpenedReads: Int = 0,
 ) {
-    val shownName: String get() = rename ?: name
+    val shownName: String get() = rename ?: taken ?: name
 }
 
 /**
@@ -95,9 +104,12 @@ data class Received(val id: String, val friend: String, val at: Long, val card: 
 @Serializable
 data class FriendPlay(val friend: String, val at: Long, val song: CardSong, val favourite: Boolean = false)
 
-/** A message's kind as the server knows it (huddle-server/API.md): it keeps a card 30 days until read, a play a day. */
+/**
+ * A message's kind as the server knows it (huddle-server/API.md): it keeps a card and a profile 30 days until read (a new
+ * profile in its place), a play a day.
+ */
 @Serializable
-enum class Kind { CARD, PLAY }
+enum class Kind { CARD, PLAY, PROFILE }
 
 /** A sealed message ([data], base64url) of [kind] waiting to go to [box], made [at], going no earlier than [notBefore] (Undo); [id] is its message's. */
 @Serializable
@@ -124,6 +136,8 @@ data class HuddleState(
     /** Listen privately: no play is shared before this time (wall-clock millis); [FOREVER] until turned back on. */
     val privateUntil: Long? = null,
     val backupKey: BackupKey? = null,
+    /** Friends who joined your invites, by id, not yet greeted ("<name> joined your Huddle!", once each). */
+    val joined: List<String> = emptyList(),
 ) {
     companion object {
         /** Listen privately until turned back on. */
@@ -131,9 +145,15 @@ data class HuddleState(
     }
 }
 
-/** The stored form of [HuddleState]: JSON with a schema version; unknown fields are ignored, missing ones take their defaults. */
+/**
+ * The stored form of [HuddleState]: JSON with a schema version; unknown fields are ignored, missing ones take their
+ * defaults. A state from before [SHARING_ON] (user 2026-11-22) has sharing turned on for every friend, once.
+ */
 object HuddleJson {
-    const val SCHEMA_VERSION: Int = 1
+    const val SCHEMA_VERSION: Int = 2
+
+    /** The version from which Share what I play is on by default: friends of an older state get it on as they are read. */
+    private const val SHARING_ON: Int = 2
 
     private const val SCHEMA_VERSION_KEY: String = "schemaVersion"
 
@@ -150,7 +170,8 @@ object HuddleJson {
     /** Throws a SerializationException for text that is not Huddle's state. */
     fun decode(text: String): HuddleState {
         val root = json.parseToJsonElement(text) as? JsonObject ?: throw SerializationException("not Huddle's state: no JSON object")
-        return json.decodeFromJsonElement(HuddleState.serializer(), root)
+        val state = json.decodeFromJsonElement(HuddleState.serializer(), root)
+        return if ((root.int(SCHEMA_VERSION_KEY) ?: 1) < SHARING_ON) state.copy(friends = state.friends.map { it.copy(sharePlays = true) }) else state
     }
 
     /** Written by a newer KJB, whose state this one must leave as it is. */

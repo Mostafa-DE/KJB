@@ -7,15 +7,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.security.SecureRandom
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /** A message waiting in a mailbox: the server's [seq] in it (its message id), and the sealed [data] (base64url). */
 data class Posted(val seq: Long, val data: String)
@@ -101,14 +100,18 @@ sealed interface Accepted {
 /**
  * Huddle (plan part 3, 3b): friends by invite, cards and plays through the server's mailboxes, all sealed on the phone.
  *
- * - Cards go after [UNDO_MS] (the toast's Undo), plays at once, each sealed with the friend's key for their mailbox;
- *   what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play within a day only. A card without an
- *   answer is tried again after each of [RETRY_MS]'s waits, one card's tries at a time.
- * - A play goes only to friends you share plays with ([Friend.sharePlays]), never while you listen privately.
+ * - Cards go after [UNDO_MS] (the toast's Undo), plays at once from the player (screen off or not), each sealed with
+ *   the friend's key for their mailbox; what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play
+ *   within a day only. A card or a play without an answer is tried again after each of [RETRY_MS]'s waits, one set of
+ *   tries at a time, started over for one that joined them.
+ * - A play goes only to friends you share plays with ([Friend.sharePlays], on from the join), never while you listen
+ *   privately.
+ * - Names are one per friend list: a newcomer whose name another friend goes by shows under a stand-in ([Friend.taken])
+ *   and is asked for another through a [Message.Profile], the message that also carries each new name of yours.
  * - [sync] asks the server only when there is something to ask: invites waiting for a join, friends' mailboxes, the outbox,
  *   each whatever the others answered. Each message is read once ([Friend.seen]) and acknowledged so the server deletes it.
- * - [syncWhileInFront]: when KJB comes to the front, then every hour; every [FAST_MS] while the Huddle page is open
- *   ([pageOpen]); after a sync without an answer, after each of [RETRY_MS]'s waits first.
+ * - [syncWhileInFront]: when KJB comes to the front, then every [FAST_MS] on any page; after a sync without an answer,
+ *   after each of [RETRY_MS]'s waits, then hourly. Nothing while KJB is not in front.
  *
  * Nothing here logs a name, a title, a note, a key or a mailbox: a step that did not go logs a reason code. One sync or
  * send at a time.
@@ -127,21 +130,40 @@ class Huddle(
 ) {
     val state: Flow<HuddleState> = storage.state
 
-    /** The Huddle page is open: friends' plays refresh every [FAST_MS] instead of every hour. */
-    val pageOpen: MutableStateFlow<Boolean> = MutableStateFlow(false)
-
     private val one = Mutex()
 
-    @Volatile
-    private var lastSync: Long? = null
+    /** The links of the invite tickets shown in this run ([ticketLink]), by the ticket's id. */
+    private val tickets = ConcurrentHashMap<String, String>()
 
-    /** A card's next tries ([send]) are under way. */
-    private val retrying = AtomicBoolean(false)
+    /**
+     * Cards and plays without an answer whose tries ([tryAgain]) are under way: the first one's job tries for them all; 0
+     * for none.
+     */
+    private val waiting = AtomicInteger(0)
 
-    /** Sets your name as friends see it; false when nothing is left of [name] ([Invites.cleanName]). */
+    /**
+     * Sets your name as friends see it; false when nothing is left of [name] ([Invites.cleanName]). A new one goes to
+     * every friend ([Message.Profile]), and nobody is waiting for another any more: a friend whose list it is taken in
+     * says so again.
+     */
     suspend fun setName(name: String): Boolean {
         val clean = Invites.cleanName(name) ?: return false
-        return storage.change { it.copy(name = clean) }
+        val now = clock()
+        var changed = false
+        val kept = storage.change { state ->
+            changed = clean != state.name
+            if (!changed) {
+                state
+            } else {
+                state.copy(
+                    name = clean,
+                    friends = state.friends.map { it.copy(asksNewName = false) },
+                    outbox = state.outbox.filterNot { it.kind == Kind.PROFILE } + state.friends.mapNotNull { profile(it, clean, now) },
+                )
+            }
+        }
+        if (kept && changed) flush()
+        return kept
     }
 
     /**
@@ -161,6 +183,14 @@ class Huddle(
         }
         return Invited.Link(Invites.link(host, Invite(pair.public, token, name, inLink), random))
     }
+
+    /**
+     * The link of the invite ticket [ticket] (the sheet's own id, kept across a turn of the phone): made with [card] at the
+     * first Share or Copy ([invite]), the same link after, so one ticket is one seat. Kept in memory only: the link opens a
+     * friendship, so it is never in saved state or on disk.
+     */
+    suspend fun ticketLink(ticket: String, card: Card?): Invited =
+        tickets[ticket]?.let(Invited::Link) ?: invite(card).also { if (it is Invited.Link) tickets[ticket] = it.text }
 
     /** The invite in [text] (a link on Huddle's hosts, or a pasted code); null for anything else. */
     fun parse(text: String): Invite? = Invites.parse(text, hosts)
@@ -198,11 +228,28 @@ class Huddle(
             }
             JoinAnswer.JOINED -> Unit
         }
-        val friend = friendOf(join.name, join.outBox, join.inBox, join.outKey, join.inKey, joinId)
-        val card = join.card?.let { Received(newId(MESSAGE_ID_BYTES), friend.id, clock(), it) }
+        val now = clock()
+        var friend = friendOf(join.name, join.outBox, join.inBox, join.outKey, join.inKey, joinId)
+        val card = join.card?.let { Received(newId(MESSAGE_ID_BYTES), friend.id, now, it) }
+        var asked = false
+        // The same join answered twice (a second tap, the sheet again after a turn of the phone): one friend.
+        var already: Friend? = null
         val kept = storage.change { state ->
-            state.copy(friends = state.friends + friend, inbox = listOfNotNull(card) + state.inbox, joins = state.joins.filterNot { it.joinId == joinId })
+            already = state.friends.firstOrNull { it.joinId == joinId }
+            if (already != null) return@change state.copy(joins = state.joins.filterNot { it.joinId == joinId })
+            // The inviter is the newcomer to this phone's list: a name taken here is asked for again, as on theirs.
+            friend = newcomer(friend, state.friends)
+            val ask = friend.taken?.let { state.name?.let { name -> profile(friend, name, now) } }
+            asked = ask != null
+            state.copy(
+                friends = state.friends + friend,
+                inbox = listOfNotNull(card) + state.inbox,
+                joins = state.joins.filterNot { it.joinId == joinId },
+                outbox = state.outbox + listOfNotNull(ask),
+            )
         }
+        already?.let { return if (kept) Accepted.Already(it) else Accepted.NoAnswer }
+        if (kept && asked) scope.launch { flush() }
         return if (kept) Accepted.Joined(friend, card?.id) else Accepted.NoAnswer
     }
 
@@ -222,17 +269,7 @@ class Huddle(
         if (!kept) return null
         scope.launch {
             delay(hold)
-            // One card's tries at a time: a flush posts the whole outbox, so a card sent meanwhile goes with them.
-            if (flush() || !retrying.compareAndSet(false, true)) return@launch
-            try {
-                for (wait in RETRY_MS) {
-                    log("huddle: card not sent, next try in ${wait / 1_000} s")
-                    delay(wait)
-                    if (flush()) return@launch
-                }
-            } finally {
-                retrying.set(false)
-            }
+            if (!flush()) tryAgain()
         }
         return message.id
     }
@@ -251,7 +288,6 @@ class Huddle(
      * one. Asks nothing when there is nothing to ask.
      */
     suspend fun sync(): Boolean = one.withLock {
-        lastSync = clock()
         // `and`, not `&&`: a step without an answer never keeps the next from running.
         joins() and flushNow() and fetch()
     }
@@ -262,7 +298,35 @@ class Huddle(
         val state = now()
         if (state.privateUntil?.let { now < it } == true) return
         val outs = state.friends.filter { it.sharePlays }.mapNotNull { outgoing(it, Message.Play(newId(MESSAGE_ID_BYTES), at, song, favourite), Kind.PLAY, notBefore = now) }
-        if (outs.isNotEmpty() && storage.change { it.copy(outbox = it.outbox + outs) }) flush()
+        // From the player, KJB in front or not (music mostly plays with the screen off): one without an answer is tried
+        // again as a card is.
+        if (outs.isNotEmpty() && storage.change { it.copy(outbox = it.outbox + outs) } && !flush()) scope.launch { tryAgain() }
+    }
+
+    /**
+     * After a card or a play without an answer: the outbox is posted again after each of [RETRY_MS]'s waits, one set of
+     * tries at a time. One without an answer while they run joins them (a flush posts the whole outbox), and they start
+     * over for it once they are through.
+     */
+    private suspend fun tryAgain() {
+        if (waiting.getAndIncrement() > 0) return
+        try {
+            do {
+                val joined = waiting.get()
+                for (wait in RETRY_MS) {
+                    // Sent by a try or a sync, taken back, or let go (a play past its day, or not to share): nothing left to try.
+                    val left = now().outbox
+                    if (left.isEmpty()) break
+                    log("huddle: ${if (left.any { it.kind == Kind.CARD }) "card" else "play"} not sent, next try in ${wait / 1_000} s")
+                    delay(wait)
+                    if (flush()) break
+                }
+            } while (!waiting.compareAndSet(joined, 0))
+        } catch (e: Throwable) {
+            // Stopped by an error, or with the process: the next one without an answer starts the tries again.
+            waiting.set(0)
+            throw e
+        }
     }
 
     /** Your own name for the friend [friendId], on this phone only; null takes it back. */
@@ -284,6 +348,7 @@ class Huddle(
                 inbox = state.inbox.filterNot { it.friend == friendId },
                 plays = state.plays.filterNot { it.friend == friendId },
                 outbox = state.outbox.filterNot { it.box == friend.outBox } + listOfNotNull(bye),
+                joined = state.joined - friendId,
             )
         }
         if (!kept) return false
@@ -315,6 +380,9 @@ class Huddle(
     /** Listen privately until [until] (wall-clock millis; [HuddleState.FOREVER] until turned back on), or no longer (null). */
     suspend fun listenPrivately(until: Long?): Boolean = withContext(NonCancellable) { storage.change { it.copy(privateUntil = until) } }
 
+    /** The friend [friendId] who joined your invite was greeted ("<name> joined your Huddle!"): never again. */
+    suspend fun celebrated(friendId: String): Boolean = withContext(NonCancellable) { storage.change { it.copy(joined = it.joined - friendId) } }
+
     /** The card [receivedId] was played or looked at; [dismissed]: put away, it also leaves the start screen. */
     suspend fun opened(receivedId: String, dismissed: Boolean = false): Boolean = withContext(NonCancellable) {
         storage.change { state -> state.copy(inbox = state.inbox.map { if (it.id == receivedId) it.copy(opened = true, dismissed = it.dismissed || dismissed) else it }) }
@@ -331,33 +399,21 @@ class Huddle(
     }
 
     /**
-     * KJB is in front, until the job returned is cancelled: syncs now, then an hour after the last sync; while the Huddle
-     * page is open ([pageOpen]), at once and then every [FAST_MS]. A sync without an answer is tried again after each of
-     * [RETRY_MS]'s waits from its end (never later than the usual time), then as usual. Each sync is a job of its own in
-     * [scope], so one under way runs on when KJB goes.
+     * KJB is in front, until the job returned is cancelled: syncs now, then every [FAST_MS] on any page (friends' plays
+     * show in Library, on the player and the Now bar too). A sync without an answer is tried again after each of
+     * [RETRY_MS]'s waits from its end, then each hour until one answers. Each sync is a job of its own in [scope], so one
+     * under way runs on when KJB goes.
      */
     fun syncWhileInFront(): Job = scope.launch {
-        var first = true
         // Syncs in a row without an answer (or that broke off): the next waits the step of RETRY_MS they reached.
         var failed = 0
-        suspend fun trySync() {
+        while (true) {
             var answered = false
             scope.launch { answered = sync() }.join()
             failed = if (answered) 0 else failed + 1
-        }
-        pageOpen.collectLatest { open ->
-            val every = if (open) FAST_MS else HOUR_MS
-            if (first || open) {
-                first = false
-                trySync()
-            }
-            while (true) {
-                val wait = RETRY_MS.getOrNull(failed - 1)?.coerceAtMost(every) ?: every
-                if (failed > 0) log("huddle: sync failed $failed in a row, next try in ${wait / 1_000} s")
-                // After one without an answer, its whole wait from its end, however long its timeouts took.
-                delay(if (failed > 0) wait else ((lastSync ?: clock()) + wait - clock()).coerceIn(1, wait))
-                trySync()
-            }
+            val wait = if (failed == 0) FAST_MS else RETRY_MS.getOrNull(failed - 1) ?: HOUR_MS
+            if (failed > 0) log("huddle: sync failed $failed in a row, next try in ${wait / 1_000} s")
+            delay(wait)
         }
     }
 
@@ -371,6 +427,17 @@ class Huddle(
     /** A new friend [name], with the friendship's mailboxes and keys (base64url) and the [joinId] that made it. */
     private fun friendOf(name: String, outBox: String, inBox: String, outKey: String, inKey: String, joinId: String): Friend =
         Friend(id = newId(FRIEND_ID_BYTES), name = name, outBox = outBox, inBox = inBox, outKey = outKey, inKey = inKey, joinId = joinId, addedAt = clock())
+
+    /**
+     * [friend] as a newcomer to [friends]: under a stand-in name ([Friend.taken]) when one of them goes by theirs, else under
+     * their own, also when a write runs this again ([HuddleStorage.change]) after that friend went.
+     */
+    private fun newcomer(friend: Friend, friends: List<Friend>): Friend =
+        friend.copy(taken = if (friends.any { sameName(it.shownName, friend.name) }) standIn(friend.name, friends) else null)
+
+    /** Your [name] for [friend], and whether theirs is taken in your list ([Friend.taken]), sealed for their mailbox. */
+    private fun profile(friend: Friend, name: String, now: Long): Outgoing? =
+        outgoing(friend, Message.Profile(newId(MESSAGE_ID_BYTES), now, name, taken = friend.taken != null), Kind.PROFILE, notBefore = now)
 
     /** The join [joinId] answered for good (taken, or gone): nothing is left to send again. */
     private suspend fun endJoin(joinId: String) {
@@ -414,7 +481,14 @@ class Huddle(
                         val friend = friendOf(joined.name, keys.outBox, keys.inBox, HuddleCrypto.encode(keys.outKey), HuddleCrypto.encode(keys.inKey), joinId)
                         val card = invite.card?.let { outgoing(friend, Message.Share(newId(MESSAGE_ID_BYTES), now, it), Kind.CARD, notBefore = now) }
                         val kept = storage.change { state ->
-                            state.copy(friends = state.friends + friend, invites = state.invites.filterNot { it.token == invite.token }, outbox = state.outbox + listOfNotNull(card))
+                            val named = newcomer(friend, state.friends)
+                            val ask = named.taken?.let { state.name?.let { name -> profile(named, name, now) } }
+                            state.copy(
+                                friends = state.friends + named,
+                                invites = state.invites.filterNot { it.token == invite.token },
+                                outbox = state.outbox + listOfNotNull(card, ask),
+                                joined = state.joined + named.id,
+                            )
                         }
                         if (kept) server.deleteInvite(invite.owner)
                     }
@@ -479,8 +553,8 @@ class Huddle(
             return false
         }
         val now = clock()
-        // Nothing new: only plays past their time go.
-        if (posted.isEmpty()) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
+        // Nothing new and no count of messages that did not open to start over: only plays past their time go.
+        if (posted.isEmpty() && friends.none { it.notOpenedReads > 0 }) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
         val upTo = HashMap<String, Long>()
         val read = ArrayList<Pair<String, Message>>()
         // By friend: their Friend.notOpenedReads after this read.
@@ -488,7 +562,8 @@ class Huddle(
         var kept = 0
         var dropped = 0
         for (friend in friends) {
-            val box = posted[friend.inBox]?.sortedBy { it.seq } ?: continue
+            // A mailbox with nothing in it is read too: it found none that does not open.
+            val box = posted[friend.inBox]?.sortedBy { it.seq }.orEmpty()
             val key = HuddleCrypto.decode(friend.inKey) ?: continue
             // A box that does not open (another key, sealed for the other way, changed, a newer KJB's): its seq.
             val closed = ArrayList<Long>()
@@ -498,22 +573,33 @@ class Huddle(
             }
             val reads = if (closed.isEmpty()) 0 else friend.notOpenedReads + 1
             val again = reads in 1..NOT_OPENED_RETRIES
-            notOpened[friend.id] = if (again) reads else 0
+            // Let go, it stays past NOT_OPENED_RETRIES until the server takes the acknowledgement, so a lost one goes again.
+            notOpened[friend.id] = reads
             if (again) kept += closed.size else dropped += closed.size
             // Read again: acknowledged only up to the first that did not open, so it and what came after it wait.
             (if (again) box.lastOrNull { it.seq < closed.first() } else box.lastOrNull())?.let { upTo[friend.inBox] = it.seq }
         }
         if (kept > 0) log("huddle: inbox kept $kept that did not open, to read again (not_opened)")
         if (dropped > 0) log("huddle: inbox dropped $dropped that did not open (not_opened)")
-        if (!storage.change { state -> state.copy(friends = state.friends.map { it.copy(notOpenedReads = notOpened[it.id] ?: it.notOpenedReads) }).received(read, now) }) {
+        // Whether what came asks for an answer (a name taken in your list, or free again): it goes in this sync.
+        var answers = false
+        val written = storage.change { state ->
+            state.copy(friends = state.friends.map { it.copy(notOpenedReads = notOpened[it.id] ?: it.notOpenedReads) })
+                .received(read, now)
+                .also { next -> answers = next.outbox.any { out -> state.outbox.none { it.id == out.id } } }
+        }
+        if (!written) {
             log("huddle: inbox not kept (not_written)")
             return false
         }
         val acknowledged = server.ack(upTo)
         if (!acknowledged) log("huddle: inbox not acknowledged (no_answer)")
+        // What was let go is gone: the next one that does not open gets its reads again.
+        if (acknowledged && dropped > 0) storage.change { state -> state.copy(friends = state.friends.map { if (it.notOpenedReads > NOT_OPENED_RETRIES) it.copy(notOpenedReads = 0) else it }) }
         read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> friends.firstOrNull { it.id == id } }.forEach { gone ->
             server.dropBoxes(listOf(gone.inBox, gone.outBox))
         }
+        if (answers) flushNow()
         return acknowledged
     }
 
@@ -536,11 +622,13 @@ class Huddle(
             state = when (message) {
                 is Message.Share -> state.copy(inbox = listOf(Received(message.id, friendId, at, message.card)) + state.inbox)
                 is Message.Play -> state
+                is Message.Profile -> state.profiled(seen, message, now)
                 is Message.Bye -> state.copy(
                     friends = state.friends.filterNot { it.id == friendId },
                     inbox = state.inbox.filterNot { it.friend == friendId },
                     plays = state.plays.filterNot { it.friend == friendId },
                     outbox = state.outbox.filterNot { it.box == friend.outBox },
+                    joined = state.joined - friendId,
                 )
             }
         }
@@ -550,15 +638,37 @@ class Huddle(
         )
     }
 
+    /**
+     * This state with [friend]'s [profile]: their new name, under a stand-in while another friend goes by it, and asked for
+     * another (again) when it changed to a taken one; told once it is free again; and whether they ask you for another.
+     */
+    private fun HuddleState.profiled(friend: Friend, profile: Message.Profile, now: Long): HuddleState {
+        val others = friends.filter { it.id != friend.id }
+        val taken = when {
+            others.none { sameName(it.shownName, profile.name) } -> null
+            // The same name again (case aside): as it was, never a newcomer's stand-in for a name they had before you named
+            // another so.
+            sameName(profile.name, friend.name) -> friend.taken
+            // Another friend's name: a stand-in of that one, not of the name they had.
+            else -> standIn(profile.name, others)
+        }
+        val updated = friend.copy(name = profile.name, taken = taken, asksNewName = profile.taken)
+        val answer = name?.takeIf { (profile.name != friend.name && taken != null) || (friend.taken != null && taken == null) }?.let { profile(updated, it, now) }
+        return copy(
+            friends = friends.map { if (it.id == friend.id) updated else it },
+            outbox = if (answer == null) outbox else outbox.filterNot { it.kind == Kind.PROFILE && it.box == friend.outBox } + answer,
+        )
+    }
+
     private fun newId(bytes: Int): String = HuddleCrypto.encode(ByteArray(bytes).also(random::nextBytes))
 
     private fun keptMs(kind: Kind): Long = when (kind) {
         Kind.PLAY -> DAY_MS
-        Kind.CARD -> MONTH_MS
+        Kind.CARD, Kind.PROFILE -> MONTH_MS
     }
 
     companion object {
-        /** How often friends' plays refresh while the Huddle page is open (plan 3b). */
+        /** How often friends' plays refresh while KJB is in front, on any page (user 2026-11-22). */
         const val FAST_MS: Long = 30_000
         const val HOUR_MS: Long = 60 * 60_000L
         private const val DAY_MS: Long = 24 * HOUR_MS
@@ -595,6 +705,18 @@ class Huddle(
         private const val OWNER_ID_BYTES: Int = 32
     }
 }
+
+/** Whether two names are one in a friend list: case aside (both are clean already, [Invites.cleanName]). */
+private fun sameName(a: String, b: String): Boolean = a.equals(b, ignoreCase = true)
+
+/**
+ * The name KJB shows for a newcomer whose [name] one of [friends] goes by: "<name> 2", or the first number free, also of
+ * a stand-in under the name you gave a friend (shown again once you take that back).
+ */
+private fun standIn(name: String, friends: List<Friend>): String =
+    generateSequence(2) { it + 1 }.map { "$name $it" }.first { candidate ->
+        friends.none { friend -> listOfNotNull(friend.shownName, friend.taken).any { sameName(it, candidate) } }
+    }
 
 /** Friends' plays for Suggestions (handoff/sg1-interfaces.md, section 3): what [storage] keeps, mapped to Suggestions' own form. */
 class HuddleFriends(private val storage: HuddleStorage) : FriendsSource {

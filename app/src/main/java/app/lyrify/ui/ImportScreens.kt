@@ -368,7 +368,8 @@ private suspend fun loaded(source: ImportSource, pick: ImportPick?, reader: Pick
     return ImportSheet.Preview(source, plan, pick.failed, plan.defaultChosen())
 }
 
-private fun copy(app: Context, label: String, text: String) {
+/** [text] on the clipboard under [label]: the import's missing list, a Huddle invite link. */
+internal fun copy(app: Context, label: String, text: String) {
     app.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText(label, text))
 }
 

@@ -22,7 +22,17 @@ class CardsTest {
             Message.Play("m5", 1_700_000_000_004, bell),
             Message.Play("m7", 1_700_000_000_006, lantern, favourite = true),
             Message.Bye("m6", 1_700_000_000_005),
+            Message.Profile("m8", 1_700_000_000_007, "Juniper"),
+            Message.Profile("m9", 1_700_000_000_008, "Juniper Vale", taken = true),
         ).forEach { message -> assertEquals(message, Messages.decode(Messages.encode(message))) }
+    }
+
+    @Test
+    fun `a profile carries a name as KJB keeps names, and one without any is dropped`() {
+        assertEquals(1024, Messages.encode(Message.Profile("m1", 1, "Juniper", taken = true)).size)
+        val spaced = Messages.decode(Messages.encode(Message.Profile("m1", 1, "  June ‮  Vale ")))
+        assertEquals(Message.Profile("m1", 1, "June Vale"), spaced)
+        assertNull(Messages.decode(Messages.encode(Message.Profile("m1", 1, " ‎ "))))
     }
 
     @Test
