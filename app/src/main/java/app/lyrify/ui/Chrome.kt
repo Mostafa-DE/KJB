@@ -288,8 +288,8 @@ fun tabSlide(from: DockTab, to: DockTab, order: List<DockTab> = DOCK_TABS): Int 
 }
 
 /**
- * The dot on a dock item: it pops in and out, never appearing at once. [ping]: a ring spreads from it and fades, again
- * and again (Huddle's "a friend is playing now"); not when motion is off.
+ * The dot on a dock item, and on the headers' Huddle: it pops in and out, never appearing at once. [ping]: a ring
+ * spreads from it and fades, again and again (Huddle's "a friend is playing now"); not when motion is off.
  */
 @Composable
 private fun DockDot(dot: Boolean, modifier: Modifier, ping: Boolean = false) {
@@ -541,10 +541,11 @@ private fun TopBarRow(title: @Composable () -> Unit, navigation: (@Composable ()
 }
 
 /**
- * The header of the four main pages (Library, Playlists, Search, Tools): the KJB logo at the start, then the page's
- * title in the title style, the page's own actions at the end (user decision 2026-11-11). The logo is decorative, so
- * TalkBack reads one heading, the title alone. [below]: more of the band under the line, as Search's field. Inner pages
- * keep [LyrifyTopBar] with Back and their own title.
+ * The header of the main pages, the bar's roots (Library, Playlists, Search, Tools and what else the bar holds): the KJB
+ * logo at the start, then the page's title in the title style, the page's own actions at the end (user decision
+ * 2026-11-11), and last Huddle, in reach from every one (user 2026-11-23) with the bar item's live dot while a friend
+ * plays now; not on Huddle's own root. The logo is decorative, so TalkBack reads one heading, the title alone. [below]:
+ * more of the band under the line, as Search's field. Inner pages keep [LyrifyTopBar] with Back and their own title.
  */
 @Composable
 fun MainTopBar(tab: DockTab, under: Boolean, backdrop: GlassBackdrop?, actions: @Composable RowScope.() -> Unit = {}, below: (@Composable () -> Unit)? = null) {
@@ -560,7 +561,18 @@ fun MainTopBar(tab: DockTab, under: Boolean, backdrop: GlassBackdrop?, actions: 
                     }
                 },
                 navigation = null,
-                actions = actions,
+                actions = {
+                    actions()
+                    // Tools' Huddle row's way in, so before a name is picked it opens on that step as the row does.
+                    if (tab != DockTab.HUDDLE) {
+                        val nav = LocalNavigator.current
+                        val live = LocalDockBar.current.huddleLive?.value == true
+                        Box {
+                            ChromeIconButton(DockTab.HUDDLE.icon, dockItemName(stringResource(DockTab.HUDDLE.label), if (live) stringResource(R.string.huddle_live_dot) else null), { nav.open(Page.Huddle) })
+                            DockDot(live, Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 6.dp), ping = live && huddleMoves())
+                        }
+                    }
+                },
             )
             below?.invoke()
         }

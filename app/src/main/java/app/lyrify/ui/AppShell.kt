@@ -210,7 +210,8 @@ fun AppShell(
     val barOnScreen = slot == BottomSlot.BAR_AND_DOCK && bar != NowBarShows.Hidden
     val chromeStill = rememberChromeStill(slot != BottomSlot.NONE, state.views, barOnScreen, reduced)
     val dot = toolsDot(checks, dupes.badge, aiAttention(ai, aiWaiting))
-    // The bar's Huddle item pings while a friend plays now; read in the dock only, so nothing else redraws.
+    // The bar's Huddle item pings while a friend plays now, and every header's Huddle with it (LocalDockBar); read only
+    // where the dot shows, so nothing else redraws.
     val huddleLive = rememberHuddleLive()
     // Hide while scrolling: never during the tour or for TalkBack; back on another item, page or Library tab, on a
     // selection or the keyboard (a full-screen view over it leaves it as it is, so the player closes into the bar where it is).
@@ -269,7 +270,7 @@ fun AppShell(
         LocalNavigator provides nav,
         LocalLyrics provides lyrics,
         LocalPlayingPath provides (bar as? NowBarShows.Own)?.now?.path,
-        LocalDockBar provides DockBar(items, dot, offers),
+        LocalDockBar provides DockBar(items, dot, offers, huddleLive),
         LocalDoubleTaps provides doubleTaps,
     ) {
         SharedTransitionLayout(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).doubleTapHost(doubleTaps)) {

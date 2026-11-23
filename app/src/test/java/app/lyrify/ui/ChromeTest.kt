@@ -9,6 +9,7 @@ import androidx.compose.ui.platform.AccessibilityManager
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import app.lyrify.R
+import app.lyrify.huddle.HuddleState
 import app.lyrify.settings.DockTab
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -327,6 +328,61 @@ class ChromeTest {
         // The inner pages' bars keep their Back.
         assertTrue(Regex("LyrifyTopBar\\(").findAll(ui.getValue("CollectionScreens.kt") + ui.getValue("SettingsScreen.kt") + ui.getValue("CoversTagsScreen.kt")).count() >= 4)
         assertTrue("navigation = { ChromeIconButton(R.drawable.ic_arrow_back" in ui.getValue("CoversTagsScreen.kt"))
+    }
+
+    // Huddle in every main page's header (user 2026-11-23, r4: "reachable everywhere"), HH1
+
+    /** MainTopBar's body, which every bar root's header is (the test above) and no inner page's. */
+    private fun mainHeader(): String = java.io.File("src/main/java/app/lyrify/ui/Chrome.kt").readText().substringAfter("fun MainTopBar(").substringBefore("\n}\n")
+
+    @Test
+    fun `every bar root's header ends with Huddle, after the page's own buttons, and Huddle's own root has none`() {
+        val header = mainHeader()
+        val actions = header.substringAfter("actions = {")
+        val huddle = actions.indexOf("if (tab != DockTab.HUDDLE)")
+        assertTrue(header, huddle > actions.indexOf("actions()") && actions.indexOf("actions()") >= 0)
+        // The bar item's own icon and name, as a header button (48 dp, a glass circle), as Library's Search and Tools.
+        assertTrue(header, "ChromeIconButton(DockTab.HUDDLE.icon, dockItemName(stringResource(DockTab.HUDDLE.label)" in actions.substring(huddle))
+        // Only there: an inner page's bar (Back and its own title, Settings among them) and the player have none.
+        val ui = java.io.File("src/main/java/app/lyrify/ui").listFiles { f -> f.extension == "kt" }!!.associate { it.name to it.readText() }
+        assertEquals(setOf("Chrome.kt"), ui.filterValues { "DockTab.HUDDLE.icon" in it || "nav.open(Page.Huddle)" in it }.keys)
+        assertFalse("MainTopBar(" in ui.getValue("PlayerScreen.kt") || "MainTopBar(" in ui.getValue("SettingsScreen.kt"))
+    }
+
+    @Test
+    fun `the header's Huddle opens the page Tools' Huddle row opens, from every bar root, so it asks for a name there first`() {
+        assertTrue(mainHeader(), "nav.open(Page.Huddle)" in mainHeader())
+        assertEquals(Page.Huddle, Tool.HUDDLE.page)
+        // Huddle on the bar too (its optional item) changes nothing: the header still opens Tools' Huddle page.
+        val bar = listOf(DockTab.LIBRARY, DockTab.HUDDLE, DockTab.SEARCH, DockTab.TOOLS)
+        DockTab.entries.filter { it != DockTab.HUDDLE }.forEach { root ->
+            listOf(DOCK_TABS, bar).forEach { docked ->
+                val opened = NavState.start(root).open(Page.Huddle, docked = docked)
+                assertEquals("$root", DockTab.TOOLS, opened.tab)
+                assertEquals("$root", listOf<Page>(Page.Huddle), opened.pages)
+            }
+        }
+        // That page asks for a name before anything else until one is picked, then shows Huddle.
+        assertEquals(NameGate.NAME, nameGate(HuddleState()))
+        assertNull(nameGate(HuddleState(name = "Juniper")))
+    }
+
+    @Test
+    fun `the header's Huddle carries the bar item's live dot from the shell's one state, and TalkBack hears it`() {
+        assertEquals("Huddle, a friend is playing", dockItemName("Huddle", "a friend is playing"))
+        val strings = java.io.File("src/main/res/values/strings_huddle.xml").readText()
+        assertTrue("""<string name="huddle_title">Huddle</string>""" in strings && """<string name="huddle_live_dot">a friend is playing</string>""" in strings)
+        val header = mainHeader()
+        assertTrue(header, "val live = LocalDockBar.current.huddleLive?.value == true" in header)
+        assertTrue(header, "dockItemName(stringResource(DockTab.HUDDLE.label), if (live) stringResource(R.string.huddle_live_dot) else null)" in header)
+        // The bar item's dot where Library's header puts Tools' dot; its ping rests with Remove animations and on a hidden root.
+        assertTrue(header, "DockDot(live, Modifier.align(Alignment.TopEnd).padding(top = 6.dp, end = 6.dp), ping = live && huddleMoves())" in header)
+        // One state for the dock and the headers: the shell's, never a second clock that could disagree with the bar's.
+        val ui = java.io.File("src/main/java/app/lyrify/ui").listFiles { f -> f.extension == "kt" }!!.map { it.readText() }
+        assertEquals(1, ui.sumOf { text -> Regex("(?<!fun )rememberHuddleLive\\(\\)").findAll(text).count() })
+        val shell = java.io.File("src/main/java/app/lyrify/ui/AppShell.kt").readText()
+        assertTrue("LocalDockBar provides DockBar(items, dot, offers, huddleLive)" in shell && "live = huddleLive.value" in shell)
+        assertNull(DockBar().huddleLive)
     }
 
     @Test
