@@ -276,8 +276,8 @@ entries; `0` is fine and safe to retry).
   go to the friends the user shares with, unless "Listen privately" is on. A play goes once 10 s of the song were
   heard, a now at once at each play, pause, resume, skip, seek and stop (several within half a second go as the newest),
   and every minute while the song plays. A now is kept in memory only: one a friend's server did not answer is sent
-  to that friend again after 2 s, 5 s and 15 s while it is the newest, and after that the next change or heartbeat
-  replaces it. A friend who saw your last song is told it stopped when the next one is not shared (a book, a podcast),
+  to that friend again after 2 s, 5 s, 15 s, 30 s and 60 s while it is the newest (the last under 2 minutes after
+  it, so a pause lands before a friend lets the "playing" go), and after that the next change or heartbeat replaces it. A friend who saw your last song is told it stopped when the next one is not shared (a book, a podcast),
   when the queue ends, and when "Listen privately" is turned on. A pause on a song friends did not see playing (one
   KJB opened with, the queue's first waiting after it ended) is not sent.
 - A friend shows as playing while their newest now says playing, is at most 150 s old (two heartbeats missed) and their

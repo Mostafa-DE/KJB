@@ -613,7 +613,7 @@ class HuddleTest {
     }
 
     @Test
-    fun `a now without an answer goes again after 2 s, 5 s and 15 s while it is the newest, never kept on the phone`() = runTest {
+    fun `a now without an answer goes again after 2 s, 5 s, 15 s, 30 s and 60 s while it is the newest, never kept on the phone`() = runTest {
         val (wren, _) = phone("Wren")
         val (rook, _) = phone("Rook")
         val (juniper, juniperState) = phone("Juniper")
@@ -626,7 +626,8 @@ class HuddleTest {
         advanceTimeBy(Huddle.NOW_GAP_MS)
         runCurrent()
         assertEquals("one to each friend", before + 2, sends())
-        for ((tries, wait) in listOf(2_000L, 5_000L, 15_000L).withIndex()) {
+        // The last try is under 2 minutes after the pause: before a friend lets the "playing" it replaces go (150 s).
+        for ((tries, wait) in listOf(2_000L, 5_000L, 15_000L, 30_000L, 60_000L).withIndex()) {
             advanceTimeBy(wait - 1)
             runCurrent()
             assertEquals(before + 2 + 2 * tries, sends())
@@ -636,7 +637,7 @@ class HuddleTest {
         }
         advanceTimeBy(Huddle.HOUR_MS)
         runCurrent()
-        assertEquals("then the next change or heartbeat replaces it", before + 8, sends())
+        assertEquals("then the next change or heartbeat replaces it", before + 12, sends())
         assertTrue("never kept on the phone", juniperState.now.outbox.isEmpty())
 
         // Back after the first try: the second reaches both, and no more go.
@@ -648,7 +649,7 @@ class HuddleTest {
         runCurrent()
         advanceTimeBy(Huddle.HOUR_MS)
         runCurrent()
-        assertEquals(before + 12, sends())
+        assertEquals(before + 16, sends())
         assertEquals(listOf(Kind.NOW), server.waiting(wrenOnJuniper.outBox).map { server.kinds[it.seq] })
 
         // A newer one in the meantime: only the newer is tried again.
@@ -658,7 +659,25 @@ class HuddleTest {
         juniper.listening(NowState.PLAYING, 20_000, now + testScheduler.currentTime) { lantern to false }
         advanceTimeBy(Huddle.NOW_GAP_MS + 1_000)
         runCurrent()
-        assertEquals("the first's try at 2 s did not go", before + 16, sends())
+        assertEquals("the first's try at 2 s did not go", before + 20, sends())
+    }
+
+    @Test
+    fun `what a held read brings from a friend removed meanwhile is dropped, never kept or acknowledged`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
+        val reading = async { wren.sync(Huddle.WAIT_MS) }
+        runCurrent()
+        assertTrue(wren.remove(juniperOnWren.id))
+        val acks = server.requests.count { it == "ack" }
+        // Juniper has not read the goodbye yet: a card lands in the box the held read asked for.
+        juniper.send(wrenOnJuniper.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        runCurrent()
+        assertTrue(reading.isCompleted)
+        assertTrue(wrenState.now.inbox.isEmpty())
+        assertEquals("nothing of theirs read on: no acknowledgement", acks, server.requests.count { it == "ack" })
     }
 
     @Test

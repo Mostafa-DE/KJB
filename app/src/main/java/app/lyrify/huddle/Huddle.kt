@@ -377,9 +377,9 @@ class Huddle(
                 val missed = nowLock.withLock {
                     // A newer one replaces it.
                     if (nows.get() != told) return@launch
-                    val to = now().friends.filter { it.sharePlays && it.id !in reached }
-                    val answers = coroutineScope { to.map { friend -> async { outgoing(friend, message, Kind.NOW, notBefore = clock())?.let { server.send(it.box, Kind.NOW, it.data) } } }.awaitAll() }
-                    to.zip(answers).forEach { (friend, answer) -> if (answer != PostAnswer.NO_ANSWER) reached += friend.id }
+                    val unreached = now().friends.filter { it.sharePlays && it.id !in reached }
+                    val answers = coroutineScope { unreached.map { friend -> async { outgoing(friend, message, Kind.NOW, notBefore = clock())?.let { server.send(it.box, Kind.NOW, it.data) } } }.awaitAll() }
+                    unreached.zip(answers).forEach { (friend, answer) -> if (answer != PostAnswer.NO_ANSWER) reached += friend.id }
                     answers.count { it == PostAnswer.NO_ANSWER }
                 }
                 if (missed == 0) return@launch
@@ -657,6 +657,8 @@ class Huddle(
             val now = clock()
             // Nothing new and no count of messages that did not open to start over: only plays past their time go.
             if (posted.isEmpty() && friends.none { it.notOpenedReads > 0 }) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
+            // The friends still here once the read is back: what it brings from one removed meanwhile is dropped unread.
+            val stillHere = now().friends.filter { friend -> friends.any { it.id == friend.id } }
             val upTo = HashMap<String, Long>()
             // By box: the seq this read got to, the next read's cursor once kept.
             val through = HashMap<String, Long>()
@@ -665,7 +667,7 @@ class Huddle(
             val notOpened = HashMap<String, Int>()
             var kept = 0
             var dropped = 0
-            for (friend in friends) {
+            for (friend in stillHere) {
                 // A mailbox with nothing in it is read too: it found none that does not open.
                 val box = posted[friend.inBox]?.sortedBy { it.seq }.orEmpty()
                 // A key that does not read opens nothing: its box is let go as any that does not open, never read again and again.
@@ -712,7 +714,7 @@ class Huddle(
             through.filterKeys { acknowledged || it !in upTo }.forEach { (box, seq) -> readTo.merge(box, seq) { old, new -> maxOf(old, new) } }
             // What was let go is gone: the next one that does not open gets its reads again.
             if (acknowledged && dropped > 0) storage.change { state -> state.copy(friends = state.friends.map { if (it.notOpenedReads > NOT_OPENED_RETRIES) it.copy(notOpenedReads = 0) else it }) }
-            read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> friends.firstOrNull { it.id == id } }.forEach { gone ->
+            read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> stillHere.firstOrNull { it.id == id } }.forEach { gone ->
                 server.dropBoxes(listOf(gone.inBox, gone.outBox))
             }
             if (answers) flushNow()
@@ -797,8 +799,11 @@ class Huddle(
         /** Your nows within this of each other go as the last of them: a burst of skips, a pause and a play. */
         const val NOW_GAP_MS: Long = 500
 
-        /** After a now without an answer, the waits before each new try to the friends it missed: 2 s, 5 s, 15 s. */
-        private val NOW_RETRY_MS: List<Long> = listOf(2_000L, 5_000L, 15_000L)
+        /**
+         * After a now without an answer, the waits before each new try to the friends it missed: 2 s, 5 s, 15 s, 30 s, 60 s,
+         * the last under 2 minutes after it, so a pause still lands before a friend lets the "playing" before it go (150 s).
+         */
+        private val NOW_RETRY_MS: List<Long> = listOf(2_000L, 5_000L, 15_000L, 30_000L, 60_000L)
         const val HOUR_MS: Long = 60 * 60_000L
         private const val DAY_MS: Long = 24 * HOUR_MS
         private const val MONTH_MS: Long = 30 * DAY_MS
