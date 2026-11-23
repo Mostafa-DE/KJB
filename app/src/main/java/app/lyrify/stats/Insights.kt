@@ -163,22 +163,22 @@ const val RECAP_MIN_PLAYS: Int = 10
 // The minimums before a card shows
 
 /** The totals: a minute heard, or one play that counted. */
-private const val MIN_HEARD_MS: Long = 60_000
+internal const val MIN_HEARD_MS: Long = 60_000
 
 /** The top lists: this many music plays that counted, of 3 songs or more, or 2 artists, albums or genres. */
-private const val MIN_TOP_PLAYS = 10
-private const val MIN_TOP_SONGS = 3
-private const val MIN_TOP_OTHERS = 2
+internal const val MIN_TOP_PLAYS = 10
+internal const val MIN_TOP_SONGS = 3
+internal const val MIN_TOP_OTHERS = 2
 
 /** This period against the one before: the one before needs this many plays, or this much time heard. */
-private const val MIN_VERSUS_PLAYS = 10
-private const val MIN_VERSUS_HEARD_MS: Long = 30 * 60_000
+internal const val MIN_VERSUS_PLAYS = 10
+internal const val MIN_VERSUS_HEARD_MS: Long = 30 * 60_000
 
 /** The clock: this many plays that counted in the period. */
-private const val MIN_CLOCK_PLAYS = 10
+internal const val MIN_CLOCK_PLAYS = 10
 
 /** A streak: this many days in a row. */
-private const val MIN_STREAK_DAYS = 2
+internal const val MIN_STREAK_DAYS = 2
 
 /** Books and podcasts: a minute heard. */
 private const val MIN_SPOKEN_MS: Long = 60_000
@@ -202,18 +202,18 @@ private val PLAY_MILESTONES = listOf(100, 250, 500, 1_000, 2_500, 5_000, 10_000,
 private val HOUR_MILESTONES = listOf(10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000)
 
 private const val HOUR_MS: Long = 3_600_000
-private const val HOURS_IN_DAY = 24
+internal const val HOURS_IN_DAY = 24
 
 // How each card is worked out
 
 /** A play's real minutes: the clock's time it played ([LoggedPlay.clockMs]), or its time heard for a play from before KJB kept them. */
-private val LoggedPlay.realMs: Long get() = clockMs ?: heardMs
+internal val LoggedPlay.realMs: Long get() = clockMs ?: heardMs
 
 /** What a play's song is now: music the lists show, a podcast, a book, or other (a hidden song, one gone from the phone). */
-private enum class Kind { MUSIC, PODCAST, BOOK, OTHER }
+internal enum class Kind { MUSIC, PODCAST, BOOK, OTHER }
 
 /** Each play's [Kind], by its song found again in [library]; once per song. */
-private class Kinds(private val library: Library?) {
+internal class Kinds(private val library: Library?) {
     private val known = HashMap<String, Kind>()
 
     fun of(play: LoggedPlay): Kind = known.getOrPut(play.song.path) {
@@ -229,14 +229,14 @@ private class Kinds(private val library: Library?) {
 }
 
 /** The time heard (books' too) and the plays that counted (never a book's). */
-private class Ledger(val heardMs: Long, val plays: Int)
+internal class Ledger(val heardMs: Long, val plays: Int)
 
-private fun ledgerOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Kinds): Ledger =
+internal fun ledgerOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Kinds): Ledger =
     Ledger(heard.sumOf { it.realMs } + books.sumOf { it.realMs }, heard.count { it.counted && kinds.of(it) != Kind.BOOK })
 
-private operator fun Period.contains(at: Long): Boolean = at >= from && at < until
+internal operator fun Period.contains(at: Long): Boolean = at >= from && at < until
 
-private fun List<LoggedPlay>.within(period: Period?): List<LoggedPlay> = if (period == null) this else filter { it.startedAt in period }
+internal fun List<LoggedPlay>.within(period: Period?): List<LoggedPlay> = if (period == null) this else filter { it.startedAt in period }
 
 /** [plays] per song, as the log's totals give them: under the latest play's song, so its id hint is the latest. */
 internal fun songPlaysOf(plays: List<LoggedPlay>): List<SongPlays> = plays.groupBy { it.song.path }.map { (_, its) ->
@@ -269,7 +269,7 @@ private fun clockOf(heard: List<LoggedPlay>, zone: ZoneId): ListeningClock? {
 }
 
 /** When [play] started where it was heard: in its time zone then, else the phone's now (plays from before KJB kept it). */
-private fun localTimeOf(play: LoggedPlay, zone: ZoneId): LocalDateTime {
+internal fun localTimeOf(play: LoggedPlay, zone: ZoneId): LocalDateTime {
     val start = Instant.ofEpochMilli(play.startedAt)
     return LocalDateTime.ofInstant(start, play.zoneOffsetMinutes?.let { ZoneOffset.ofTotalSeconds(it * SECONDS_PER_MINUTE) } ?: zone)
 }
@@ -292,7 +292,7 @@ private fun streaksOf(heard: List<LoggedPlay>, all: List<LoggedPlay>, going: Boo
 }
 
 /** How many days of [days] follow one another from [start], [step] days at a time. */
-private fun runFrom(start: LocalDate, days: Set<LocalDate>, step: Long): Int = generateSequence(start) { it.plusDays(step) }.takeWhile { it in days }.count()
+internal fun runFrom(start: LocalDate, days: Set<LocalDate>, step: Long): Int = generateSequence(start) { it.plusDays(step) }.takeWhile { it in days }.count()
 
 /**
  * The milestones reached in [period] (all of them for all time), the latest first, each by the play that crossed it:

@@ -5,11 +5,14 @@ import app.lyrify.library.Artist
 import app.lyrify.library.Genre
 import app.lyrify.library.Library
 import app.lyrify.library.Song
+import app.lyrify.library.albumKey
 import java.time.DayOfWeek
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.YearMonth
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.time.temporal.WeekFields
 import java.util.Locale
 import android.icu.util.Calendar as IcuCalendar
@@ -72,7 +75,7 @@ fun insightsPageOf(data: InsightsData, kind: ListeningPeriod, bounds: Period?, b
         before = before,
         beforeUntil = before?.let { if (going && bounds != null) minOf(it.until, it.from + (now - bounds.from)) else it.until },
     )
-    return InsightsPage(period, InsightsCards())
+    return InsightsPage(period, PageWork(data, period, now, calendar, library).cards())
 }
 
 /**
@@ -353,3 +356,123 @@ data class MilestonesCard(
 
 /** [artists] artists played in [month]. */
 data class MonthArtists(val month: YearMonth, val artists: Int)
+
+// How each card is worked out
+
+/** Covers on a story's ring. */
+private const val RECAP_COVERS = 4
+
+/** Every day you listened: plays that counted on this many days. */
+private const val MIN_DAYS = 2
+
+/**
+ * One page's working out, each part once for the cards that share it: [heard], the play log's plays in the period (an
+ * import's and the short ones left out), and [books], the book log's.
+ */
+private class PageWork(private val data: InsightsData, private val period: PagePeriod, private val now: Long, private val calendar: PhoneCalendar, private val library: Library?) {
+    private val zone = calendar.zone
+    private val kinds = Kinds(library)
+    private val heard = data.plays.within(period.bounds)
+    private val books = data.books.within(period.bounds)
+    private val ledger = ledgerOf(heard, books, kinds)
+    private val music by lazy { heard.filter { kinds.of(it) == Kind.MUSIC } }
+    private val tops by lazy { listeningOf(songPlaysOf(music), library) }
+
+    /** Each play's day where it was heard, and the days of plays that counted (books never count one). */
+    private fun localDay(play: LoggedPlay): LocalDate = localTimeOf(play, zone).toLocalDate()
+
+    private fun countedDays(plays: List<LoggedPlay>): Set<LocalDate> = plays.filter { it.counted && kinds.of(it) != Kind.BOOK }.mapTo(HashSet(), ::localDay)
+
+    fun cards(): InsightsCards {
+        val shows = ledger.heardMs >= MIN_HEARD_MS || ledger.plays > 0
+        val time = timeOf().takeIf { shows }
+        if (library == null) return InsightsCards(time = time)
+        return InsightsCards(
+            recaps = if (period.going) recapsOf(library) else emptyList(),
+            time = time,
+            days = daysOf(),
+            clock = clockOf(),
+        )
+    }
+
+    /** Your time: the totals now and the period before's up to the same point, step by step. */
+    private fun timeOf(): TimeCard {
+        val step = if (period.kind == ListeningPeriod.WEEK || period.kind == ListeningPeriod.MONTH) Step.DAY else Step.MONTH
+        val before = period.before?.let { previous -> totalsOf(Period(previous.from, checkNotNull(period.beforeUntil))).takeIf { it.plays >= MIN_VERSUS_PLAYS || it.heardMs >= MIN_VERSUS_HEARD_MS } }
+        val heardBefore = period.before?.takeIf { before != null }?.let { previous ->
+            val first = dayOf(previous.from, zone).date
+            stepsOf(data.plays.within(previous) + data.books.within(previous), step, first, stepsBetween(step, first, dayOf(previous.until, zone).date), last = null)
+        }
+        return TimeCard(totalsOf(period.bounds), before, stepsOf(heard + books, step), heardBefore)
+    }
+
+    /** The totals of [bounds]: the time heard and plays (both ledgers), and the songs, artists and albums of the music. */
+    private fun totalsOf(bounds: Period?): Totals {
+        val plays = data.plays.within(bounds)
+        val ledger = ledgerOf(plays, data.books.within(bounds), kinds)
+        if (library == null) return Totals(ledger.heardMs, ledger.plays, 0, 0, 0)
+        val tops = if (bounds == period.bounds) tops else listeningOf(songPlaysOf(plays.filter { kinds.of(it) == Kind.MUSIC }), library)
+        return Totals(ledger.heardMs, ledger.plays, tops.songs.size, tops.artists.size, tops.albums.size)
+    }
+
+    /** [plays]' real minutes by [step] over the period (a step after today has none yet). */
+    private fun stepsOf(plays: List<LoggedPlay>, step: Step): Steps {
+        val first = if (step == Step.MONTH) period.firstDay.withDayOfMonth(1) else period.firstDay
+        val end = period.bounds?.let { dayOf(it.until, zone).date } ?: if (step == Step.MONTH) first.plusMonths(1 + stepsBetween(step, first, period.lastDay).toLong()) else period.lastDay.plusDays(1)
+        return stepsOf(plays, step, first, stepsBetween(step, first, end), last = period.lastDay.takeIf { period.going })
+    }
+
+    /**
+     * [plays]' real minutes by [step], [count] steps from [first], each play in the step of the day it was heard (one a
+     * time zone took past either end goes in the first or the last); a step after [last] has none yet.
+     */
+    private fun stepsOf(plays: List<LoggedPlay>, step: Step, first: LocalDate, count: Int, last: LocalDate?): Steps {
+        val sums = LongArray(count)
+        plays.forEach { sums[stepsBetween(step, first, localDay(it)).coerceIn(0, count - 1)] += it.realMs }
+        val lastStep = last?.let { stepsBetween(step, first, it) } ?: count
+        return Steps(step, first, sums.mapIndexed { at, ms -> ms.takeIf { at <= lastStep } })
+    }
+
+    private fun stepsBetween(step: Step, from: LocalDate, to: LocalDate): Int =
+        (if (step == Step.DAY) ChronoUnit.DAYS.between(from, to) else ChronoUnit.MONTHS.between(YearMonth.from(from), YearMonth.from(to))).toInt()
+
+    /** Every day you listened: plays that counted on [MIN_DAYS] days, the heat map a day each but for all time. */
+    private fun daysOf(): DaysCard? {
+        val days = countedDays(heard)
+        if (days.size < MIN_DAYS) return null
+        val longest = days.filter { it.minusDays(1) !in days }.map { Run(runFrom(it, days, step = 1), it) }.maxWithOrNull(compareBy<Run> { it.days }.thenBy { it.from })
+        val current = if (period.going) {
+            val ever = countedDays(data.plays)
+            val today = period.lastDay
+            // From today or yesterday; or from tomorrow, a day a play heard in a time zone ahead of the phone's is on already.
+            listOf(today.plusDays(1), today, today.minusDays(1)).filter { it in ever }.maxOfOrNull { runFrom(it, ever, step = -1) } ?: 0
+        } else {
+            null
+        }
+        val byDay = (heard + books).groupBy(::localDay).mapValues { (_, its) -> its.sumOf { it.realMs } }
+        val busiest = byDay.entries.maxWith(compareBy<Map.Entry<LocalDate, Long>> { it.value }.thenBy { it.key })
+        return DaysCard(stepsOf(heard + books, if (period.bounds == null) Step.MONTH else Step.DAY), current, longest?.takeIf { it.days >= MIN_STREAK_DAYS }, DayHeard(busiest.key, busiest.value))
+    }
+
+    /** Your day on a record: from [MIN_CLOCK_PLAYS] plays that counted. */
+    private fun clockOf(): ClockCard? {
+        if (heard.count { it.counted } < MIN_CLOCK_PLAYS) return null
+        val hours = LongArray(HOURS_IN_DAY)
+        var weekend = 0L
+        (heard + books).forEach { play ->
+            val local = localTimeOf(play, zone)
+            hours[local.hour] += play.realMs
+            if (local.dayOfWeek in calendar.weekend) weekend += play.realMs
+        }
+        return ClockCard(hours.toList(), hours.indices.maxBy { hours[it] }, hours.sum() - weekend, weekend)
+    }
+
+    /** The stories row: each month with a recap ([recapMonths]) and its most played songs of different albums. */
+    private fun recapsOf(library: Library): List<RecapMonth> {
+        val byMonth = data.plays.filter { kinds.of(it) == Kind.MUSIC }.groupBy { YearMonth.from(Instant.ofEpochMilli(it.startedAt).atZone(zone)) }
+        return recapMonths(data.plays, now, zone, library).map { month ->
+            val songs = listeningOf(songPlaysOf(byMonth[month].orEmpty()), library).songs.map { it.item }
+            RecapMonth(month, songs.distinctBy { albumKey(it) ?: it.path }.take(RECAP_COVERS))
+        }
+    }
+}
