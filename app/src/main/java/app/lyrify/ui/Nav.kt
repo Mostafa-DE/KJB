@@ -267,8 +267,9 @@ data class SheetReturn(val at: String, val sheet: OpenSheet.Menu)
  * last). [reselects] counts, per tab, taps on it while at its root: its list goes to the top. [libraryTab] is the top
  * tab Library's root shows, null for the one Library opens on ([libraryOpensOn]: the first in the user's order, or the
  * one they chose): null at a launch and whenever Library's icon lands on its root. [reopen] is the song sheet
- * Back has just come back to, until its host shows it ([Navigator.takeSheet]) or the next move. Pure, so the back
- * rules are tested on the JVM; the shell keeps it in a [Navigator].
+ * Back has just come back to, until its host shows it ([Navigator.takeSheet]) or the next move. [searchOpens] counts
+ * every tap on Search: each new count gives its field the focus. Pure, so the back rules are tested on the JVM; the
+ * shell keeps it in a [Navigator].
  */
 @Immutable
 data class NavState(
@@ -279,6 +280,7 @@ data class NavState(
     val reselects: Map<DockTab, Int> = emptyMap(),
     val libraryTab: LibraryTab? = null,
     val reopen: SheetReturn? = null,
+    val searchOpens: Int = 0,
 ) {
     /** The shown tab's pages above its root. */
     val pages: List<Page> get() = pagesOf(tab)
@@ -294,13 +296,14 @@ data class NavState(
 
     /**
      * A dock tap: another tab (the one left joins the history), or the tab shown popped to its root, or at its root to
-     * the top. Opening Search also counts for Search: its field takes focus whenever the tab opens. Library's icon always
-     * lands on the tab Library opens on (KJB 3.1: no longer always Songs): wherever it shows Library's root, that is its
-     * top tab, and only a tap while there goes to the top. A page left open on Library keeps the top tab under it.
+     * the top. Search always lands on its field, the pages opened there dropped (its words and results stay, in place),
+     * and every tap on it counts ([searchOpens]): its field takes the focus with its words selected. Library's icon
+     * always lands on the tab Library opens on (KJB 3.1: no longer always Songs): wherever it shows Library's root, that
+     * is its top tab, and only a tap while there goes to the top. A page left open on Library keeps the top tab under it.
      */
-    fun select(tab: DockTab): NavState = with(copy(views = emptyList(), reopen = null)) {
+    fun select(tab: DockTab): NavState = with(copy(views = emptyList(), reopen = null, searchOpens = if (tab == DockTab.SEARCH) searchOpens + 1 else searchOpens)) {
         when {
-            tab == DockTab.SEARCH && tab != this.tab -> visit(tab).copy(reselects = reselects + (tab to reselectsOf(tab) + 1))
+            tab == DockTab.SEARCH && tab != this.tab -> visit(tab).copy(stacks = stacks - tab)
             tab != this.tab -> visit(tab).onFirstTab()
             pages.isNotEmpty() -> copy(stacks = stacks - tab).onFirstTab()
             tab == DockTab.LIBRARY && libraryTab != null -> copy(libraryTab = null)
@@ -389,6 +392,7 @@ data class NavState(
                 "views" to JsonArray(views.map { JSON.encodeToJsonElement(FullScreen.serializer(), it) }),
                 "reselects" to JsonObject(reselects.entries.associate { (tab, count) -> tab.name to JsonPrimitive(count) }),
                 "libraryTab" to JsonPrimitive(libraryTab?.name),
+                "searchOpens" to JsonPrimitive(searchOpens),
             ) + listOfNotNull(reopen?.let { REOPEN to JSON.encodeToJsonElement(SheetReturn.serializer(), it) }),
         ),
     )
@@ -425,6 +429,7 @@ data class NavState(
                 libraryTab = (root["libraryTab"] as? JsonPrimitive)?.takeIf { it.isString }?.content
                     ?.let { name -> LibraryTab.entries.firstOrNull { it.name == name } },
                 reopen = root[REOPEN]?.let { decodeOrNull(it, SheetReturn.serializer()) },
+                searchOpens = (root["searchOpens"] as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull ?: 0,
             )
         }
 

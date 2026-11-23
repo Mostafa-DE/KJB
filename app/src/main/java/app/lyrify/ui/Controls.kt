@@ -387,7 +387,7 @@ fun LyrifyField(
 
 /**
  * [LyrifyField] with its text's selection: a name that starts selected (a rename), a value an Edit tags suggestion
- * fills (the caret after it).
+ * fills (the caret after it), Search's words selected at each Search tap.
  */
 @Composable
 fun LyrifyField(
@@ -396,8 +396,13 @@ fun LyrifyField(
     modifier: Modifier = Modifier,
     label: String? = null,
     placeholder: String? = null,
+    shape: Shape = RoundedCornerShape(16.dp),
+    ring: Dp = 2.dp,
+    leading: (@Composable () -> Unit)? = null,
+    trailing: (@Composable RowScope.() -> Unit)? = null,
     isError: Boolean = false,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
     val colors = MaterialTheme.colorScheme
     var focused by remember { mutableStateOf(false) }
@@ -409,7 +414,8 @@ fun LyrifyField(
         textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.onSurface),
         cursorBrush = SolidColor(LocalBrandColors.current.highlight),
         keyboardOptions = keyboardOptions,
-        decorationBox = { field -> FieldFrame(field, value.text.isEmpty(), focused, label, placeholder, RoundedCornerShape(16.dp), 2.dp, leading = null, trailing = null, isError = isError) },
+        keyboardActions = keyboardActions,
+        decorationBox = { field -> FieldFrame(field, value.text.isEmpty(), focused, label, placeholder, shape, ring, leading, trailing, isError) },
     )
 }
 
