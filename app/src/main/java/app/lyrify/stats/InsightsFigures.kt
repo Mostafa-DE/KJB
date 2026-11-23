@@ -15,7 +15,6 @@ import java.time.LocalDate
 import java.time.YearMonth
 import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 // The figures behind each card of the Insights page (stats/InsightsPage.kt): one function per card, and per moment, as
@@ -108,14 +107,8 @@ internal class PageWork(
     private val music by lazy { heard.filter { kinds.of(it) == Kind.MUSIC } }
     private val tops by lazy { listeningOf(songPlaysOf(music), library) }
 
-    /** Each play's day where it was heard, and the days of plays that counted (books never count one). */
+    /** [play]'s day where it was heard. */
     private fun localDay(play: LoggedPlay): LocalDate = localTimeOf(play, zone).toLocalDate()
-
-    private fun countedDays(plays: List<LoggedPlay>): Set<LocalDate> = plays.filter { it.counted && kinds.of(it) != Kind.BOOK }.mapTo(HashSet(), ::localDay)
-
-    /** The longest run of [days] in a row, the earliest of equals; none under [MIN_STREAK_DAYS]. */
-    private fun longestRun(days: Set<LocalDate>): Run? = days.filter { it.minusDays(1) !in days }.map { Run(runFrom(it, days, step = 1), it) }
-        .maxWithOrNull(compareBy<Run> { it.days }.thenByDescending { it.from })?.takeIf { it.days >= MIN_STREAK_DAYS }
 
     fun cards(): InsightsCards {
         val shows = ledger.heardMs >= MIN_HEARD_MS || ledger.plays > 0
@@ -123,19 +116,22 @@ internal class PageWork(
         if (library == null) return InsightsCards(time = time)
         val found = foundOf(library)
         val clock = clockOf()
+        // The most played song of each artist and each album in the period: the covers of their rows.
+        val artistCovers = tops.songs.flatMap { top -> library.artistsOf(top.item).map { it.name to top.item } }.distinctBy { it.first }.toMap()
+        val albumCovers = tops.songs.mapNotNull { top -> albumKey(top.item)?.let { it to top.item } }.distinctBy { it.first }.toMap()
         return InsightsCards(
             recaps = if (period.going) recapsOf(library) else emptyList(),
             time = time,
             days = daysOf(),
             clock = clock,
-            artists = topCardOf(tops.artists, MIN_TOP_OTHERS, placesBefore?.artists, { it.name }) { coverOf.byArtist[it.name] }
+            artists = topCardOf(tops.artists, MIN_TOP_OTHERS, placesBefore?.artists, { it.name }) { artistCovers[it.name] }
                 ?.let { card -> card.copy(loyalty = loyaltyOf(card.rows.first().top.item.name, library)) },
             songs = topCardOf(tops.songs, MIN_TOP_SONGS, placesBefore?.songs, { it.path }) { it }
                 ?.let { card ->
                     val first = card.rows.first().top.item
                     card.copy(firstsDay = mostInADay(musicSongs.filter { it.first.counted && it.second == first })?.takeIf { it.plays >= MIN_DAY_PLAYS })
                 },
-            albums = topCardOf(tops.albums, MIN_TOP_OTHERS, placesBefore?.albums, { it.key }) { coverOf.byAlbum[it.key] },
+            albums = topCardOf(tops.albums, MIN_TOP_OTHERS, placesBefore?.albums, { it.key }) { albumCovers[it.key] },
             taste = tasteOf(library),
             how = howOf(),
             moments = momentsOf(library),
@@ -198,20 +194,20 @@ internal class PageWork(
         )
     }
 
-    /** Books and podcasts, from a minute of either: real minutes, the time faster speeds saved, bookmarks and books finished. */
+    /**
+     * Books and podcasts, from a minute of either (in1's [spokenOf]): real minutes, the time faster speeds saved, bookmarks
+     * and books finished, and the book and the episode heard most.
+     */
     private fun spokenOf(library: Library): SpokenCard? {
+        val spoken = spokenOf(heard, books, kinds) ?: return null
         val bookPlays = books + heard.filter { kinds.of(it) == Kind.BOOK }
         val podcasts = heard.filter { kinds.of(it) == Kind.PODCAST }
-        val booksMs = bookPlays.sumOf { it.realMs }
-        val podcastsMs = podcasts.sumOf { it.realMs }
-        if (booksMs + podcastsMs < MIN_HEARD_MS) return null
-        fun inPeriod(at: Long): Boolean = period.bounds == null || at in period.bounds
         return SpokenCard(
-            booksMs = booksMs,
-            podcastsMs = podcastsMs,
-            savedMs = (bookPlays + podcasts).sumOf { play -> play.clockMs?.let { (play.heardMs - it).coerceAtLeast(0) } ?: 0 },
-            bookmarks = sources.bookmarks.count(::inPeriod),
-            finished = sources.finishedBooks.count(::inPeriod),
+            booksMs = spoken.booksMs,
+            podcastsMs = spoken.podcastsMs,
+            savedMs = savedMs(bookPlays + podcasts),
+            bookmarks = sources.bookmarks.count { period.bounds == null || it in period.bounds },
+            finished = sources.finishedBooks.count { period.bounds == null || it in period.bounds },
             book = bookPlays.groupBy { play -> library.bookOf(songOf(play)?.path ?: play.song.path) }.filterKeys { it != null }
                 .maxByOrNull { (_, its) -> its.sumOf { it.realMs } }?.key,
             podcast = podcasts.groupBy(::songOf).filterKeys { it != null }.maxByOrNull { (_, its) -> its.sumOf { it.realMs } }?.key,
@@ -339,13 +335,13 @@ internal class PageWork(
         val own = milestonesOf(data, period.bounds, period.going, kinds)
         if (!period.going) return own?.let { MilestonesCard(it.reached, null, null, null, null, null, null, 0) }
         val ever = milestonesOf(data, null, going = false, kinds)?.reached.orEmpty()
-        val longest = longestRun(countedDays(data.plays))
+        val longest = longestRunOf(countedDays(data.plays, zone, kinds))?.takeIf { it.days >= MIN_STREAK_DAYS }
         val artistsMonth = data.plays.filter { it.counted && kinds.of(it) == Kind.MUSIC }
             .mapNotNull { play -> songOf(play)?.let { YearMonth.from(dayOf(play.startedAt, zone).date) to it } }
             .groupBy({ it.first }, { it.second })
             .map { (month, songs) -> MonthArtists(month, songs.flatMapTo(HashSet()) { song -> library.artistsOf(song).map { it.name } }.size) }
             .maxWithOrNull(compareBy<MonthArtists> { it.artists }.thenBy { it.month })
-        val card = MilestonesCard(
+        return MilestonesCard(
             reached = own?.reached.orEmpty(),
             next = own?.next,
             nextAround = own?.next?.let { next ->
@@ -364,8 +360,7 @@ internal class PageWork(
             hours = ever.filter { it.kind == MilestoneKind.HOURS }.maxByOrNull { it.count },
             artistsMonth = artistsMonth,
             booksFinished = sources.finishedBooks.size,
-        )
-        return card.takeIf { own != null || longest != null || card.booksFinished > 0 }
+        ).takeIf { own != null || longest != null || it.booksFinished > 0 }
     }
 
     /** [play]'s song in the library now (found again by its path, then its id hint), once per path. */
@@ -511,13 +506,15 @@ internal class PageWork(
         .takeIf { it.size >= MIN_ZONES }
         ?.let(Moment::OnTheMove)
 
-    /** The time faster speeds saved in books and podcasts: time heard past the real minutes, from a minute. */
+    /** The time faster speeds saved in books and podcasts, from a minute. */
     private fun fasterOf(): Moment.Faster? {
-        fun saved(plays: List<LoggedPlay>): Long = plays.sumOf { play -> play.clockMs?.let { (play.heardMs - it).coerceAtLeast(0) } ?: 0 }
-        val booksMs = saved(books) + saved(heard.filter { kinds.of(it) == Kind.BOOK })
-        val podcastsMs = saved(heard.filter { kinds.of(it) == Kind.PODCAST })
+        val booksMs = savedMs(books + heard.filter { kinds.of(it) == Kind.BOOK })
+        val podcastsMs = savedMs(heard.filter { kinds.of(it) == Kind.PODCAST })
         return Moment.Faster(booksMs, podcastsMs).takeIf { booksMs + podcastsMs >= MIN_SAVED_MS }
     }
+
+    /** The time faster speeds saved in [plays]: the time heard past the real minutes. */
+    private fun savedMs(plays: List<LoggedPlay>): Long = plays.sumOf { play -> play.clockMs?.let { (play.heardMs - it).coerceAtLeast(0) } ?: 0 }
 
     /** The song played most on this day a year ago, where it was heard. */
     private fun yearAgoOf(): Moment.YearAgo? {
@@ -578,18 +575,6 @@ internal class PageWork(
         val plays = period.before?.let { data.plays.within(it) }?.filter { kinds.of(it) == Kind.MUSIC } ?: return@lazy null
         listeningOf(songPlaysOf(plays), library).takeIf { plays.count { it.counted } >= MIN_TOP_PLAYS }
     }
-
-    /** The most played song of each artist and each album in the period, the cover their rows show. */
-    private val coverOf by lazy {
-        val covers = Covers(HashMap(), HashMap())
-        tops.songs.forEach { top ->
-            library?.artistsOf(top.item)?.forEach { covers.byArtist.putIfAbsent(it.name, top.item) }
-            albumKey(top.item)?.let { covers.byAlbum.putIfAbsent(it, top.item) }
-        }
-        covers
-    }
-
-    private class Covers(val byArtist: HashMap<String, Song>, val byAlbum: HashMap<String, Song>)
 
     /** A top list from its [rows] (at least [min] of them), each with its place in [before] (by [key]) and its [cover]. */
     private fun <T> topCardOf(rows: List<Top<T>>, min: Int, before: List<Top<T>>?, key: (T) -> String, cover: (T) -> Song?): TopCard<T>? {
@@ -697,19 +682,12 @@ internal class PageWork(
 
     /** Every day you listened: plays that counted on [MIN_DAYS] days, the heat map a day each but for all time. */
     private fun daysOf(): DaysCard? {
-        val days = countedDays(heard)
+        val days = countedDays(heard, zone, kinds)
         if (days.size < MIN_DAYS) return null
-        val current = if (period.going) {
-            val ever = countedDays(data.plays)
-            val today = period.lastDay
-            // From today or yesterday; or from tomorrow, a day a play heard in a time zone ahead of the phone's is on already.
-            listOf(today.plusDays(1), today, today.minusDays(1)).filter { it in ever }.maxOfOrNull { runFrom(it, ever, step = -1) } ?: 0
-        } else {
-            null
-        }
+        val current = if (period.going) runUpTo(period.lastDay, countedDays(data.plays, zone, kinds)) else null
         val byDay = (heard + books).groupBy(::localDay).mapValues { (_, its) -> its.sumOf { it.realMs } }
         val busiest = byDay.entries.maxWith(compareBy<Map.Entry<LocalDate, Long>> { it.value }.thenBy { it.key })
-        return DaysCard(stepsOf(heard + books, if (period.bounds == null) Step.MONTH else Step.DAY), current, longestRun(days), DayHeard(busiest.key, busiest.value))
+        return DaysCard(stepsOf(heard + books, if (period.bounds == null) Step.MONTH else Step.DAY), current, longestRunOf(days)?.takeIf { it.days >= MIN_STREAK_DAYS }, DayHeard(busiest.key, busiest.value))
     }
 
     /** Your day on a record: from [MIN_CLOCK_PLAYS] plays that counted. */
