@@ -155,7 +155,7 @@ Message kinds and how long the server keeps them:
 | `card` | A song, album or playlist, with an optional note | 65,536 bytes | Until acknowledged or deleted; 30 days at most |
 | `profile` | The sender's display name | 4,096 bytes | Until acknowledged; 30 days at most. A new profile replaces an unread older one in the same mailbox |
 | `play` | One live listening event | 2,048 bytes | Until the first `inbox` call returns it (then deleted at once); 24 hours at most. A mailbox keeps its newest 500 plays; older ones are dropped |
-| `now` | What the sender's player does now (playing, paused or stopped, where in the song), sent at each change and every minute while it plays; the first that plays a song with a cover also carries a small picture of it | 12,288 bytes | Until a new now replaces it in the same mailbox; 10 minutes at most. Every `inbox` call gets it, and neither a read nor `ack` deletes it |
+| `now` | What the sender's player does now (playing, paused or stopped, where in the song), sent at each change and every minute while it plays; once a song with a cover has played 5 s, a now of its own also carries a small picture of it | 12,288 bytes | Until a new now replaces it in the same mailbox; 10 minutes at most. Every `inbox` call gets it, and neither a read nor `ack` deletes it |
 
 A mailbox holds at most 200 cards and profiles together, and at most 4 MiB of their data. A send above either limit
 gets `409 mailbox_full` (show "Your friend's inbox is full. They need to open KJB."). Plays and nows never fill a
@@ -173,7 +173,7 @@ album or playlist lists before sealing.
 
 `201 {"id": "1734", "sentAt": 1763820000000, "expiresAt": 1766412000000}`. Keep `id` and `mailbox` for "Undo".
 Errors: `400`, `409 mailbox_full`, `413 too_large`, `429` (240 sends per hour into one mailbox, and 1,200 nows
-counted apart; 48 MiB of data per hour and 480 MiB per day per IP), `503 storage_full`. Each send wakes the reads
+counted apart; 64 MiB of data per hour and 640 MiB per day per IP), `503 storage_full`. Each send wakes the reads
 held on that mailbox (see `wait` below).
 
 ### `POST /api/v1/messages/inbox`
@@ -275,10 +275,12 @@ entries; `0` is fine and safe to retry).
 - Sending: one `messages/send` per friend (each friend has their own mailbox and their own sealed copy). Plays and nows
   go to the friends the user shares with, unless "Listen privately" is on. A play goes once 10 s of the song were
   heard, a now at once at each play, pause, resume, skip, seek and stop (several within half a second go as the newest),
-  and every minute while the song plays. The first now that plays a song also carries its cover: cut square, 96 px at
-  most, a JPEG of at most 6 KiB, so the now is padded to 10 KiB instead of 1 KiB. A now waits for the cover 300 ms at
-  most; one read later, or read again after a read that failed, goes with the song's next now that plays. Heartbeats, pauses and stops carry none, nor does a song
-  without a cover. The friend's KJB keeps it in memory with the song's now. A now is kept in memory only: one a
+  and every minute while the song plays. A song's cover goes once the song has played 5 s with nothing else told (no
+  skip, pause, seek or stop), in a now of its own: cut square, 96 px at most, a JPEG of at most 6 KiB, so that now is
+  padded to 10 KiB instead of 1 KiB. A song left sooner sends none. A cover read within 300 ms goes then; one read
+  later, or one a friend did not get, goes with the song's next now that plays, and one whose read failed is read again
+  5 s after that now. Other nows carry none, nor does a song without a cover. The friend's KJB keeps it in memory with
+  the song's now. A now is kept in memory only: one a
   friend's server did not answer is sent to that friend again after 2 s, 5 s, 15 s, 30 s and 60 s while it is the
   newest (the last under 2 minutes after it, so a pause lands before a friend lets the "playing" go), and after that
   the next change or heartbeat replaces it. A friend who saw your last song is told it stopped when the next one is
@@ -297,9 +299,10 @@ entries; `0` is fine and safe to retry).
 The per-IP limits leave room for several phones behind one address (one home Wi-Fi, or a mobile carrier's shared
 address): 10 friends behind one IP, all with KJB in front and all playing, each keeping a held read open (answered at
 each message that lands, about 15 a minute) and sending every play, card and now to 9 friends, make about 3,000 calls
-per 10 minutes, 28 MiB of data in a busy hour and 200 MiB in a heavy day. Covers add 9,216 bytes to each new song's
-now: with a song every 3 minutes on each phone, 1,800 covers an hour, 16 MiB, so 44 MiB in a busy hour and 327 MiB in
-a heavy day (8 hours of music).
+per 10 minutes, 28 MiB of data in a busy hour and 200 MiB in a heavy day. Each song that plays 5 s adds a now with its
+cover, 10,269 bytes: with a song every 2.5 minutes on each phone, 2,160 covers an hour, 21 MiB, so 49 MiB in a busy
+hour and 369 MiB in a heavy day (8 hours of music). A song skipped within 5 s sends no cover; one phone skipping every
+6 s, each song with its cover, sends the most: about 58 MiB an hour (1,200 nows an hour into each mailbox).
 
 ## Limits
 
@@ -321,7 +324,7 @@ a heavy day (8 hours of music).
 | `/health` and `/.well-known/assetlinks.json` | never limited |
 | `invites/create`, per IP | 60 per hour |
 | `invites/accept`, per IP | 60 per hour |
-| Data sent (`messages/send` plus `invites/accept`), per IP | 48 MiB per hour, and 480 MiB per day |
+| Data sent (`messages/send` plus `invites/accept`), per IP | 64 MiB per hour, and 640 MiB per day |
 | Sends into one mailbox | 240 per hour, and 1,200 nows per hour counted apart |
 | Storage guard (all messages and invites) | 1 GiB by default (`HUDDLE_MAX_STORE_MB`); writes get `503 storage_full` above it |
 
@@ -333,8 +336,8 @@ Expired rows are never returned, and a cleanup deletes them when the server star
 
 - Stored: SHA-256 hashes of mailbox, invite and owner ids; the kind, size, send time and expiry of each message; the
   encrypted data. No names, no song details, no keys, no IP addresses.
-- The size of a `now` shows whether it carries a cover (about 10 KiB, the first now of a song that has one) or not
-  (about 1 KiB): when a new song starts, never which one, nor anything of the picture (every cover pads to one size).
+- The size of a `now` shows whether it carries a cover (about 10 KiB, once a song that has one played 5 s) or not
+  (about 1 KiB): that a song played 5 s, never which one, nor anything of the picture (every cover pads to one size).
 - The times of `now` messages show when someone's music plays, pauses and stops (never what plays), as the times of
   `play` messages already showed when songs began.
 - While a request is live: the IP address (Railway sees it too), and which mailboxes one phone reads together in one

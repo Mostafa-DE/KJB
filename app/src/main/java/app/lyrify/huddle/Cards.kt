@@ -55,8 +55,9 @@ sealed interface Message {
     /**
      * What the friend's player does now ([state]), at [positionMs] in [song], told [at]: at each play, pause, resume, skip,
      * seek and stop, and every [SharedPlays.HEARTBEAT_MS] while it plays. The server keeps only the newest one waiting,
-     * and the phone only in memory. [cover]: the song's, with the first now that plays it (or, read late, its next);
-     * the others carry none, and the friend's KJB keeps the one it has for the same song.
+     * and the phone only in memory. [cover]: the song's, once it kept playing [Huddle.COVER_AFTER_MS], with a now of its
+     * own (or, read late, the song's next now that plays); the others carry none, and the friend's KJB keeps the one it
+     * has for the same song.
      */
     data class Now(override val id: String, override val at: Long, val song: CardSong, val state: NowState, val positionMs: Long, val favourite: Boolean = false, val cover: NowCover? = null) : Message
 }
