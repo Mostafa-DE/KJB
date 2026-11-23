@@ -72,7 +72,8 @@ class SearchFocusDeviceTest {
             val focus = remember { FocusRequester() }
             // Never laid out, as Search's results under an empty field: its scroll waits for a first layout.
             val results = rememberLazyListState()
-            FocusOnOpen(focus, opens, toTop = listOf({ results.scrollToItem(0) }))
+            FocusOnOpen(focus, opens)
+            ReselectToTop(opens) { results.scrollToItem(0) }
             BasicTextField("", {}, Modifier.testTag(FIELD).focusRequester(focus))
         }
         opens = 1

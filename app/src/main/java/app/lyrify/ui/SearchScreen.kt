@@ -99,7 +99,6 @@ import app.lyrify.stats.StatsGraph
 import app.lyrify.stats.sinceOf
 import app.lyrify.stats.Target
 import app.lyrify.stats.TargetKind
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -183,7 +182,11 @@ fun SearchPage() {
     val recentList = rememberLazyListState()
     val resultList = rememberLazyListState()
     val reselects = nav.state.reselectsOf(DockTab.SEARCH)
-    FocusOnOpen(focus, reselects, toTop = listOf({ recentList.scrollToItem(0) }, { resultList.scrollToItem(0) }), onOpen = { query = nameField(query.text) })
+    FocusOnOpen(focus, nav.state.searchOpens, onOpen = { query = nameField(query.text) })
+    // A tap on Search while this page shows: both lists to the top, each on its own, as the one not shown (the results
+    // under an empty field) waits for its first layout.
+    ReselectToTop(reselects) { recentList.scrollToItem(0) }
+    ReselectToTop(reselects) { resultList.scrollToItem(0) }
     // New words start at the top; coming back to the tab or turning the phone keeps the place.
     var shownQuery by rememberSaveable { mutableStateOf(query.text) }
     LaunchedEffect(query.text) {
@@ -484,12 +487,12 @@ private fun LazyListScope.resultRows(
 }
 
 /**
- * Each time [opens] grows (each Search tap; 1 for a dialog's field), [onOpen] runs (Search selects its words), its lists
- * go back to the top ([toTop]) and the field of [focus] takes the focus with the keyboard shown ([openAndFocus]). The
- * count already handled is kept across a turn of the phone, so the keyboard never pops up again then.
+ * Each time [opens] grows (each Search tap; 1 for a dialog's field), [onOpen] runs (Search selects its words) and the
+ * field of [focus] takes the focus with the keyboard shown ([openAndFocus]). The count already handled is kept across a
+ * turn of the phone, so the keyboard never pops up again then.
  */
 @Composable
-fun FocusOnOpen(focus: FocusRequester, opens: Int, toTop: List<suspend () -> Unit> = emptyList(), onOpen: () -> Unit = {}) {
+fun FocusOnOpen(focus: FocusRequester, opens: Int, onOpen: () -> Unit = {}) {
     val keyboard = LocalSoftwareKeyboardController.current
     val window = LocalWindowInfo.current
     var handled by rememberSaveable { mutableIntStateOf(0) }
@@ -499,7 +502,7 @@ fun FocusOnOpen(focus: FocusRequester, opens: Int, toTop: List<suspend () -> Uni
         onOpen()
         // The keyboard comes up only in a window that has the focus: a dialog's gets it a few frames after it shows.
         snapshotFlow { window.isWindowFocused }.first { it }
-        val taken = openAndFocus(toTop, frame = { withFrameNanos { } }) {
+        val taken = openAndFocus(frame = { withFrameNanos { } }) {
             try {
                 focus.requestFocus(FocusDirection.Enter)
             } catch (e: IllegalStateException) {
@@ -512,13 +515,10 @@ fun FocusOnOpen(focus: FocusRequester, opens: Int, toTop: List<suspend () -> Uni
 }
 
 /**
- * What opening Search does: each of [toTop] (a list back to the top) in a coroutine of its own, as a list not laid out
- * yet (the results under an empty field) waits for its first layout and must never hold the focus back; and the focus
- * asked for on each [frame] until [request] takes it, for at most [FOCUS_TRIES] frames, as the field attaches while the
- * tab slides in. Whether it took.
+ * What opening asks of the field: the focus, asked for on each [frame] until [request] takes it, for at most
+ * [FOCUS_TRIES] frames, as the field attaches while the tab slides in. Whether it took.
  */
-suspend fun CoroutineScope.openAndFocus(toTop: List<suspend () -> Unit>, frame: suspend () -> Unit, request: () -> Boolean): Boolean {
-    toTop.forEach { launch { it() } }
+suspend fun openAndFocus(frame: suspend () -> Unit, request: () -> Boolean): Boolean {
     repeat(FOCUS_TRIES) {
         frame()
         if (request()) return true

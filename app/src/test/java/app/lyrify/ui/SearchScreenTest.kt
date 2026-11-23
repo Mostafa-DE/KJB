@@ -14,8 +14,6 @@ import app.lyrify.library.search.MatchKind
 import app.lyrify.library.song
 import app.lyrify.stats.Target
 import app.lyrify.stats.TargetKind
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
@@ -148,9 +146,18 @@ class SearchScreenTest {
         // Search's field keeps its selection, and the count of Search taps (opens) selects its words each time.
         val screen = File("src/main/java/app/lyrify/ui/SearchScreen.kt").readText()
         assertTrue(screen.contains("var query by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }"))
-        assertTrue(Regex("""FocusOnOpen\(focus, reselects, [^\n]*onOpen = \{ query = nameField\(query\.text\) }""").containsMatchIn(screen))
+        assertTrue(screen.contains("FocusOnOpen(focus, nav.state.searchOpens, onOpen = { query = nameField(query.text) })"))
         val focusOnOpen = screen.substringAfter("fun FocusOnOpen(").substringBefore("\n}\n")
         assertTrue(Regex("""if \(!focusDue\(opens, handled\)\) return@LaunchedEffect\s+handled = opens\s+onOpen\(\)""").containsMatchIn(focusOnOpen))
+    }
+
+    /** Lead 2026-11-23: coming back to Search keeps the results' place; only a tap on its page itself goes to the top. */
+    @Test
+    fun `only a tap on Search while its page shows sends its lists to the top, each list on its own`() {
+        val page = File("src/main/java/app/lyrify/ui/SearchScreen.kt").readText().substringAfter("fun SearchPage(").substringBefore("\n}\n")
+        assertTrue(page.contains("val reselects = nav.state.reselectsOf(DockTab.SEARCH)"))
+        assertTrue(page.contains("ReselectToTop(reselects) { recentList.scrollToItem(0) }"))
+        assertTrue(page.contains("ReselectToTop(reselects) { resultList.scrollToItem(0) }"))
     }
 
     @Test
@@ -160,25 +167,16 @@ class SearchScreenTest {
     }
 
     @Test
-    fun `the field takes the focus while a list not laid out yet waits to go to the top`() = runTest {
-        // With the field empty the results list is not composed, so its scroll to the top waits for a first layout
-        // that may never come (the phone: Search opened with no keyboard).
+    fun `the field takes the focus on the frame it attaches`() = runTest {
         var tries = 0
-        var taken: Boolean? = null
-        val opening = launch { taken = openAndFocus(listOf({ awaitCancellation() }), frame = { yield() }) { ++tries == 3 } }
-        testScheduler.advanceUntilIdle()
-        assertEquals(true, taken)
+        assertTrue(openAndFocus(frame = { yield() }) { ++tries == 3 })
         assertEquals(3, tries)
-        opening.cancel()
     }
 
     @Test
     fun `a field that never attaches stops being asked after the tries`() = runTest {
         var tries = 0
-        var taken: Boolean? = null
-        launch { taken = openAndFocus(emptyList(), frame = { yield() }) { tries++; false } }
-        testScheduler.advanceUntilIdle()
-        assertEquals(false, taken)
+        assertFalse(openAndFocus(frame = { yield() }) { tries++; false })
         assertEquals(60, tries)
     }
 }
