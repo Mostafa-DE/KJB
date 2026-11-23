@@ -268,6 +268,35 @@ class HuddleScreenTest {
     }
 
     @Test
+    fun `the friends row is compact, 40 dp faces over one line of name, and TalkBack still hears what each friend played and when`() {
+        val everywhere = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText()
+        val row = everywhere.substringAfter("internal fun FriendsRow(").substringBefore("\n}\n")
+        // The lock, Invite and every friend at 40 dp (was 56), the live ring and the bars on a playing friend's face.
+        listOf(
+            "Modifier.size(40.dp).background(chrome.action, CircleShape)",
+            "RowFace(stringResource(R.string.huddle_row_invite), description = stringResource(R.string.huddle_invite), onClick = onInvite) { SeatFace(40.dp) }",
+            "FriendFace(name, friendColor(friend.friend.id), 40.dp, ring = if (friend.playing) FaceRing.LIVE else FaceRing.IDLE, playing = friend.playing, mail = sent)",
+            // Less room above and below the faces.
+            "contentPadding = PaddingValues(horizontal = 10.dp)",
+        ).forEach { assertTrue(it, row.contains(it)) }
+        // No line under the name ("15 min ago", Paused, their song): TalkBack still says it, the time in words.
+        assertFalse(row.contains("FORMAT_ABBREV_RELATIVE"))
+        assertTrue(row.contains("stringResource(R.string.huddle_row_played, name, songBy(resources, play.song), ago(play.at, now))"))
+        val parts = File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText()
+        // The bars' badge and a card's badge scaled down with the face (24 dp on the 56 dp one).
+        assertTrue(parts.substringAfter("internal fun FriendFace(").substringBefore("\n}\n").contains(".size(18.dp)"))
+        assertTrue(parts.substringAfter("private fun MailBadge(").substringBefore("\n}\n").contains(".size(18.dp)"))
+        val face = parts.substringAfter("internal fun RowFace(").substringBefore("\n}\n")
+        assertTrue(face.startsWith("name: String, description: String, onClick: () -> Unit, face: @Composable () -> Unit)"))
+        assertEquals("the name alone", 1, Regex("""\bText\(""").findAll(face).count())
+        assertTrue(face.contains("maxLines = 1, overflow = TextOverflow.Ellipsis"))
+        // Each face is still a 48 dp touch target.
+        assertTrue(face.contains(".heightIn(min = 48.dp)"))
+        // No divider under the row: the For you card and the lists' headers below start bands of their own.
+        assertFalse(everywhere.substringAfter("private fun HuddleFriends(").substringBefore("\n}\n").contains("outlineVariant"))
+    }
+
+    @Test
     fun `each friend keeps one colour of a few, and lilac initials and words read on every one`() {
         assertEquals(friendColor("f1"), friendColor("f1"))
         assertTrue((1..40).map { friendColor("friend $it") }.toSet().size >= 5)

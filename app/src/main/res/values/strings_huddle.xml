@@ -181,7 +181,6 @@
 
     <!-- Library's friends row (each word fits under a face). -->
     <string name="huddle_row_invite">Invite</string>
-    <string name="huddle_row_invite_line">a friend</string>
     <string name="huddle_row_private">Private</string>
     <string name="huddle_row_private_until">Until %1$s</string>
     <string name="huddle_row_private_on">On</string>

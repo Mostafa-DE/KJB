@@ -106,7 +106,8 @@ enum class FaceRing { LIVE, IDLE, NONE }
  * A face: the first letter of [name], white on [color]. [ring] LIVE turns a ring of the friend's colour, gold and coral
  * round it with a soft breathing glow, IDLE draws a quiet ring and greys the face a little; [gap] is the ground it sits
  * on, kept as a thin ring between face and ring. [playing] adds the moving bars at its foot, [mail] a small wiggling
- * badge at its top (a card not opened yet). Decorative: the name and what they play are words beside it.
+ * badge at its top (a card not opened yet), both sized for the friends row's 40 dp faces. Decorative: the name and what
+ * they play are words beside it.
  */
 @Composable
 internal fun FriendFace(
@@ -151,13 +152,13 @@ internal fun FriendFace(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .offset(3.dp, 3.dp)
-                    .size(24.dp)
+                    .offset(2.dp, 2.dp)
+                    .size(18.dp)
                     .drawBehind { drawCircle(gap, radius = this.size.minDimension / 2 + 2.dp.toPx()) }
                     .background(lerp(color, BrandBlack, 0.18f), CircleShape),
-            ) { Equaliser(BrandLilac, Modifier.size(12.dp, 10.dp)) }
+            ) { Equaliser(BrandLilac, Modifier.size(9.dp, 8.dp)) }
         }
-        if (mail) MailBadge(gap, Modifier.align(Alignment.TopEnd).offset(6.dp, (-4).dp))
+        if (mail) MailBadge(gap, Modifier.align(Alignment.TopEnd).offset(4.dp, (-2).dp))
     }
 }
 
@@ -220,9 +221,9 @@ private fun MailBadge(gap: Color, modifier: Modifier) {
             .graphicsLayer { rotationZ = tilt?.value ?: 0f }
             .drawBehind { drawRoundRect(gap, Offset(-2.dp.toPx(), -2.dp.toPx()), Size(size.width + 4.dp.toPx(), size.height + 4.dp.toPx()), CornerRadius(size.height / 2 + 2.dp.toPx())) }
             .background(brand.highlight, CircleShape)
-            .size(24.dp),
+            .size(18.dp),
     ) {
-        Icon(painterResource(R.drawable.ic_send), contentDescription = null, tint = brand.onHighlight, modifier = Modifier.size(13.dp))
+        Icon(painterResource(R.drawable.ic_send), contentDescription = null, tint = brand.onHighlight, modifier = Modifier.size(10.dp))
     }
 }
 
@@ -617,25 +618,23 @@ internal fun KeptPostcard(kept: KeptCard, name: String, color: Color, matcher: S
 }
 
 /**
- * One face of Library's friends row: [face] over the [name] and a short [line] (their song while they play, in the
- * page's ink, [strong]); a tap does [onClick]. 74 dp wide, a TalkBack stop of its own named [description].
+ * One face of Library's friends row: [face] over the [name] in one short line; a tap does [onClick]. 60 dp wide, a
+ * TalkBack stop of its own named [description], which also says what the row shows no words for.
  */
 @Composable
-internal fun RowFace(name: String, line: String?, strong: Boolean, description: String, onClick: () -> Unit, face: @Composable () -> Unit) {
-    val colors = MaterialTheme.colorScheme
+internal fun RowFace(name: String, description: String, onClick: () -> Unit, face: @Composable () -> Unit) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .width(74.dp)
+            .width(60.dp)
             .clip(RoundedCornerShape(18.dp))
             .clickable(role = Role.Button, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = description }
             .heightIn(min = 48.dp)
             .padding(vertical = 4.dp),
     ) {
-        Box(Modifier.padding(bottom = 6.dp)) { face() }
-        Text(name, style = RowName, color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {}.padding(horizontal = 2.dp))
-        line?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (strong) colors.onSurface else colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {}.padding(horizontal = 2.dp)) }
+        Box(Modifier.padding(bottom = 4.dp)) { face() }
+        Text(name, style = RowName, color = MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {}.padding(horizontal = 2.dp))
     }
 }
 
