@@ -521,9 +521,11 @@ fun LyrifyTopBar(
     below: (@Composable () -> Unit)? = null,
 ) {
     TopBand(under, backdrop, modifier) {
-        Column(Modifier.statusBarsPadding()) {
-            TopBarRow(title, navigation, actions)
-            below?.invoke()
+        Box(Modifier.statusBarsPadding()) {
+            Column {
+                TopBarRow(title, navigation, actions)
+                below?.invoke()
+            }
         }
     }
 }
