@@ -230,9 +230,9 @@ class PlayStats(
         page(ListeningPeriod.MONTH, monthPeriod(month, calendar.zone), monthPeriod(month.minusMonths(1), calendar.zone), now, calendar)
 
     /**
-     * The page of [bounds] against [before], kept as [insights] keeps a period over: one over until a play in it or
-     * before it is written; one going on until any play is written, the day turns, or [PAGE_FRESH_MS] go by (Huddle,
-     * searches and lyrics change without a play, and "up to now" moves); both until the library or Favourites change.
+     * The page of [bounds] against [before], kept until a play in it or before it is written, the library or Favourites
+     * change, or [PAGE_FRESH_MS] go by (Huddle, searches, lyrics, bookmarks and books change without a play, and "up to
+     * now" moves); a page going on, also until the day turns, so it is never a month's story once the month is over.
      */
     private suspend fun page(kind: ListeningPeriod, bounds: Period?, before: Period?, now: Long, calendar: PhoneCalendar): InsightsPage {
         val logs = logs()
@@ -246,14 +246,16 @@ class PlayStats(
                 pagesFor = stamp
             }
             pages[key]?.let { (at, page) ->
-                val over = bounds != null && bounds.until <= now
-                if (over || (now - at in 0 until PAGE_FRESH_MS && dayOf(now, calendar.zone).date == page.period.lastDay)) return page
+                if (now - at in 0 until PAGE_FRESH_MS && (!page.period.going || dayOf(now, calendar.zone).date == page.period.lastDay)) return page
             }
         }
-        val read = sources(bounds?.from).copy(interactions = store.interactions(bounds?.from, bounds?.until).orEmpty())
-        val page = withContext(compute) { insightsPageOf((logs ?: InsightsData(emptyList())).copy(favourites = favourites), read, kind, bounds, before, now, calendar, library) }
-        // A log that could not be read gives nothing, worked out again next time.
-        if (logs != null) held.withLock { if (pagesFor == stamp) pages[key] = now to page }
+        val page = withContext(compute) {
+            val read = sources(bounds?.from).copy(interactions = store.interactions(bounds?.from, bounds?.until).orEmpty())
+            insightsPageOf((logs ?: InsightsData(emptyList())).copy(favourites = favourites), read, kind, bounds, before, now, calendar, library)
+        }
+        // A log that could not be read gives nothing, worked out again next time; nor is a page kept when another read took
+        // in a play meanwhile (the copy of the logs it was worked out from is no longer the one kept).
+        if (logs != null) held.withLock { if (pagesFor == stamp && logs.plays === music && logs.books === bookPlays.orEmpty()) pages[key] = now to page }
         return page
     }
 

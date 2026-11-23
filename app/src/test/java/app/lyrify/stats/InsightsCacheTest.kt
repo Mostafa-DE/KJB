@@ -6,7 +6,9 @@ import app.lyrify.library.VOLUME
 import app.lyrify.library.song
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
@@ -18,6 +20,8 @@ import java.time.DayOfWeek
 import java.time.YearMonth
 import java.time.ZoneId
 import java.time.ZonedDateTime
+import java.util.concurrent.Executors
+import kotlin.coroutines.CoroutineContext
 
 /**
  * Insights at scale (lead, 2026-11-22): what Insights keep of the logs between reads, so a play written reads again only
@@ -228,7 +232,7 @@ class InsightsCacheTest {
     }
 
     @Test
-    fun `a month's story is worked out once, and again only when a play in it or before it is written`() = runBlocking {
+    fun `a month's story is worked out once, and again when a play in it or before it is written`() = runBlocking {
         val log = FakePlayLog(history)
         val stats = stats(log)
         val written = WatchedPlayLog(log, stats::changed)
@@ -236,11 +240,78 @@ class InsightsCacheTest {
         val first = stats.page(october, now, calendar)
 
         written.put(play(1, now - MINUTE))
-        assertSame(first, stats.page(october, now + HOUR, calendar))
+        // Changed on purpose (in2d's review): a month over is kept a minute, not an hour, as a page going on is.
+        assertSame(first, stats.page(october, now + 30_000, calendar))
         written.put(play(2, oct15 + 30 * MINUTE))
-        val again = stats.page(october, now, calendar)
+        val again = stats.page(october, now + 30_000, calendar)
         assertNotSame(first, again)
-        assertEquals(runBlocking { stats(FakePlayLog(log.plays)).page(october, now, calendar) }, again)
+        assertEquals(runBlocking { stats(FakePlayLog(log.plays)).page(october, now + 30_000, calendar) }, again)
+    }
+
+    @Test
+    fun `a month's story is worked out again a minute later, so a search's words forgotten since are gone from it`() = runBlocking {
+        val search = Interaction(oct15, InteractionKind.SEARCH, 60, words = "made up")
+        val log = FakePlayLog(history, listOf(search))
+        val stats = stats(log)
+        val october = YearMonth.of(2026, 10)
+        val first = stats.page(october, now, calendar)
+        assertEquals(listOf("made", "up"), first.cards.searches?.words?.map { it.word })
+
+        log.forget(listOf(oct15))
+
+        assertSame(first, stats.page(october, now + 30_000, calendar))
+        assertEquals(emptyList<WordCount>(), stats.page(october, now + MINUTE + 1, calendar).cards.searches?.words)
+    }
+
+    @Test
+    fun `this month's page worked out on its last evening is not its story once the month is over`() = runBlocking {
+        val stats = stats(FakePlayLog(history))
+        val lastMinute = at("2026-11-30T23:59:30+01:00[Europe/Berlin]")
+        stats.page(ListeningPeriod.MONTH, lastMinute, calendar)
+
+        val story = stats.page(YearMonth.of(2026, 11), lastMinute + 30_000, calendar)
+
+        assertEquals(false, story.period.going)
+        assertEquals(runBlocking { stats(FakePlayLog(history)).page(YearMonth.of(2026, 11), lastMinute + 30_000, calendar) }, story)
+    }
+
+    @Test
+    fun `a page worked out while another read took in a new play is not kept`() = runBlocking {
+        val log = FakePlayLog(history)
+        var meanwhile: (() -> Unit)? = null
+        // The page's work begins; just then a play is written and another page reads it.
+        val compute = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                meanwhile?.also { meanwhile = null }?.invoke()
+                block.run()
+            }
+        }
+        val stats = PlayStats(log, { library }, compute)
+        val written = WatchedPlayLog(log, stats::changed)
+        meanwhile = {
+            runBlocking {
+                written.put(play(4, now - 5 * MINUTE))
+                stats.page(ListeningPeriod.WEEK, now, calendar)
+            }
+        }
+        val missed = stats.page(ListeningPeriod.MONTH, now, calendar)
+
+        val again = stats.page(ListeningPeriod.MONTH, now + 1_000, calendar)
+
+        assertEquals(missed.cards.time?.totals?.plays?.plus(1), again.cards.time?.totals?.plays)
+    }
+
+    @Test
+    fun `a page reads Huddle and its other sources off the caller's thread`() = runBlocking {
+        val worker = Executors.newSingleThreadExecutor { Thread(it, "insights-work") }.asCoroutineDispatcher()
+        var readOn: String? = null
+        val stats = PlayStats(FakePlayLog(history), { library }, worker, sources = { readOn = Thread.currentThread().name; PageSources() })
+
+        stats.page(ListeningPeriod.MONTH, now, calendar)
+        worker.close()
+
+        // Debug builds of coroutines add the coroutine's name to the thread's.
+        assertTrue("read on $readOn", readOn?.startsWith("insights-work") == true)
     }
 
     @Test
