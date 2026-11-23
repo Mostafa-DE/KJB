@@ -5,6 +5,7 @@ import app.lyrify.library.Artist
 import app.lyrify.library.Genre
 import app.lyrify.library.Library
 import app.lyrify.library.Song
+import app.lyrify.suggestions.FriendPlay
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -54,11 +55,44 @@ data class PagePeriod(
 data class InsightsPage(val period: PagePeriod, val cards: InsightsCards)
 
 /**
+ * What the Insights page reads besides the logs, for one page: the interaction log's rows in the period ([interactions]),
+ * the date each favourite was added ([favouriteAdded], by path), the songs with synced lyrics ([synced], by path), when
+ * each bookmark was made ([bookmarks]) and each finished book last played ([finishedBooks]), and Huddle's history, past
+ * friends too: the [friends]' names, their plays from the period's start ([friendPlays]) and the songs of every card
+ * between you ([shared]). None of it leaves the phone.
+ */
+data class PageSources(
+    val interactions: List<Interaction> = emptyList(),
+    val favouriteAdded: Map<String, Long> = emptyMap(),
+    val synced: Set<String> = emptySet(),
+    val bookmarks: List<Long> = emptyList(),
+    val finishedBooks: List<Long> = emptyList(),
+    val friends: List<FriendName> = emptyList(),
+    val friendPlays: List<FriendPlay> = emptyList(),
+    val shared: List<SharedSong> = emptyList(),
+)
+
+/** A friend ([id]) by the [name] you see them by, [past] once they left. */
+data class FriendName(val id: String, val name: String, val past: Boolean)
+
+/** One song of the card [card] between you and [friend], [sent] by you or to you, [at] when. */
+data class SharedSong(val card: String, val friend: String, val at: Long, val sent: Boolean, val title: String, val artist: String?, val durationMs: Long)
+
+/**
  * The page of [kind] with [bounds] (null: all time), set against the period [before] it, as of [now] in the phone's
- * [calendar], from [data] joined with [library] now (null while it is read: only the time is known).
+ * [calendar], from [data] and [sources] joined with [library] now (null while it is read: only the time is known).
  */
 @Suppress("LongParameterList")
-fun insightsPageOf(data: InsightsData, kind: ListeningPeriod, bounds: Period?, before: Period?, now: Long, calendar: PhoneCalendar, library: Library?): InsightsPage {
+fun insightsPageOf(
+    data: InsightsData,
+    sources: PageSources,
+    kind: ListeningPeriod,
+    bounds: Period?,
+    before: Period?,
+    now: Long,
+    calendar: PhoneCalendar,
+    library: Library?,
+): InsightsPage {
     val zone = calendar.zone
     val going = bounds == null || now < bounds.until
     val today = dayOf(now, zone).date
@@ -67,12 +101,12 @@ fun insightsPageOf(data: InsightsData, kind: ListeningPeriod, bounds: Period?, b
         kind = kind,
         bounds = bounds,
         firstDay = firstDay,
-        lastDay = if (going || bounds == null) today else dayOf(bounds.until - 1, zone).date,
+        lastDay = bounds?.takeIf { !going }?.let { dayOf(it.until - 1, zone).date } ?: today,
         going = going,
         before = before,
         beforeUntil = before?.let { if (going && bounds != null) minOf(it.until, it.from + (now - bounds.from)) else it.until },
     )
-    return InsightsPage(period, InsightsCards())
+    return InsightsPage(period, PageWork(data, sources, period, now, calendar, library).cards())
 }
 
 /**

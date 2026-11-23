@@ -4,6 +4,7 @@ import app.lyrify.library.Library
 import app.lyrify.library.SongRef
 import app.lyrify.library.VOLUME
 import app.lyrify.library.song
+import app.lyrify.player.SourceKind
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -54,7 +55,7 @@ class InsightsCacheTest {
 
         override suspend fun all(): List<LoggedPlay>? = next.all()?.also { rows += it.size }
 
-        override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> = next.listened(from, until).also { rows += it.size }
+        override suspend fun since(from: Long): List<LoggedPlay>? = next.since(from)?.also { rows += it.size }
     }
 
     private fun stats(log: PlayLogStore, books: PlayLogStore? = null) = PlayStats(log, { library }, Dispatchers.Unconfined, books = books)
@@ -197,6 +198,98 @@ class InsightsCacheTest {
         assertTrue("after one play: $warm ms", warm < WARM_MS)
     }
 
+    private val calendar = PhoneCalendar(berlin, DayOfWeek.MONDAY, setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY))
+
+    @Test
+    fun `a page is worked out once, and again once a play is written, a minute has gone, or the library changes`() = runBlocking {
+        val log = FakePlayLog(history)
+        val read = Counted(log)
+        var shown = library
+        val stats = PlayStats(read, { shown }, Dispatchers.Unconfined)
+        val written = WatchedPlayLog(log, stats::changed)
+        val first = stats.page(ListeningPeriod.MONTH, now, calendar)
+
+        assertSame(first, stats.page(ListeningPeriod.MONTH, now + 30_000, calendar))
+        assertNotSame(first, stats.page(ListeningPeriod.WEEK, now, calendar))
+        // A minute later: Huddle, searches and lyrics may have changed, and "up to now" has moved.
+        val later = stats.page(ListeningPeriod.MONTH, now + MINUTE + 1, calendar)
+        assertNotSame(first, later)
+        assertEquals(runBlocking { PlayStats(FakePlayLog(history), { library }, Dispatchers.Unconfined).page(ListeningPeriod.MONTH, now + MINUTE + 1, calendar) }, later)
+
+        read.rows = 0
+        written.put(play(4, now - 5 * MINUTE))
+        val after = stats.page(ListeningPeriod.MONTH, now + MINUTE + 1, calendar)
+        assertNotSame(later, after)
+        assertEquals(1, read.rows)
+        assertEquals(later.cards.time?.totals?.plays?.plus(1), after.cards.time?.totals?.plays)
+
+        shown = Library.of(songs.drop(1), Settings())
+        assertNotSame(after, stats.page(ListeningPeriod.MONTH, now + MINUTE + 1, calendar))
+    }
+
+    @Test
+    fun `a month's story is worked out once, and again only when a play in it or before it is written`() = runBlocking {
+        val log = FakePlayLog(history)
+        val stats = stats(log)
+        val written = WatchedPlayLog(log, stats::changed)
+        val october = YearMonth.of(2026, 10)
+        val first = stats.page(october, now, calendar)
+
+        written.put(play(1, now - MINUTE))
+        assertSame(first, stats.page(october, now + HOUR, calendar))
+        written.put(play(2, oct15 + 30 * MINUTE))
+        val again = stats.page(october, now, calendar)
+        assertNotSame(first, again)
+        assertEquals(runBlocking { stats(FakePlayLog(log.plays)).page(october, now, calendar) }, again)
+    }
+
+    @Test
+    fun `a quick skip written after the page was read reaches How you listen, read alone`() = runBlocking {
+        val started = history.map { if (it.imported) it else it.copy(start = PlayStart(StartedBy.AUTO, SourceKind.ALBUM, shuffled = false, songKey = null), end = PlayEnded(PlayEnd.FINISHED, 120_000)) }
+        val log = FakePlayLog(started)
+        val read = Counted(log)
+        val stats = stats(read)
+        val written = WatchedPlayLog(log, stats::changed)
+        val before = stats.page(ListeningPeriod.MONTH, now, calendar)
+
+        read.rows = 0
+        written.put(LoggedPlay(songs[3].ref, now - 5 * MINUTE, 400, counted = false, start = PlayStart(StartedBy.AUTO, SourceKind.ALBUM, false, null), end = PlayEnded(PlayEnd.NEXT, 400)))
+        val after = stats.page(ListeningPeriod.MONTH, now, calendar)
+
+        assertEquals(1, read.rows)
+        assertEquals(before.cards.how?.ends?.early?.plus(1), after.cards.how?.ends?.early)
+        assertEquals(runBlocking { stats(FakePlayLog(log.plays)).page(ListeningPeriod.MONTH, now, calendar) }, after)
+    }
+
+    @Test
+    fun `on 100,000 plays every page is worked out in a few seconds, and one more play costs a small part of that`() = runBlocking {
+        val many = (1..3_000).map { song("Music/KJB test/Many $it.mp3", artist = "Made Up Band ${it % 40}", album = "Made Up Album ${it % 60}", genre = "Genre ${it % 9}", year = 1970 + it % 55, id = 1_000L + it, addedAt = it.toLong()) }
+        val big = Library.of(many, Settings())
+        val start = now - PLAYS * 20 * MINUTE
+        val ways = listOf(PlayStart(StartedBy.PICKED, SourceKind.SONGS, false, null), PlayStart(StartedBy.AUTO, SourceKind.ALBUM, false, null), PlayStart(StartedBy.AUTO, SourceKind.SONGS, true, null))
+        val log = FakePlayLog(
+            List(PLAYS) { i ->
+                LoggedPlay(many[(i * 7_919) % many.size].ref, start + i * 20 * MINUTE, 150_000, counted = i % 5 != 0, ways[i % 3], 60, PlayEnded(if (i % 4 == 0) PlayEnd.NEXT else PlayEnd.FINISHED, 20_000), clockMs = 140_000)
+            },
+        )
+        val read = Counted(log)
+        val stats = PlayStats(read, { big }, Dispatchers.Unconfined)
+        val written = WatchedPlayLog(log, stats::changed)
+
+        val cold = cpuMs {
+            ListeningPeriod.entries.forEach { stats.page(it, now, calendar) }
+            stats.page(YearMonth.of(2026, 10), now, calendar)
+        }
+        written.put(LoggedPlay(many[7].ref, now - MINUTE, 150_000, counted = true, zoneOffsetMinutes = 60, clockMs = 140_000))
+        read.rows = 0
+        val warm = cpuMs { stats.page(ListeningPeriod.MONTH, now, calendar) }
+        println("IN2D measure: the Insights page on $PLAYS plays, every period and a month's story from cold: $cold ms of CPU; this month again after one play: $warm ms")
+
+        assertEquals(1, read.rows)
+        assertTrue("from cold: $cold ms", cold < PAGES_COLD_MS)
+        assertTrue("after one play: $warm ms", warm < PAGE_WARM_MS)
+    }
+
     @Test
     fun `the app's play log and book log tell Insights each play written`() {
         val graph = java.io.File("src/main/java/app/lyrify/stats/PlaysQuery.kt").readText()
@@ -220,5 +313,12 @@ class InsightsCacheTest {
          */
         const val COLD_MS: Long = 3_000
         const val WARM_MS: Long = 400
+
+        /**
+         * The same for the Insights page (in2d), every card. Measured on the laptop (2026-11-23, in2d's report): 2,211 ms
+         * for the four periods and a month's story from cold, 268 ms for this month after one play.
+         */
+        const val PAGES_COLD_MS: Long = 8_000
+        const val PAGE_WARM_MS: Long = 1_200
     }
 }
