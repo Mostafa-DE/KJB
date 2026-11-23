@@ -119,13 +119,13 @@ object StatsGraph {
     @Synchronized
     fun stats(context: Context): PlayStats = stats ?: run {
         val app = context.applicationContext
-        val library = LibraryGraph.repository(app).state
-        val playlists = LibraryGraph.playlists(app)
+        val library = LibraryGraph.repository(context).state
+        val playlists = LibraryGraph.playlists(context)
         val ledger = LedgerRepository(app)
         PlayStats(
-            store(app),
+            store(context),
             library = { (library.value as? LibraryState.Ready)?.library },
-            books = bookLog(app),
+            books = bookLog(context),
             favourites = { playlists.state.first().favouriteSongs },
             sources = { from ->
                 // Huddle's history (past friends too), Favourites' dates, the lyrics written or found, bookmarks and books.
