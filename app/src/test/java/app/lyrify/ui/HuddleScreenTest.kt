@@ -377,6 +377,8 @@ class HuddleScreenTest {
         assertTrue(history.contains("val asked = maxOf(PAGE, value?.size ?: reached)"))
         val peek = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText().substringAfter("private fun PeekSheet(").substringBefore("private fun RowScope.PeekTile(")
         assertTrue(peek.contains("playIt(context, "))
+        // A paused friend's card on the Huddle page: Play it, the same way.
+        assertTrue(File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText().contains("friend.paused -> playIt(context, song, play, friend.friend.shownName, player)"))
     }
 
     @Test

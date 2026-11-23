@@ -75,7 +75,6 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
-import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.backup.SongMatcher
 import app.lyrify.data.LedgerState
@@ -98,8 +97,6 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.lyrics.TrackNames
-import app.lyrify.player.QueueSource
-import app.lyrify.player.SourceKind
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibraryTab
 import java.text.Collator
@@ -573,10 +570,7 @@ fun HuddlePage(onBack: (() -> Unit)?) {
                                 onPlayAlong = {
                                     when {
                                         play == null || song == null -> sheet = HuddleSheet.Peek(friend.friend.id)
-                                        friend.paused -> {
-                                            Lyrify.playback(context).play(listOf(song.ref), 0, QueueSource(SourceKind.HUDDLE, "${play.friend}:${play.at}", friend.friend.shownName))
-                                            player()
-                                        }
+                                        friend.paused -> playIt(context, song, play, friend.friend.shownName, player)
                                         else -> playAlong(context, song, play, friend.friend.shownName, player)
                                     }
                                 },
