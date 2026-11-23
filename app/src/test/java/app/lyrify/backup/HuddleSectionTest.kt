@@ -16,24 +16,34 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * Huddle's part of the backup zip (plan Q3.3): sealed with the user's passphrase on the phone, it goes in as it is,
- * beside the sections, and comes back only as what it says; a KJB without Huddle never reads it.
+ * Huddle's part of the backup zip (plan Q3.3; user 2026-11-23, always in it): sealed with the user's passphrase on the
+ * phone, or plain without one, it goes in as it is, beside the sections, and comes back only as what it says; a KJB
+ * without Huddle never reads it.
  */
 class HuddleSectionTest {
     private val sealed = """{"format":2,"kdf":"pbkdf2-sha256","rounds":1000,"salt":"c2FsdA","box":"Ym94"}"""
+    private val plain = """{"format":2,"lines":"bGluZXM"}"""
 
     @Test
     fun `the sealed Huddle part goes into the zip as it is and comes back, the sections as before`() {
         val bytes = zip(snapshot.copy(huddle = sealed))
         assertEquals(sealed, entries(bytes).single { it.first == BackupBundle.HUDDLE }.second)
-        // Version 2 holds the history (huddle/HuddleStore.kt, HuddleBackup format 2): a KJB that reads only version 1 leaves it.
-        assertEquals(JsonObject(mapOf("version" to JsonPrimitive(2))), manifest(bytes)["huddle"])
+        // Version 3 may be plain (no passphrase set): a KJB that reads only version 2, which would ask for a passphrase, leaves it.
+        assertEquals(JsonObject(mapOf("version" to JsonPrimitive(3))), manifest(bytes)["huddle"])
         assertEquals(sealed, contents(bytes).huddle)
         assertEquals(contents().sections, contents(bytes).sections)
     }
 
     @Test
-    fun `without a passphrase there is no Huddle part, and a backup from before has none`() {
+    fun `the plain Huddle part goes into the zip as it is and comes back, under the same version`() {
+        val bytes = zip(snapshot.copy(huddle = plain))
+        assertEquals(plain, entries(bytes).single { it.first == BackupBundle.HUDDLE }.second)
+        assertEquals(JsonObject(mapOf("version" to JsonPrimitive(3))), manifest(bytes)["huddle"])
+        assertEquals(plain, contents(bytes).huddle)
+    }
+
+    @Test
+    fun `a snapshot without Huddle's part has none in the zip, and a backup from before has none`() {
         val bytes = zip()
         assertFalse(entries(bytes).any { it.first == BackupBundle.HUDDLE })
         assertFalse(manifest(bytes).containsKey("huddle"))
@@ -43,7 +53,7 @@ class HuddleSectionTest {
     @Test
     fun `a Huddle part of a newer form, one that is no JSON object, or one the manifest leaves out is skipped, and the rest reads`() {
         val bytes = zip(snapshot.copy(huddle = sealed))
-        val newer = rewrite(bytes, change = { it + ("huddle" to JsonObject(mapOf("version" to JsonPrimitive(3)))) })
+        val newer = rewrite(bytes, change = { it + ("huddle" to JsonObject(mapOf("version" to JsonPrimitive(4)))) })
         assertNull(contents(newer).huddle)
         assertEquals(contents().sections, contents(newer).sections)
         assertNull(contents(rewrite(bytes, huddle = "[1,2]")).huddle)
@@ -51,9 +61,11 @@ class HuddleSectionTest {
     }
 
     @Test
-    fun `a Huddle part from before the history (version 1, KJB v4 test builds) still reads`() {
-        val older = rewrite(zip(snapshot.copy(huddle = sealed)), change = { it + ("huddle" to JsonObject(mapOf("version" to JsonPrimitive(1)))) })
-        assertEquals(sealed, contents(older).huddle)
+    fun `a Huddle part from before the history (version 1) or from before plain ones (version 2, KJB v4 test builds) still reads`() {
+        listOf(1, 2).forEach { version ->
+            val older = rewrite(zip(snapshot.copy(huddle = sealed)), change = { it + ("huddle" to JsonObject(mapOf("version" to JsonPrimitive(version)))) })
+            assertEquals(sealed, contents(older).huddle)
+        }
     }
 
     private fun manifest(bytes: ByteArray): JsonObject = Json.parseToJsonElement(entries(bytes).single { it.first == BackupBundle.MANIFEST }.second).jsonObject

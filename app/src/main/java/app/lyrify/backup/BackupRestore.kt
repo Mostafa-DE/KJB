@@ -9,6 +9,8 @@ import app.lyrify.books.folderBookAlbum
 import app.lyrify.books.folderBookId
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
+import app.lyrify.downloads.DownloadState
+import app.lyrify.downloads.DownloadsMemory
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
@@ -20,6 +22,7 @@ import app.lyrify.player.QueueBook
 import app.lyrify.player.Repeat
 import app.lyrify.player.SongState
 import app.lyrify.player.Speed
+import app.lyrify.settings.HeldSong
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
 import app.lyrify.stats.Interaction
@@ -133,13 +136,18 @@ interface BackupStores {
 
     /** The book log keeps one play per book file and start, as the play log does. */
     suspend fun addBookPlays(plays: List<LoggedPlay>): Boolean
+
+    /** Settings > Downloads and the Downloads page's list (`downloads.json`). */
+    suspend fun downloads(): DownloadsMemory?
+
+    suspend fun updateDownloads(change: (DownloadsMemory) -> DownloadsMemory): Boolean
 }
 
 /** What every store holds now, for a backup; a store that cannot be read is left out. */
 suspend fun BackupStores.snapshot(): BackupSnapshot = BackupSnapshot(
     playlists(), queues(), plays(), songState(), equalizer(), ledger(), settings(),
     repeat = repeat(), aiLyrics = aiLyrics(), tones = tones(), duplicates = duplicates(), coversTags = coversTags(),
-    keptApart = keptApart(), searches = searches(), books = books(), interactions = interactions(), bookPlays = bookPlays(),
+    keptApart = keptApart(), searches = searches(), books = books(), interactions = interactions(), bookPlays = bookPlays(), downloads = downloads(),
 )
 
 
@@ -153,9 +161,9 @@ internal data class MergedMarks(val state: SongState, val placesLeftOut: Int, va
  * What a restore did: the sections restored and those that failed, in the summary's order, and the places and bookmarks
  * left out because the phone holds as many as it keeps (a restore never pushes out the phone's own). For the summary
  * after it: how much each section brought back ([counts]: playlists, queues, plays, bookmarks, equalizer profiles,
- * lyrics choices, tones, "Not duplicates" groups, Covers & tags albums, searches, books; Settings has none), the songs
- * of the backup not on this phone ([notFound]), the tones whose files are not on it, and the devices to pick again for
- * Start when connected.
+ * lyrics choices, tones, "Not duplicates" groups, Covers & tags albums, searches, books, downloads; Settings has none),
+ * the songs of the backup not on this phone ([notFound]), the tones whose files are not on it, and the devices to pick
+ * again for Start when connected.
  */
 data class RestoreResult(
     val restored: List<Section>,
@@ -182,12 +190,15 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         .associate { it.path to BackupSong(it.path, it.title, it.artist, it.album, it.durationMs) } + contents.songs.associateBy { it.path }
 
     /**
-     * Each song the backup names, by its path there, and the song it is on this phone. Hidden songs and the songs of the
-     * interaction log are matched too, but one not here is no song missing: it was not in any list.
+     * Each song the backup names, by its path there, and the song it is on this phone. Hidden songs, the songs held out
+     * of suggestions, those of the interaction log and the songs downloaded are matched too, but one not here is no song
+     * missing: it was not in any list.
      */
     private val found: Map<String, Song> = SongMatcher(phone).match(
         Section.entries.flatMap(::paths) + contents.tones.orEmpty().map { it.songPath } + contents.settings?.library?.hiddenSongs.orEmpty().map { it.path } +
-            contents.interactions.mapNotNull { interaction -> interaction.target?.takeIf { it.kind == TargetKind.SONG }?.key },
+            contents.settings?.suggestions?.let { it.never + it.notNow }.orEmpty().map { it.song.path } +
+            contents.interactions.mapNotNull { interaction -> interaction.target?.takeIf { it.kind == TargetKind.SONG }?.key } +
+            contents.downloads?.items.orEmpty().mapNotNull { (it.state as? DownloadState.Done)?.path },
         known,
     )
 
@@ -208,7 +219,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         Section.DUPLICATES -> contents.duplicates?.let { it.notDuplicates + it.reviewed }.orEmpty().flatten()
         Section.COVERS -> contents.covers?.albums.orEmpty().flatMap { it.paths }
         Section.BOOKS -> contents.books?.let { state -> state.books.values.flatMap { it.parts + listOfNotNull(it.partPath) } + state.marks.songs + state.marks.notSongs }.orEmpty()
-        Section.EQUALIZER, Section.SETTINGS, Section.TONES, Section.NAMES, Section.SEARCHES -> emptyList()
+        Section.EQUALIZER, Section.SETTINGS, Section.TONES, Section.NAMES, Section.SEARCHES, Section.DOWNLOADS -> emptyList()
     }
 
     /** The [chosen] sections the backup holds, in the summary's order. */
@@ -279,9 +290,16 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
 
         /**
          * The settings as the backup stores them, to be read over the phone's own; the AI switch; the devices' names; the
-         * hidden songs found on this phone, by their paths here.
+         * hidden songs and those held out of suggestions ([never], [notNow]) found on this phone, by their paths here.
          */
-        data class AppSettings(val stored: String, val ai: Boolean?, val connectNames: List<String>, val hidden: List<SongRef>) : Prepared
+        data class AppSettings(
+            val stored: String,
+            val ai: Boolean?,
+            val connectNames: List<String>,
+            val hidden: List<SongRef>,
+            val never: List<HeldSong>,
+            val notNow: List<HeldSong>,
+        ) : Prepared
 
         /** Each tone whose song is here, on its path here, and how many are not ([songsMissing]). */
         data class Tones(val tones: List<BackupTone>, val songsMissing: Int) : Prepared
@@ -297,6 +315,9 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
 
         /** The books whose files are here, on them, and the marks of the songs here and of every folder. */
         data class Books(val state: BookState) : Prepared
+
+        /** Settings > Downloads, and the downloads with each song saved on its file here when it is found. */
+        data class Downloads(val memory: DownloadsMemory) : Prepared
     }
 
     private fun prepare(section: Section): Prepared = when (section) {
@@ -332,6 +353,8 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             contents.aiLyrics,
             contents.connectNames,
             contents.settings?.library?.hiddenSongs.orEmpty().mapNotNull { found[it.path]?.ref },
+            contents.settings?.suggestions?.never.orEmpty().mapNotNull { held -> found[held.song.path]?.let { held.copy(song = it.ref) } },
+            contents.settings?.suggestions?.notNow.orEmpty().mapNotNull { held -> found[held.song.path]?.let { held.copy(song = it.ref) } },
         )
         // A tone keeps the song it was cut from, to open it again: one whose song is not here is left out, never kept
         // on a path of the old phone.
@@ -357,6 +380,16 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             Prepared.Books(BookState(state.books.values.mapNotNull(::matched).associateBy { it.id }, marks))
         }
         Section.BOOK_PLAYS -> Prepared.Plays(here(checkNotNull(contents.bookPlays)), books = true)
+        // A saved song on its file here when it is found; else on its path there, and its sheet offers Play once a file is.
+        Section.DOWNLOADS -> checkNotNull(contents.downloads).let { memory ->
+            Prepared.Downloads(
+                memory.copy(
+                    items = memory.items.map { item ->
+                        (item.state as? DownloadState.Done)?.let { done -> found[done.path]?.let { item.copy(state = done.copy(path = it.path)) } } ?: item
+                    },
+                ),
+            )
+        }
     }
 
     /**
@@ -435,7 +468,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         is Prepared.Lyrics -> counted(stores.updateLedger { mergeLedger(it, prepared.entries) }, prepared.entries.size)
         is Prepared.AppSettings -> {
             var before: Settings? = null
-            val settled = stores.updateSettings { phone -> overPhone(prepared.stored, phone, prepared.hidden).also { before = phone } }
+            val settled = stores.updateSettings { phone -> overPhone(prepared, phone).also { before = phone } }
             val written = settled && (prepared.ai == null || stores.replaceAiLyrics(prepared.ai))
             if (settled && !written) before?.let { phone -> stores.updateSettings { phone } }
             val own = before?.playback?.connectDevices.orEmpty()
@@ -459,27 +492,39 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         is Prepared.Names -> counted(stores.addKeptApart(prepared.pairs), prepared.pairs.size)
         is Prepared.Searches -> counted(stores.addSearches(prepared.searches), prepared.searches.size)
         is Prepared.Books -> counted(stores.updateBooks { mergeBooks(it, prepared.state) }, prepared.state.books.size)
+        // The settings replace the phone's, as Settings do; each download joins the list once, by key, the newest first.
+        is Prepared.Downloads -> counted(
+            stores.updateDownloads { now ->
+                val keys = now.items.map { it.key }.toSet()
+                DownloadsMemory(prepared.memory.settings, (now.items + prepared.memory.items.filter { it.key !in keys }).sortedByDescending { it.addedAt })
+            },
+            prepared.memory.items.size,
+        )
     }
 
     private fun counted(written: Boolean, count: Int): Int? = if (written) count else null
 
     /**
-     * The backup's [stored] settings read over the [phone]'s own, through the same steps as `settings.json` (an older
-     * version's are brought up to date, a newer one's read for what this version knows), so what the backup does not
-     * carry stays as the phone has it. The phone keeps its automatic backup, its first-run state (setup, the tour, a
-     * notifications denial) and the devices Android linked to it. Its hidden songs stay hidden, and the backup's [hidden]
-     * ones (on their paths here) join them.
+     * The backup's stored settings ([prepared]) read over the [phone]'s own, through the same steps as `settings.json`
+     * (an older version's are brought up to date, a newer one's read for what this version knows), so what the backup
+     * does not carry stays as the phone has it. The phone keeps its automatic backup, its first-run state (setup, the
+     * tour, a notifications denial) and the devices Android linked to it. Its hidden songs stay hidden, and the backup's
+     * ones (on their paths here) join them; so do the songs held out of suggestions, each with its time.
      */
-    private fun overPhone(stored: String, phone: Settings, hidden: List<SongRef>): Settings {
-        val read = SettingsJson.decode(stored, base = phone) ?: phone
+    private fun overPhone(prepared: Prepared.AppSettings, phone: Settings): Settings {
+        val read = SettingsJson.decode(prepared.stored, base = phone) ?: phone
         val nav = read.nav.copy(
             setupDone = phone.nav.setupDone,
             tourSeen = phone.nav.tourSeen,
             notificationsDenied = phone.nav.notificationsDenied,
             notificationDenials = phone.nav.notificationDenials,
         )
-        val library = read.library.copy(hiddenSongs = (phone.library.hiddenSongs + hidden).distinctBy { it.path })
-        return read.copy(playback = read.playback.copy(connectDevices = phone.playback.connectDevices), backup = phone.backup, nav = nav, library = library)
+        val library = read.library.copy(hiddenSongs = (phone.library.hiddenSongs + prepared.hidden).distinctBy { it.path })
+        val suggestions = read.suggestions.copy(
+            never = (phone.suggestions.never + prepared.never).distinctBy { it.song.path },
+            notNow = (phone.suggestions.notNow + prepared.notNow).distinctBy { it.song.path },
+        )
+        return read.copy(playback = read.playback.copy(connectDevices = phone.playback.connectDevices), backup = phone.backup, nav = nav, library = library, suggestions = suggestions)
     }
 
     /**

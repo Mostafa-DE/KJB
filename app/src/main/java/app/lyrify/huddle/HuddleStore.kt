@@ -231,17 +231,19 @@ object HuddleJson {
 }
 
 /**
- * The backup's Huddle section (plan Q3.3): everything Huddle keeps but what waits to go, sealed with the key of a
- * passphrase the user chose ([BackupKey], PBKDF2), beside that key's salt and rounds. The passphrase is never stored;
- * its key stays on the phone, so automatic backups need no typing. Restore on a new phone with the passphrase and the
- * friends come back; without it the rest of the backup restores and Huddle starts over.
+ * The backup's Huddle section (plan Q3.3), in every backup (user 2026-11-23): everything Huddle keeps but what waits to
+ * go. With a passphrase the user chose it is sealed with that passphrase's key ([BackupKey], PBKDF2), beside the key's
+ * salt and rounds: the passphrase is never stored, its key stays on the phone, so automatic backups need no typing, and
+ * a new phone brings the friends back with the passphrase (without it the rest of the backup restores and Huddle starts
+ * over). Without a passphrase it is plain: the same lines, not sealed, readable by anyone who has the file; a new phone
+ * brings the friends back with nothing to type.
  *
- * Format 2 holds the history too (user 2026-11-23): sealed, gzipped lines, the state first, then every card and then
- * the plays, the newest first, packed into [HISTORY_BYTES] at most (one zip entry any KJB reads; a year of ten friends'
- * plays and every card take a fraction of it). Sealed bytes do not shrink in the zip and count in full towards what a
- * backup may hold unpacked, so the history is packed before it is sealed, and a friend sending far more than anyone
- * plays only loses their oldest plays from the backup, never from the phone. Format 1 (KJB v4 test builds) sealed the
- * state alone, with its newest cards and plays in it, and still opens.
+ * Format 2 holds the history too (user 2026-11-23): gzipped lines, the state first, then every card and then the
+ * plays, the newest first, packed into [HISTORY_BYTES] at most (one zip entry any KJB reads; a year of ten friends'
+ * plays and every card take a fraction of it). Sealed bytes, and a plain section's base64, do not shrink in the zip and
+ * count in full towards what a backup may hold unpacked, so the history is packed first, and a friend sending far more
+ * than anyone plays only loses their oldest plays from the backup, never from the phone. Format 1 (KJB v4 test builds)
+ * sealed the state alone, with its newest cards and plays in it, and still opens.
  */
 object HuddleBackup {
     /** PBKDF2 rounds for a new passphrase: OWASP's 600,000 for HMAC-SHA256, under a second on a phone. */
@@ -256,16 +258,19 @@ object HuddleBackup {
         return BackupKey(HuddleCrypto.encode(salt), rounds, HuddleCrypto.encode(HuddleCrypto.passphraseKey(passphrase, salt, rounds)))
     }
 
+    /** Whether [section] is sealed, so its restore asks for the passphrase; a plain one is not. */
+    fun locked(section: String): Boolean = jsonObject(section)?.text(KDF_KEY) != null
+
     /** What a section holds, opened: Huddle's state, and its history ([HuddleLog]): cards both ways and friends' plays. */
     data class Opened(val state: HuddleState, val cards: List<KeptCard>, val plays: List<FriendPlay>)
 
     /**
      * [state]'s section with its [history] (whole lines, the newest first, every card before any play, within [bytes]
-     * packed), sealed with its [HuddleState.backupKey]; null without one (no passphrase, so Huddle stays out of backups),
-     * and null when the history cannot be read, as a backup leaves out any store that cannot be (BackupStores.snapshot).
+     * packed): sealed with its [HuddleState.backupKey], plain without one; null when the history cannot be read, as a
+     * backup leaves out any store that cannot be (BackupStores.snapshot).
      */
     suspend fun seal(state: HuddleState, history: HuddleLog, random: SecureRandom, bytes: Int = HISTORY_BYTES): String? {
-        val key = state.backupKey ?: return null
+        val key = state.backupKey
         val packed = ByteArrayOutputStream()
         GZIPOutputStream(packed).bufferedWriter().use { out ->
             out.appendLine(HuddleJson.encode(state.copy(inbox = emptyList(), outbox = emptyList(), backupKey = null)))
@@ -284,33 +289,47 @@ object HuddleBackup {
                 } ?: return null
             }
         }
-        val sealed = HuddleCrypto.seal(HuddleCrypto.decode(key.key) ?: return null, packed.toByteArray(), aad(FORMAT), random)
         return JsonObject(
-            mapOf(
-                FORMAT_KEY to JsonPrimitive(FORMAT),
-                KDF_KEY to JsonPrimitive(KDF),
-                ROUNDS_KEY to JsonPrimitive(key.rounds),
-                SALT_KEY to JsonPrimitive(key.salt),
-                BOX_KEY to JsonPrimitive(HuddleCrypto.encode(sealed)),
-            ),
+            mapOf(FORMAT_KEY to JsonPrimitive(FORMAT)) + if (key == null) {
+                // Plain without a passphrase: the packed lines as they are.
+                mapOf(LINES_KEY to JsonPrimitive(HuddleCrypto.encode(packed.toByteArray())))
+            } else {
+                mapOf(
+                    KDF_KEY to JsonPrimitive(KDF),
+                    ROUNDS_KEY to JsonPrimitive(key.rounds),
+                    SALT_KEY to JsonPrimitive(key.salt),
+                    BOX_KEY to JsonPrimitive(HuddleCrypto.encode(HuddleCrypto.seal(HuddleCrypto.decode(key.key) ?: return null, packed.toByteArray(), aad(FORMAT), random))),
+                )
+            },
         ).toString()
     }
 
     /**
-     * What [section] holds, opened with [passphrase], with the key that opened it ([HuddleState.backupKey]) for the next
-     * backups; null for another passphrase, a changed section, or none. A line of the history this version cannot read (a
-     * newer KJB's) is left out. Slow, as [newKey].
+     * What [section] holds: a plain one as it is, with no key, so a restore keeps the phone's own; a sealed one opened
+     * with [passphrase], with the key that opened it ([HuddleState.backupKey]) for the next backups. Null for another
+     * passphrase, a changed section, or none. A line of the history this version cannot read (a newer KJB's) is left out.
+     * A sealed one is slow, as [newKey].
      */
     fun open(section: String, passphrase: CharArray): Opened? {
-        val root = jsonObject(section)?.takeIf { it.text(KDF_KEY) == KDF } ?: return null
+        val root = jsonObject(section) ?: return null
         val format = root.int(FORMAT_KEY)?.takeIf { it in 1..FORMAT } ?: return null
-        val rounds = root.int(ROUNDS_KEY)?.takeIf { it in 1..MAX_ROUNDS } ?: return null
-        val saltText = root.text(SALT_KEY) ?: return null
-        val salt = HuddleCrypto.decode(saltText)?.takeIf { it.size == SALT_BYTES } ?: return null
-        val sealed = root.text(BOX_KEY)?.let(HuddleCrypto::decode) ?: return null
-        val key = HuddleCrypto.passphraseKey(passphrase, salt, rounds)
-        val plain = HuddleCrypto.open(key, sealed, aad(format)) ?: return null
-        val backupKey = BackupKey(saltText, rounds, HuddleCrypto.encode(key))
+        val lines = root.text(LINES_KEY)
+        val plain: ByteArray
+        val backupKey: BackupKey?
+        // Format 1 was always sealed.
+        if (lines != null && format > 1) {
+            plain = HuddleCrypto.decode(lines) ?: return null
+            backupKey = null
+        } else {
+            if (root.text(KDF_KEY) != KDF) return null
+            val rounds = root.int(ROUNDS_KEY)?.takeIf { it in 1..MAX_ROUNDS } ?: return null
+            val saltText = root.text(SALT_KEY) ?: return null
+            val salt = HuddleCrypto.decode(saltText)?.takeIf { it.size == SALT_BYTES } ?: return null
+            val sealed = root.text(BOX_KEY)?.let(HuddleCrypto::decode) ?: return null
+            val key = HuddleCrypto.passphraseKey(passphrase, salt, rounds)
+            plain = HuddleCrypto.open(key, sealed, aad(format)) ?: return null
+            backupKey = BackupKey(saltText, rounds, HuddleCrypto.encode(key))
+        }
         return try {
             if (format == 1) {
                 HuddleJson.decode(plain.decodeToString()).let { Opened(it.copy(inbox = emptyList(), backupKey = backupKey), it.inbox, it.plays) }
@@ -382,6 +401,7 @@ object HuddleBackup {
     private const val ROUNDS_KEY = "rounds"
     private const val SALT_KEY = "salt"
     private const val BOX_KEY = "box"
+    private const val LINES_KEY = "lines"
     private const val RECEIVED_LINE = "received"
     private const val SENT_LINE = "sent"
     private const val PLAY_LINE = "play"
@@ -392,7 +412,7 @@ object HuddleBackup {
  * play of the two, its own name and Listen privately kept when set, and [key] (the passphrase the restore was opened with)
  * kept for the next backups. The backup's cards and plays go to the history (Huddle.restore).
  */
-fun HuddleState.restored(backup: HuddleState, key: BackupKey): HuddleState {
+fun HuddleState.restored(backup: HuddleState, key: BackupKey?): HuddleState {
     val boxes = friends.map { it.inBox }.toSet()
     val tokens = invites.map { it.token }.toSet()
     return copy(
@@ -401,7 +421,8 @@ fun HuddleState.restored(backup: HuddleState, key: BackupKey): HuddleState {
         invites = invites + backup.invites.filter { it.token !in tokens },
         plays = latestPlays(plays + backup.plays),
         privateUntil = privateUntil ?: backup.privateUntil,
-        backupKey = key,
+        // A plain backup brings no key: the phone keeps its own.
+        backupKey = key ?: backupKey,
     )
 }
 
@@ -485,7 +506,7 @@ class HuddleFiles internal constructor(private val store: DataStore<HuddleState>
 
         /**
          * The app's: app-private `files/datastore/huddle.json`, a copy of an unreadable one in `files`; never in Android's
-         * backups (allowBackup is off), only in KJB's own, sealed ([HuddleBackup]). One per process.
+         * backups (allowBackup is off), only in KJB's own ([HuddleBackup]), sealed when a passphrase is set. One per process.
          */
         @Synchronized
         fun of(context: Context): HuddleFiles = shared ?: run {

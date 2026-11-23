@@ -37,6 +37,7 @@
     <string name="restore_section_searches">Recent searches</string>
     <string name="restore_section_books">Books</string>
     <string name="restore_section_bookPlays">Time in books</string>
+    <string name="restore_section_downloads">Downloads</string>
     <plurals name="restore_favourites">
         <item quantity="one">And %1$s favourite</item>
         <item quantity="other">And %1$s favourites</item>
@@ -49,7 +50,7 @@
         <item quantity="one">And %1$s own preset</item>
         <item quantity="other">And %1$s own presets</item>
     </plurals>
-    <string name="restore_merge">Settings, Repeat and the equalizer replace yours. Everything else is added to what\'s on your phone. On a phone with no queue playing, the one that was playing comes back at its song and second.</string>
+    <string name="restore_merge">Settings, Downloads\' settings, Repeat and the equalizer replace yours. Everything else is added to what\'s on your phone. On a phone with no queue playing, the one that was playing comes back at its song and second.</string>
     <string name="restore_undo">Undo history from Covers &amp; tags isn\'t included.</string>
     <string name="restore_too_new">%1$s skipped: a newer KJB made this part.</string>
     <plurals name="restore_unknown">

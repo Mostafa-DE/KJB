@@ -124,12 +124,15 @@ object Downloads {
         return opened.load().also { memory -> _state.update { it.copy(settings = memory.settings, items = memory.items, loaded = true) } }
     }
 
-    /** Changes the memory and saves it; the screens see the change at once. */
-    private suspend fun change(context: Context, block: (DownloadsMemory) -> DownloadsMemory): DownloadsMemory = lock.withLock {
+    /**
+     * Changes the memory and saves it; the screens see the change at once. False when `downloads.json` could not be
+     * written: the change stays in memory all the same, and the next save writes it (a restore, BackupStores, says so).
+     */
+    internal suspend fun change(context: Context, block: (DownloadsMemory) -> DownloadsMemory): Boolean = lock.withLock {
         val next = block(memory(context)).capped()
-        store?.save(next)
+        val saved = store?.save(next) == true
         _state.update { it.copy(settings = next.settings, items = next.items, progress = it.progress.filterKeys { key -> next.items.any { item -> item.key == key && item.active } }) }
-        next
+        saved
     }
 
     /**

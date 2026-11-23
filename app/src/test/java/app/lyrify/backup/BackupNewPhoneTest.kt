@@ -37,6 +37,7 @@ import app.lyrify.settings.BackupSettings
 import app.lyrify.settings.ConnectDevice
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.FavouritesTab
+import app.lyrify.settings.HeldSong
 import app.lyrify.settings.Levelling
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.LibraryTab
@@ -54,6 +55,7 @@ import app.lyrify.settings.Settings
 import app.lyrify.settings.SortAlbums
 import app.lyrify.settings.SortArtists
 import app.lyrify.settings.SortSongs
+import app.lyrify.settings.SuggestionSettings
 import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.tags.AlbumRecord
@@ -341,6 +343,26 @@ class BackupNewPhoneTest {
         val bytes = ByteArrayOutputStream().also { BackupBundle.write(runBlocking { old.snapshot() }, oldLibrary, VERSION, T0, it) }.toByteArray()
         assertEquals(true, BackupFixtures.contents(bytes).songs.map { it.path }.containsAll(listOf(steps.path, moon.path)))
         assertEquals(listOf(SongRef(steps.path), SongRef(moon.path), SongRef(VOLUME_GONE.path)), BackupFixtures.contents(bytes).settings?.library?.hiddenSongs)
+    }
+
+    @Test
+    fun `songs said Never suggest and Not now stay out of suggestions on their new paths, the new phone's own kept, and none counts as not found`() {
+        val old = oldPhone().apply {
+            this.settings = this.settings.copy(suggestions = SuggestionSettings(never = listOf(HeldSong(steps.ref, T0 - 5), HeldSong(VOLUME_GONE, T0 - 4)), notNow = listOf(HeldSong(moon.ref, T0 + DAY))))
+        }
+        val phone = newPhone().apply { this.settings = this.settings.copy(suggestions = SuggestionSettings(never = listOf(HeldSong(stranger.ref, T0 - 1)))) }
+
+        val result = move(old = old, phone = phone)
+
+        // Glass Steps found by its tags, Copper Moon by its path below the root, each when it was said; the one gone is let go.
+        assertEquals(listOf(HeldSong(stranger.ref, T0 - 1), HeldSong(newSteps.ref, T0 - 5)), phone.settings.suggestions.never)
+        assertEquals(listOf(HeldSong(newMoon.ref, T0 + DAY)), phone.settings.suggestions.notNow)
+        assertEquals(0, result.notFound)
+        // The songs file names them, so another phone can find them; the old phone's ids stay behind.
+        val bytes = ByteArrayOutputStream().also { BackupBundle.write(runBlocking { old.snapshot() }, oldLibrary, VERSION, T0, it) }.toByteArray()
+        assertEquals(true, BackupFixtures.contents(bytes).songs.map { it.path }.containsAll(listOf(steps.path, moon.path)))
+        assertEquals(listOf(SongRef(steps.path), SongRef(VOLUME_GONE.path)), BackupFixtures.contents(bytes).settings?.suggestions?.never?.map { it.song })
+        assertEquals(listOf(SongRef(moon.path)), BackupFixtures.contents(bytes).settings?.suggestions?.notNow?.map { it.song })
     }
 
     @Test
@@ -814,6 +836,8 @@ class BackupNewPhoneTest {
 
         /** A song hidden on the old phone that is on neither phone any more. */
         val VOLUME_GONE: SongRef = SongRef(OLD + "Music/Gone/Ash Road.mp3", 99)
+
+        const val DAY: Long = 86_400_000
 
         /** A made-up song at [relative] below [root]. */
         fun at(root: String, relative: String, title: String, artist: String?, album: String?, durationMs: Long, id: Long, size: Long): Song = Song(

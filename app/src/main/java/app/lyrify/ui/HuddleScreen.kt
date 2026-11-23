@@ -463,7 +463,7 @@ fun HuddlePage(onBack: (() -> Unit)?) {
                                 open = false
                                 naming = true
                             })
-                            MenuRow(stringResource(R.string.huddle_backup), R.drawable.ic_lock, detail = stringResource(if (state.backupKey != null) R.string.huddle_backup_on else R.string.huddle_backup_off), onClick = {
+                            MenuRow(stringResource(R.string.huddle_passphrase_title), R.drawable.ic_lock, detail = stringResource(if (state.backupKey != null) R.string.huddle_backup_on else R.string.huddle_backup_off), onClick = {
                                 open = false
                                 passphrase = true
                             })
@@ -832,10 +832,19 @@ internal fun PassphraseField(value: String, onValue: (String) -> Unit, label: St
 
 /**
  * The restore summary's Huddle friends (plan Q3.3), under the sections: a check box, and while it is ticked the passphrase
- * they were locked with; [wrong] after one that did not open them. Without it the rest restores and Huddle starts over.
+ * they were [locked] with, if they were; [wrong] after they did not come back (that passphrase did not open them).
+ * Unticked, the rest restores and Huddle starts over.
  */
 @Composable
-internal fun HuddleRestoreRow(checked: Boolean, passphrase: String, wrong: Boolean, enabled: Boolean, onCheck: (Boolean) -> Unit, onPassphrase: (String) -> Unit) {
+internal fun HuddleRestoreRow(
+    checked: Boolean,
+    passphrase: String,
+    wrong: Boolean,
+    locked: Boolean,
+    enabled: Boolean,
+    onCheck: (Boolean) -> Unit,
+    onPassphrase: (String) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -845,9 +854,9 @@ internal fun HuddleRestoreRow(checked: Boolean, passphrase: String, wrong: Boole
             LyrifyCheckbox(checked)
             Text(stringResource(R.string.huddle_restore_row), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
         }
+        if (checked && locked) PassphraseField(passphrase, onPassphrase, stringResource(R.string.huddle_passphrase_field), isError = wrong)
         if (checked) {
-            PassphraseField(passphrase, onPassphrase, stringResource(R.string.huddle_passphrase_field), isError = wrong)
-            if (wrong) Text(stringResource(R.string.huddle_restore_wrong), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+            if (wrong) Text(stringResource(if (locked) R.string.huddle_restore_wrong else R.string.huddle_restore_failed), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
             Fact(R.drawable.ic_info, stringResource(R.string.huddle_restore_one_phone))
         }
     }
