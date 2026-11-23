@@ -394,8 +394,9 @@ class Huddle(
 
     /**
      * Delete history, on the past friend [friendId]'s page: every card and play between you goes from this phone, then
-     * they leave Past friends. False for anyone else, or when the history could not be let go (nothing changes, so it can
-     * be asked again).
+     * they leave Past friends. False for anyone else, or when it could not be done: when the history could not be let go
+     * nothing changes; when only Past friends could not be written, they stay listed with nothing left to show. Either
+     * way, asked again it finishes.
      */
     suspend fun deleteHistory(friendId: String): Boolean =
         now().past.any { it.id == friendId } && forgetHistory(friendId) && storage.change { state -> state.copy(past = state.past.filterNot { it.id == friendId }) }
@@ -474,10 +475,15 @@ class Huddle(
     /** The friend [friendId]'s plays of the last year, the newest first: [limit] from the [from]th ("What <name> played"). */
     suspend fun friendPlays(friendId: String, from: Int, limit: Int): List<FriendPlay> = moved().plays(friendId, from, limit).orEmpty()
 
-    /** Every friend's plays from [from] on, the oldest first, a past friend's left out: Suggestions' friends source ([HuddleFriends]). */
+    /**
+     * Every friend's plays from [from] on, the oldest first, of friends still here only (never a past friend's, nor those
+     * of a restore whose friends could not be written): Suggestions' friends source ([HuddleFriends]).
+     */
     suspend fun playsSince(from: Long): List<FriendPlay> {
-        val past = now().past.mapTo(HashSet()) { it.id }
-        return moved().playsSince(from).orEmpty().filterNot { it.friend in past }
+        val plays = moved().playsSince(from).orEmpty()
+        // Read after the plays: a friend who left meanwhile is left out too.
+        val here = now().friends.mapTo(HashSet()) { it.id }
+        return plays.filter { it.friend in here }
     }
 
     private suspend fun now(): HuddleState = storage.state.first()

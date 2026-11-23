@@ -402,11 +402,10 @@ fun HuddleState.restored(backup: HuddleState, key: BackupKey): HuddleState {
     val boxes = friends.map { it.inBox }.toSet()
     val tokens = invites.map { it.token }.toSet()
     val left = past.map { it.id }.toSet()
-    val known = friends.map { it.id }.toSet() + left
     return copy(
         name = name ?: backup.name,
         friends = friends + backup.friends.filter { it.inBox !in boxes && it.id !in left },
-        past = past + backup.past.filter { it.id !in known },
+        past = past + backup.past.filter { gone -> gone.id !in left && friends.none { it.id == gone.id } },
         invites = invites + backup.invites.filter { it.token !in tokens },
         plays = latestPlays(plays + backup.plays.filter { it.friend !in left }),
         privateUntil = privateUntil ?: backup.privateUntil,

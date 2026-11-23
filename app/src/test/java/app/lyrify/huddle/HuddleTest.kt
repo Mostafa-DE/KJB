@@ -49,6 +49,9 @@ class HuddleTest {
     /** The cards friends sent [this] phone, the newest first, as Sent to you's See all lists them. */
     private suspend fun Huddle.cards(): List<Received> = received(0, 100)
 
+    /** Made-up friends [ids] as huddle.json holds them: Suggestions read the plays of friends still here. */
+    private fun friendsOf(vararg ids: String): List<Friend> = ids.map { Friend(it, "Friend $it", "out-$it", "in-$it", "ok", "ik", "join-$it", addedAt = 0) }
+
     /** [huddle]'s new invite link with [card]. */
     private suspend fun link(huddle: Huddle, card: Card? = null): String = (huddle.invite(card) as Invited.Link).text
 
@@ -529,24 +532,38 @@ class HuddleTest {
         advanceTimeBy(Huddle.UNDO_MS + 1)
         assertTrue(juniper.remove(wrenOnJuniper.id))
         // After their goodbye, in the same mailbox (a second phone of theirs, a KJB gone wrong): sealed as their KJB seals.
-        val after = { message: Message ->
-            val sealed = HuddleCrypto.seal(HuddleCrypto.decode(wrenOnJuniper.outKey)!!, Messages.encode(message), wrenOnJuniper.outBox.encodeToByteArray(), random)
-            server.replay(wrenOnJuniper.outBox, HuddleCrypto.encode(sealed))
-        }
-        after(Message.Share("late-card", now + testScheduler.currentTime, Card(CardKind.SONG, listOf(bell), note = "after the goodbye")))
-        after(Message.Play("late-play", now + testScheduler.currentTime, bell))
+        server.replay(wrenOnJuniper.outBox, HuddleCrypto.encode(HuddleCrypto.seal(HuddleCrypto.decode(wrenOnJuniper.outKey)!!, Messages.encode(Message.Share("late-card", now + testScheduler.currentTime, Card(CardKind.SONG, listOf(bell), note = "after the goodbye"))), wrenOnJuniper.outBox.encodeToByteArray(), random)))
+        server.replay(wrenOnJuniper.outBox, HuddleCrypto.encode(HuddleCrypto.seal(HuddleCrypto.decode(wrenOnJuniper.outKey)!!, Messages.encode(Message.Play("late-play", now + testScheduler.currentTime, bell)), wrenOnJuniper.outBox.encodeToByteArray(), random)))
         assertTrue(wren.sync())
         assertTrue(wrenState.now.friends.isEmpty())
         assertEquals(listOf(juniperOnWren.id to "June"), wrenState.now.past.map { it.id to it.name })
         assertEquals("both ways, the newest first", listOf("one more", "for the drive"), wren.thread(juniperOnWren.id, 0, 10).map { it.card.note })
         assertEquals(listOf(lantern), wren.friendPlays(juniperOnWren.id, 0, 10).map { it.song })
         assertNull("a card after their goodbye is never kept", wren.card("late-card"))
-        after(Message.Share("later-card", now + testScheduler.currentTime, Card(CardKind.SONG, listOf(bell), note = "later still")))
+        server.replay(wrenOnJuniper.outBox, HuddleCrypto.encode(HuddleCrypto.seal(HuddleCrypto.decode(wrenOnJuniper.outKey)!!, Messages.encode(Message.Share("later-card", now + testScheduler.currentTime, Card(CardKind.SONG, listOf(bell), note = "later still"))), wrenOnJuniper.outBox.encodeToByteArray(), random)))
         val reads = server.fetches
         assertTrue(wren.sync())
         assertEquals("a past friend's mailbox is not asked for", reads, server.fetches)
         assertNull(wren.card("later-card"))
         assertEquals(1, wrenState.now.past.size)
+    }
+
+    @Test
+    fun `only friends still here reach Suggestions, never the plays of a restore whose friends could not be written`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        friends(wren, juniper)
+        juniper.played(lantern, now + testScheduler.currentTime)
+        wren.sync()
+        wrenState.change { it.copy(backupKey = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)) }
+        val section = wren.backupSection()!!
+        val (newPhone, newState) = phone()
+        // The history takes the backup's plays first, then huddle.json cannot be written: nobody is a friend here.
+        newState.writable = false
+        assertNull(newPhone.restore(section, "correct horse".toCharArray()))
+        newState.writable = true
+        assertTrue(newState.now.friends.isEmpty())
+        assertTrue(HuddleFriends(newPhone).since(0).isEmpty())
     }
 
     @Test
@@ -578,6 +595,16 @@ class HuddleTest {
         assertEquals("Rook's stay", listOf("from Rook"), wren.thread(rookOnWren.id, 0, 10).map { it.card.note })
         assertEquals(listOf(bell), wren.friendPlays(rookOnWren.id, 0, 10).map { it.song })
         assertFalse("once is enough", wren.deleteHistory(juniperOnWren.id))
+        // The rows go before Past friends is written: one that cannot be written keeps the person listed, with nothing
+        // left to show, and Delete history again finishes.
+        assertTrue(wren.remove(rookOnWren.id))
+        wrenState.writable = false
+        assertFalse(wren.deleteHistory(rookOnWren.id))
+        wrenState.writable = true
+        assertEquals(listOf(rookOnWren.id), wrenState.now.past.map { it.id })
+        assertTrue(wren.thread(rookOnWren.id, 0, 10).isEmpty())
+        assertTrue(wren.deleteHistory(rookOnWren.id))
+        assertTrue(wrenState.now.past.isEmpty())
     }
 
     @Test
@@ -1022,8 +1049,9 @@ class HuddleTest {
     @Test
     fun `friends' plays reach Suggestions the oldest first, from the time asked`() = runTest {
         val plays = listOf(FriendPlay("f1", now - 100, bell, favourite = true), FriendPlay("f2", now - 200, lantern), FriendPlay("f1", now - 300, lantern))
-        // Changed on purpose: the plays come from the history, here as huddle.json kept them before and moved once.
-        val (wren, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", plays = plays)))
+        // Changed on purpose: the plays come from the history, here as huddle.json kept them before and moved once; and
+        // (HY2) only friends still here reach Suggestions, so the state names them.
+        val (wren, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", friends = friendsOf("f1", "f2"), plays = plays)))
         assertEquals(
             listOf(
                 SuggestionsPlay("f2", lantern.title, lantern.artist, lantern.album, lantern.durationMs, now - 200),
@@ -1031,7 +1059,7 @@ class HuddleTest {
             ),
             HuddleFriends(wren).since(now - 200),
         )
-        val (rook, _) = phone(storage = MemoryHuddle(HuddleState(name = "Rook", plays = listOf(FriendPlay("f1", now, bell.copy(durationMs = 0))))))
+        val (rook, _) = phone(storage = MemoryHuddle(HuddleState(name = "Rook", friends = friendsOf("f1"), plays = listOf(FriendPlay("f1", now, bell.copy(durationMs = 0))))))
         assertEquals(null, HuddleFriends(rook).since(0).single().durationMs)
         assertTrue(HuddleFriends(phone("Kai").first).since(0).isEmpty())
     }
@@ -1046,7 +1074,7 @@ class HuddleTest {
         val before = plays.filter { it.at >= from }.sortedBy { it.at }.map { play ->
             SuggestionsPlay(play.friend, play.song.title, play.song.artist, play.song.album, play.song.durationMs.takeIf { it > 0 }, play.at, play.favourite)
         }
-        val (wren, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", plays = plays)))
+        val (wren, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", friends = friendsOf("f0", "f1", "f2"), plays = plays)))
         assertEquals(before, HuddleFriends(wren).since(from))
     }
 
@@ -1066,7 +1094,8 @@ class HuddleTest {
         // KJB again (a new run over the same files), and a run whose huddle.json write was lost after the history's.
         val (again, _) = phone(storage = storage, history = history)
         assertEquals(inbox, again.cards())
-        val (lost, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", inbox = inbox, plays = plays)), history = history)
+        // (HY2) Suggestions read friends still here: this state names them.
+        val (lost, _) = phone(storage = MemoryHuddle(HuddleState(name = "Wren", friends = friendsOf("f1", "f2"), inbox = inbox, plays = plays)), history = history)
         assertEquals(inbox, lost.cards())
         assertEquals(2_500, lost.friendPlays("f1", 0, 10_000).size)
         assertEquals(plays.size, HuddleFriends(lost).since(0).size)

@@ -379,8 +379,11 @@ class HuddleScreenTest {
         assertTrue(thread.contains("ConfirmDialog("))
         assertTrue(thread.contains("huddle.deleteHistory(friendId)"))
         assertTrue("nothing to send to a past friend", thread.contains("action = stringResource(R.string.huddle_send_song_to, name).takeIf { past == null }"))
-        // View all keeps a past friend's cards, under the name you saw them by.
+        // View all keeps a past friend's cards, under the name you saw them by, and shows whenever cards are kept, a past
+        // friend's alone too; the row itself shows friends still here.
         assertTrue(history.substringAfter("private fun CardsPage(").contains("state?.past.orEmpty().associate { it.id to it.name }"))
+        val sent = File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText().substringAfter("item(key = \"sent\"").substringBefore("item(key = \"postcards\"")
+        assertTrue(sent.contains("if (!cards.isNullOrEmpty()) LyrifyButton(stringResource(R.string.lib_view_all)"))
         val strings = File("src/main/res/values/strings_huddle.xml").readText()
         assertTrue(strings.substringAfter("<string name=\"huddle_remove_text\">").substringBefore("</string>").contains("stays on this phone"))
     }

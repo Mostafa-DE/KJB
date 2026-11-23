@@ -588,8 +588,8 @@ fun HuddlePage(onBack: (() -> Unit)?) {
             item(key = "sent", contentType = "heading") {
                 val fresh = inbox.orEmpty().count { !it.opened }
                 HuddleHeading(stringResource(R.string.huddle_inbox_title), fresh.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.huddle_new_count, it, it) }) {
-                    // Every card friends sent, kept on the phone: the row shows the newest.
-                    if (!inbox.isNullOrEmpty()) LyrifyButton(stringResource(R.string.lib_view_all), onClick = { nav.open(Page.HuddleCards) }, kind = ButtonKind.GHOST, compact = true)
+                    // Every card friends sent, kept on the phone, a past friend's too: the row shows the newest of friends here.
+                    if (!cards.isNullOrEmpty()) LyrifyButton(stringResource(R.string.lib_view_all), onClick = { nav.open(Page.HuddleCards) }, kind = ButtonKind.GHOST, compact = true)
                 }
             }
             item(key = "postcards", contentType = "postcards") {
