@@ -128,6 +128,48 @@ val HuddleEmptyGround: Color = Color(0xFF2A1F5C)
 val HuddleEmptyGlows: List<Color> = listOf(Color(0xFFD4573B), Color(0xFF7A4FD0), Color(0xFF0F7F74))
 val HuddleTicket: List<Color> = listOf(Color(0xFF4B3AA8), Color(0xFF8A3AA0), Color(0xFFB83672))
 
+// Insights (the approved mockup, handoff/insights/preview-insights-v1.html, user 2026-11-23): its heat map, its charts'
+// series and the story's grounds. The hero and the personality card take Huddle's grounds above, as the mockup does.
+
+/**
+ * Insights' colours in one theme: the heat map's five steps from none to most ([heat]), the charts' five series
+ * ([series]: ink violet, coral, amber, teal, pink, each 3:1 on the cards), and [goldInk], gold words on the page.
+ */
+@Immutable
+data class InsightsColors(val heat: List<Color>, val series: List<Color>, val goldInk: Color)
+
+val LightInsights: InsightsColors = InsightsColors(
+    heat = listOf(Color(0xFFE6E0EE), Color(0xFFF9D3C8), Color(0xFFF2A08A), Color(0xFFDC6646), Color(0xFFB23A1F)),
+    series = listOf(Color(0xFF4F44A6), Color(0xFFC9472C), Color(0xFFB7791F), Color(0xFF0B6B62), Color(0xFFB83672)),
+    goldInk = Color(0xFF8F5D10),
+)
+val DarkInsights: InsightsColors = InsightsColors(
+    heat = listOf(Color(0xFF2A2832), Color(0xFF4D2A23), Color(0xFF84402D), Color(0xFFC95C3F), Color(0xFFFF9A80)),
+    series = listOf(Color(0xFFC8BFFF), Color(0xFFFF9A80), Color(0xFFFFB547), Color(0xFF7FD6CA), Color(0xFFF28DB8)),
+    goldInk = Color(0xFFFFC870),
+)
+
+/** The hero's bars, coral to gold, and the bar of today glowing gold to cream. */
+val InsightsBars: List<Color> = listOf(Color(0xFFFF9A80), HuddleGold)
+val InsightsBarNow: List<Color> = listOf(HuddleGold, Color(0xFFFFF1C9))
+
+/** The story's kicker over its dark grounds, and the personality card's warm word. */
+val StoryKicker: Color = Color(0xFFFFD6A0)
+
+/**
+ * The story's grounds behind [BrandLilac] words: the night's violet glow over deep blue ([StoryNight]), the stage
+ * ([StoryStage]) with its coloured floor ([StoryFloor]), the teal sea ([StoryTeal]) and the warm coral ([StoryCoral]).
+ */
+val StoryNight: List<Color> = listOf(Color(0xFF3F3590), Color(0xFF141B3D), HuddleCardShade)
+val StoryStage: List<Color> = listOf(Color(0xFF2E2068), Color(0xFF1B1342))
+val StoryFloor: List<Color> = listOf(HuddleGold, Color(0xFFFF7A59), Color(0xFFC23B7A), Color(0xFF7A4FD0))
+val StoryTeal: List<Color> = listOf(Color(0xFF0F7F74), Color(0xFF2A66C4), Color(0xFF0E2A33))
+val StoryCoral: List<Color> = listOf(HuddleGold, Color(0xFFB83672), Color(0xFFB4462D))
+
+/** The medals: gold (a run, a milestone) and violet (artists, books), each light to deep. */
+val MedalGold: List<Color> = listOf(Color(0xFFFFE2A8), HuddleGold, Color(0xFFD98E1F))
+val MedalViolet: List<Color> = listOf(Color(0xFFA99BF0), Color(0xFF6A5AD0), Color(0xFF3F3590))
+
 /** Side margin of every screen (M3 compact window margin). */
 val ScreenPadding = 16.dp
 

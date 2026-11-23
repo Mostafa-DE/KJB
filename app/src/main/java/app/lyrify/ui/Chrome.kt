@@ -507,7 +507,8 @@ fun DotBadge(modifier: Modifier = Modifier) {
 
 /**
  * KJB's top bar: the title in Bricolage, its navigation and actions as glass circles. The page's colour at rest, opaque
- * ([TopBand]); once content is [under] it, a glass band and a hairline fade in. No colour flip.
+ * ([TopBand]); once content is [under] it, a glass band and a hairline fade in. No colour flip. [below]: more of the band
+ * under the line, as [MainTopBar]'s (Insights' period switch).
  */
 @Composable
 fun LyrifyTopBar(
@@ -517,9 +518,13 @@ fun LyrifyTopBar(
     backdrop: GlassBackdrop? = null,
     navigation: (@Composable () -> Unit)? = null,
     actions: @Composable RowScope.() -> Unit = {},
+    below: (@Composable () -> Unit)? = null,
 ) {
     TopBand(under, backdrop, modifier) {
-        Box(Modifier.statusBarsPadding()) { TopBarRow(title, navigation, actions) }
+        Column(Modifier.statusBarsPadding()) {
+            TopBarRow(title, navigation, actions)
+            below?.invoke()
+        }
     }
 }
 

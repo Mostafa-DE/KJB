@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.SongRef
 import app.lyrify.settings.DockTab
+import app.lyrify.stats.ListeningPeriod
 import app.lyrify.settings.LibraryTab
 import app.lyrify.settings.SettingsSection
 import kotlinx.serialization.KSerializer
@@ -117,13 +118,8 @@ sealed interface Page {
     @Serializable @SerialName("topList")
     data class TopList(val kind: TopKind) : ListeningPages
 
-    /** A month's recap, by its month ("2026-10"): from the recap card and Insights' recaps. */
-    @Serializable @SerialName("recap")
-    data class Recap(val month: String) : ListeningPages
-
-    /** Every month's recap, the latest first: "View all" of Insights' recaps. */
-    @Serializable @SerialName("recaps")
-    data object Recaps : ListeningPages
+    // A month's recap and the list of them are stories now (FullScreen.Story, the Insights redesign): a page kept
+    // from before reads as none and is dropped.
 
     /** Suggestions' lists (SuggestionScreens.kt, SG1). */
     sealed interface SuggestionPages : Page
@@ -255,6 +251,13 @@ sealed interface FullScreen {
     /** What another app plays, from the Now bar in companion mode (CompanionNowScreen.kt). */
     @Serializable @SerialName("companionNow")
     data object CompanionNow : FullScreen
+
+    /**
+     * Your story, from Insights (InsightsStory.kt): a past [month]'s ("2026-10"), else the [period] Insights showed
+     * when it was opened.
+     */
+    @Serializable @SerialName("story")
+    data class Story(val month: String? = null, val period: ListeningPeriod? = null) : FullScreen
 }
 
 /** A page on a tab's stack, and where Back from it goes when it was opened from a full-screen view or a song's sheet. */

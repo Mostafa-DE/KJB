@@ -235,19 +235,21 @@ fun LyrifyChip(
 /**
  * One choice of a few, as a capsule track with a sliding thumb and the sung line under the selected option. The thumb is
  * drawn behind the options, so the control grows with the text (no fixed height). Each option's tap is the track's full
- * 48 dp height; its press shows on the pill inside.
+ * 48 dp height; its press shows on the pill inside. [ink]: Insights' period switch (the approved mockup's), an ink thumb
+ * with the selected word on it that slides with a small overshoot, no sung line.
  */
 @Composable
-fun LyrifySegmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
+fun LyrifySegmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier, ink: Boolean = false) {
     val chrome = LocalChromeColors.current
     val colors = MaterialTheme.colorScheme
     val highlight = LocalBrandColors.current.highlight
-    val at by animateFloatAsState(selected.toFloat(), motion(Motion.indicator, LocalReducedMotion.current), label = "thumb")
+    val reduced = LocalReducedMotion.current
+    val at by animateFloatAsState(selected.toFloat(), motion(if (ink) tween(INK_THUMB_MS, easing = Motion.Pop) else Motion.indicator, reduced), label = "thumb")
     Row(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .background(colors.surfaceContainerHigh, CircleShape)
+            .background(if (ink) colors.surfaceContainer else colors.surfaceContainerHigh, CircleShape)
             .drawBehind {
                 val inset = 4.dp.toPx()
                 val item = (size.width - 2 * inset) / options.size
@@ -255,6 +257,10 @@ fun LyrifySegmented(options: List<String>, selected: Int, onSelect: (Int) -> Uni
                 val x = if (layoutDirection == LayoutDirection.Rtl) size.width - start - item else start
                 val thumb = Size(item, size.height - 2 * inset)
                 val corner = CornerRadius(thumb.height / 2)
+                if (ink) {
+                    drawRoundRect(chrome.action, Offset(x, inset), thumb, corner)
+                    return@drawBehind
+                }
                 drawRoundRect(chrome.shadow, Offset(x, inset + 1.dp.toPx()), thumb, corner)
                 drawRoundRect(chrome.sheet, Offset(x, inset), thumb, corner)
                 val line = Size(SUNG_LINE_WIDTH.toPx(), SUNG_LINE_HEIGHT.toPx())
@@ -274,13 +280,19 @@ fun LyrifySegmented(options: List<String>, selected: Int, onSelect: (Int) -> Uni
                     .padding(vertical = 4.dp)
                     .clip(CircleShape)
                     .indication(source, LocalIndication.current)
-                    .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 12.dp),
+                    .padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = if (ink) 8.dp else 12.dp),
             ) {
+                val word = when {
+                    i != selected -> colors.onSurfaceVariant
+                    ink -> chrome.onAction
+                    else -> colors.onSurface
+                }
+                val color by animateColorAsState(word, motion(tween(if (ink) INK_WORD_MS else 0), reduced), label = "word")
                 Text(
                     label,
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (i == selected) FontWeight.SemiBold else FontWeight.Medium,
-                    color = if (i == selected) colors.onSurface else colors.onSurfaceVariant,
+                    color = color,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -543,6 +555,10 @@ private fun DrawScope.dots(width: Float): PathEffect = PathEffect.dashPathEffect
 private const val DISABLED_FILL = 0.08f
 private const val DISABLED_CONTENT = 0.38f
 private const val CHIP_FADE_MS = 150
+
+/** The ink thumb's slide and its words' colour (the Insights mockup's 380 ms ease-pop, 200 ms). */
+private const val INK_THUMB_MS = 380
+private const val INK_WORD_MS = 200
 private const val CHECK_DRAW_MS = 160
 private val KNOB = 26.dp
 private val KNOB_PRESSED = 30.dp

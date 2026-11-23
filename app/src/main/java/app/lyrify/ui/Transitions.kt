@@ -816,15 +816,19 @@ fun drawnViews(drawn: List<FullScreen>, shown: List<FullScreen>): List<FullScree
 /** The views drawn that are leaving: drawn, and no longer shown. */
 fun leavingViews(drawn: List<FullScreen>, shown: List<FullScreen>): List<FullScreen> = drawn.filterNot { it in shown }
 
-/** How a view arrives and leaves: grown out of the Now bar and back into it, or rising over the screen. */
-enum class ViewMotion { CONTAINER, RISE }
+/** How a view arrives and leaves: grown out of the Now bar and back into it, rising over the screen, or zooming in. */
+enum class ViewMotion { CONTAINER, RISE, ZOOM }
 
 /**
  * The player (and the companion's Now screen, the Now bar's other end) grows out of the bar while the bar is on screen
- * ([barShown]); every other view, and the player without the bar (from a Tools page, the widget), rises.
+ * ([barShown]); Insights' story zooms in (the approved mockup's); every other view, and the player without the bar (from
+ * a Tools page, the widget), rises.
  */
-fun viewMotion(view: FullScreen, barShown: Boolean): ViewMotion =
-    if (barShown && (view == FullScreen.Player || view == FullScreen.CompanionNow)) ViewMotion.CONTAINER else ViewMotion.RISE
+fun viewMotion(view: FullScreen, barShown: Boolean): ViewMotion = when {
+    barShown && (view == FullScreen.Player || view == FullScreen.CompanionNow) -> ViewMotion.CONTAINER
+    view is FullScreen.Story -> ViewMotion.ZOOM
+    else -> ViewMotion.RISE
+}
 
 /**
  * A view arriving: rising 18% of its height as it fades in (the prototype's upIn, shared axis Y); grown from the Now
@@ -833,15 +837,22 @@ fun viewMotion(view: FullScreen, barShown: Boolean): ViewMotion =
 fun viewEnter(motion: ViewMotion, reduced: Boolean): EnterTransition = when {
     reduced -> fadeIn(tween(Motion.REDUCED_MS))
     motion == ViewMotion.CONTAINER -> EnterTransition.None
+    // The story opening (the mockup's storyin): from 88% as it fades in, 420 ms ease-rise.
+    motion == ViewMotion.ZOOM -> scaleIn(tween(ZOOM_MS, easing = Motion.Rise), initialScale = ZOOM_FROM) + fadeIn(tween(ZOOM_MS, easing = Motion.Rise))
     else -> slideInVertically(tween(Motion.OPEN_MS, easing = Motion.Rise)) { it * RISE_SHARE / 100 } + fadeIn(tween(Motion.OPEN_MS, easing = Motion.Rise))
 }
 
-/** A view leaving: down and out, the reverse of [viewEnter], a little quicker. */
+/** A view leaving: down and out, the reverse of [viewEnter], a little quicker; the story shrinks back as it fades. */
 fun viewExit(motion: ViewMotion, reduced: Boolean): ExitTransition = when {
     reduced -> fadeOut(tween(Motion.REDUCED_MS))
     motion == ViewMotion.CONTAINER -> ExitTransition.None
+    motion == ViewMotion.ZOOM -> scaleOut(tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut), targetScale = ZOOM_FROM) + fadeOut(tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut))
     else -> slideOutVertically(tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)) { it * RISE_SHARE / 100 } + fadeOut(tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut))
 }
+
+/** The story's zoom: from this scale, over this long. */
+private const val ZOOM_FROM = 0.88f
+private const val ZOOM_MS = 420
 
 /** How far a view rises, in percent of its height. */
 private const val RISE_SHARE = 18
