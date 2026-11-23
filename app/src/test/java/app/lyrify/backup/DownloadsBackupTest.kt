@@ -48,11 +48,31 @@ class DownloadsBackupTest {
         // A backup made by hand with the whole list: what waits would start downloading on this phone.
         val bytes = zipOf(
             entries(zip()).map { (name, text) ->
-                name to (if (name == Section.DOWNLOADS.file) DownloadsJson.encode(downloads.copy(items = downloads.items + download("d4", T0 + 4, DownloadState.Running))) else text).encodeToByteArray()
+                name to (if (name == Section.DOWNLOADS.file) DownloadsJson.encode(downloads.copy(items = downloads.items + download("d4", T0 + 4, DownloadState.Running) + download("d5", T0 - 5, DownloadState.Queued))) else text).encodeToByteArray()
             },
         )
+        val phone = phone()
 
         assertEquals(listOf("d2", "d1"), contents(bytes).downloads?.items?.map { it.key })
+        runBlocking { RestorePlan(contents(bytes), newLibrary).apply(setOf(Section.DOWNLOADS), phone, newId) }
+        assertEquals("only the phone's own waits", listOf("d9"), phone.downloads.items.filter { it.active }.map { it.key })
+        assertEquals(listOf("d9", "d2", "d1", "d8"), phone.downloads.items.map { it.key })
+    }
+
+    @Test
+    fun `a download twice in a backup joins the list once, the first of the two`() {
+        // A backup made by hand: one key twice would be one download shown twice, and Remove would take both.
+        val bytes = zipOf(
+            entries(zip()).map { (name, text) ->
+                name to (if (name == Section.DOWNLOADS.file) DownloadsJson.encode(downloads.copy(items = downloads.items + download("d2", T0 - 1, DownloadState.Failed(DownloadFailure.BLOCKED)))) else text).encodeToByteArray()
+            },
+        )
+        val phone = phone()
+
+        runBlocking { RestorePlan(contents(bytes), newLibrary).apply(setOf(Section.DOWNLOADS), phone, newId) }
+
+        assertEquals(listOf("d9", "d2", "d1", "d8"), phone.downloads.items.map { it.key })
+        assertEquals(DownloadState.Failed(DownloadFailure.OFFLINE), phone.downloads.items.first { it.key == "d2" }.state)
     }
 
     @Test

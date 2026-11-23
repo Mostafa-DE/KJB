@@ -492,12 +492,10 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         is Prepared.Names -> counted(stores.addKeptApart(prepared.pairs), prepared.pairs.size)
         is Prepared.Searches -> counted(stores.addSearches(prepared.searches), prepared.searches.size)
         is Prepared.Books -> counted(stores.updateBooks { mergeBooks(it, prepared.state) }, prepared.state.books.size)
-        // The settings replace the phone's, as Settings do; each download joins the list once, by key, the newest first.
+        // The settings replace the phone's, as Settings do; each download joins the list once, by key (the phone's own
+        // first), the newest first.
         is Prepared.Downloads -> counted(
-            stores.updateDownloads { now ->
-                val keys = now.items.map { it.key }.toSet()
-                DownloadsMemory(prepared.memory.settings, (now.items + prepared.memory.items.filter { it.key !in keys }).sortedByDescending { it.addedAt })
-            },
+            stores.updateDownloads { now -> DownloadsMemory(prepared.memory.settings, (now.items + prepared.memory.items).distinctBy { it.key }.sortedByDescending { it.addedAt }) },
             prepared.memory.items.size,
         )
     }
@@ -509,7 +507,8 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
      * (an older version's are brought up to date, a newer one's read for what this version knows), so what the backup
      * does not carry stays as the phone has it. The phone keeps its automatic backup, its first-run state (setup, the
      * tour, a notifications denial) and the devices Android linked to it. Its hidden songs stay hidden, and the backup's
-     * ones (on their paths here) join them; so do the songs held out of suggestions, each with its time.
+     * ones (on their paths here) join them; so do the songs held out of suggestions, each with its time, a song Never
+     * suggested on either phone leaving Not now as it does on a phone (SuggestionSettings.never).
      */
     private fun overPhone(prepared: Prepared.AppSettings, phone: Settings): Settings {
         val read = SettingsJson.decode(prepared.stored, base = phone) ?: phone
@@ -520,9 +519,10 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             notificationDenials = phone.nav.notificationDenials,
         )
         val library = read.library.copy(hiddenSongs = (phone.library.hiddenSongs + prepared.hidden).distinctBy { it.path })
+        val never = (phone.suggestions.never + prepared.never).distinctBy { it.song.path }
         val suggestions = read.suggestions.copy(
-            never = (phone.suggestions.never + prepared.never).distinctBy { it.song.path },
-            notNow = (phone.suggestions.notNow + prepared.notNow).distinctBy { it.song.path },
+            never = never,
+            notNow = (phone.suggestions.notNow + prepared.notNow).distinctBy { it.song.path }.filter { held -> never.none { it.song.path == held.song.path } },
         )
         return read.copy(playback = read.playback.copy(connectDevices = phone.playback.connectDevices), backup = phone.backup, nav = nav, library = library, suggestions = suggestions)
     }

@@ -366,6 +366,19 @@ class BackupNewPhoneTest {
     }
 
     @Test
+    fun `a song said Never suggest on one phone and Not now on the other stays Never only, as on a phone`() {
+        val old = oldPhone().apply { this.settings = this.settings.copy(suggestions = SuggestionSettings(never = listOf(HeldSong(steps.ref, T0 - 5)), notNow = listOf(HeldSong(moon.ref, T0 + DAY)))) }
+        val phone = newPhone().apply {
+            this.settings = this.settings.copy(suggestions = SuggestionSettings(never = listOf(HeldSong(newMoon.ref, T0 - 1)), notNow = listOf(HeldSong(newSteps.ref, T0 + 2 * DAY))))
+        }
+
+        move(old = old, phone = phone)
+
+        assertEquals(listOf(HeldSong(newMoon.ref, T0 - 1), HeldSong(newSteps.ref, T0 - 5)), phone.settings.suggestions.never)
+        assertEquals(emptyList<HeldSong>(), phone.settings.suggestions.notNow)
+    }
+
+    @Test
     fun `a tone comes back when its file is on the phone, the others are counted`() {
         val phone = newPhone()
 
