@@ -29,7 +29,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.ByteArrayOutputStream
@@ -163,7 +162,10 @@ data class HuddleState(
     val name: String? = null,
     val friends: List<Friend> = emptyList(),
     val invites: List<PendingInvite> = emptyList(),
-    /** Cards friends sent, as KJB kept them here before the history did ([HuddleLog]): moved there once, then empty. */
+    /**
+     * Cards friends sent that the history ([HuddleLog]) does not hold yet: what KJB kept here before it, and the card an
+     * accepted invite brought, written with the friend. Moved there at its next read (Huddle.moved).
+     */
     val inbox: List<Received> = emptyList(),
     /**
      * Each friend's latest play: now playing, and what they played last. Every play of the last year is in the history
@@ -253,25 +255,28 @@ object HuddleBackup {
 
     /**
      * [state]'s section with its [history] (whole lines, the newest first, every card before any play, within [bytes]
-     * packed), sealed with its [HuddleState.backupKey]; null without one (no passphrase, so Huddle stays out of backups).
-     * A page of the history that cannot be read ends that part of it.
+     * packed), sealed with its [HuddleState.backupKey]; null without one (no passphrase, so Huddle stays out of backups),
+     * and null when the history cannot be read, as a backup leaves out any store that cannot be (BackupStores.snapshot).
      */
     suspend fun seal(state: HuddleState, history: HuddleLog, random: SecureRandom, bytes: Int = HISTORY_BYTES): String? {
         val key = state.backupKey ?: return null
         val packed = ByteArrayOutputStream()
         GZIPOutputStream(packed).bufferedWriter().use { out ->
             out.appendLine(HuddleJson.encode(state.copy(inbox = emptyList(), outbox = emptyList(), backupKey = null)))
-            val full = { packed.size() >= bytes }
             // The plays only while there is room after every card.
-            val room = pages(full, { history.cards(it, PAGE) }) { card ->
+            val room = pages({ packed.size() >= bytes }, { history.cards(it, PAGE) }) { card ->
                 out.appendLine(
                     when (card) {
-                        is Received -> line(RECEIVED_LINE, HuddleJson.json.encodeToJsonElement(Received.serializer(), card))
-                        is Sent -> line(SENT_LINE, HuddleJson.json.encodeToJsonElement(Sent.serializer(), card))
+                        is Received -> JsonObject(mapOf(RECEIVED_LINE to HuddleJson.json.encodeToJsonElement(Received.serializer(), card))).toString()
+                        is Sent -> JsonObject(mapOf(SENT_LINE to HuddleJson.json.encodeToJsonElement(Sent.serializer(), card))).toString()
                     },
                 )
+            } ?: return null
+            if (room) {
+                pages({ packed.size() >= bytes }, { history.plays(null, it, PAGE) }) { play ->
+                    out.appendLine(JsonObject(mapOf(PLAY_LINE to HuddleJson.json.encodeToJsonElement(FriendPlay.serializer(), play))).toString())
+                } ?: return null
             }
-            if (room) pages(full, { history.plays(null, it, PAGE) }) { play -> out.appendLine(line(PLAY_LINE, HuddleJson.json.encodeToJsonElement(FriendPlay.serializer(), play))) }
         }
         val sealed = HuddleCrypto.seal(HuddleCrypto.decode(key.key) ?: return null, packed.toByteArray(), aad(FORMAT), random)
         return JsonObject(
@@ -332,12 +337,13 @@ object HuddleBackup {
 
     /**
      * Writes each of [read]'s pages (from the first, by where the next starts) with [write], until a page comes empty or
-     * unread, or the section is [full] before an item: false when it was full.
+     * the section is [full] before an item: false when it was full, null when a page could not be read.
      */
-    private suspend fun <T> pages(full: () -> Boolean, read: suspend (from: Int) -> List<T>?, write: (T) -> Unit): Boolean {
+    private suspend fun <T> pages(full: () -> Boolean, read: suspend (from: Int) -> List<T>?, write: (T) -> Unit): Boolean? {
         var from = 0
         while (true) {
-            val page = read(from)?.takeIf { it.isNotEmpty() } ?: return true
+            val page = read(from) ?: return null
+            if (page.isEmpty()) return true
             for (item in page) {
                 if (full()) return false
                 write(item)
@@ -345,9 +351,6 @@ object HuddleBackup {
             from += page.size
         }
     }
-
-    /** One line of the history: [value] under its [kind]. */
-    private fun line(kind: String, value: JsonElement): String = JsonObject(mapOf(kind to value)).toString()
 
     /** What each format's box is bound to: a box of one format never opens as another. */
     private fun aad(format: Int): ByteArray = "KJB Huddle $format backup".encodeToByteArray()
@@ -535,7 +538,7 @@ interface HuddleLog {
 }
 
 /** [card]'s values in [PlaysSchema.KEEP_CARD]'s order: the card itself as a message holds it ([Messages.cardJson]). */
-fun keptCardArgs(card: KeptCard): Array<Any?> = arrayOf(
+internal fun keptCardArgs(card: KeptCard): Array<Any?> = arrayOf(
     card.id,
     card.friend,
     if (card is Sent) 1L else 0L,
@@ -547,14 +550,14 @@ fun keptCardArgs(card: KeptCard): Array<Any?> = arrayOf(
 )
 
 /** [play]'s values in [PlaysSchema.KEEP_FRIEND_PLAY]'s order. */
-fun friendPlayArgs(play: FriendPlay): Array<Any?> =
+internal fun friendPlayArgs(play: FriendPlay): Array<Any?> =
     arrayOf(play.friend, play.at, play.song.title, play.song.artist, play.song.album, play.song.durationMs, if (play.favourite) 1L else 0L)
 
 /**
  * A card as a row of [PlaysSchema.CARD] has it, read leniently: one without its id, friend or time, or whose card does not
  * read ([Messages.cardOf]), is dropped; a mark that is not a number reads as not opened, not put away, and delivered.
  */
-fun keptCardOf(row: PlayRow): KeptCard? {
+internal fun keptCardOf(row: PlayRow): KeptCard? {
     val id = row.text("id")?.takeIf(String::isNotEmpty) ?: return null
     val friend = row.text("friend")?.takeIf(String::isNotEmpty) ?: return null
     val at = row.number("at") ?: return null
@@ -570,7 +573,7 @@ fun keptCardOf(row: PlayRow): KeptCard? {
  * A friend's play as a row of [PlaysSchema.FRIEND_PLAYS] has it, read leniently: one without a friend, a time or a title is
  * dropped; a length below 0 (or none) is 0, a favourite mark that is not a number is not one.
  */
-fun friendPlayOf(row: PlayRow): FriendPlay? {
+internal fun friendPlayOf(row: PlayRow): FriendPlay? {
     val friend = row.text("friend")?.takeIf(String::isNotEmpty) ?: return null
     val at = row.number("at") ?: return null
     val title = row.text("title")?.takeIf(String::isNotEmpty) ?: return null

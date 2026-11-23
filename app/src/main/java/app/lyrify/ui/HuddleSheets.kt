@@ -217,8 +217,8 @@ internal fun ReceivedHost(id: String?, onPlayer: () -> Unit, onSendBack: (String
 }
 
 /**
- * The card, opened (the mockup's 4.2 and 4.3): who sent it and when (to whom, for one you sent: then Play only, with
- * neither Send back nor Ask), the cover tilted like a gift (yours, else their
+ * The card, opened (the mockup's 4.2 and 4.3): who sent it and when (to whom, for one you sent: then with neither Send
+ * back nor Ask), the cover tilted like a gift (yours, else their
  * colour's pattern) with their note stuck on it, what it is, and whether you have it ([match]): a song found plays (Play,
  * Send back); one found only loosely asks "Is this the song?" first; one not here says so, with Ask <name> (your phone's
  * share sheet, any chat) and Search on YouTube. An album or a playlist lists each song with how it was found, plays the

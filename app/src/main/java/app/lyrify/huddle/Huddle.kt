@@ -153,7 +153,7 @@ class Huddle(
      * The newest cards friends sent ([INBOX_MAX]), read again as cards are kept or opened: the page's Sent to you, its
      * badges and the start screen's card.
      */
-    val inbox: Flow<List<Received>> = cardsWritten.map { moved().received(0, INBOX_MAX).orEmpty() }
+    val inbox: Flow<List<Received>> = cardsWritten.map { received(0, INBOX_MAX) }
 
     /** Whether what huddle.json kept before the history ([moved]) is in it. */
     @Volatile
@@ -273,12 +273,17 @@ class Huddle(
             asked = ask != null
             state.copy(
                 friends = state.friends + friend,
+                inbox = listOfNotNull(card) + state.inbox,
                 joins = state.joins.filterNot { it.joinId == joinId },
                 outbox = state.outbox + listOfNotNull(ask),
             )
         }
         already?.let { return if (kept) Accepted.Already(it) else Accepted.NoAnswer }
-        if (kept && card != null) keep(listOf(card))
+        if (kept && card != null) {
+            // Written with the friend, so neither is kept without the other: into the history now, or at its next read.
+            moving.withLock { inHistory = false }
+            moved()
+        }
         if (kept && asked) scope.launch { flush() }
         return if (kept) Accepted.Joined(friend, card?.id) else Accepted.NoAnswer
     }
@@ -372,18 +377,20 @@ class Huddle(
     suspend fun remove(friendId: String): Boolean {
         val friend = now().friends.firstOrNull { it.id == friendId } ?: return false
         val bye = outgoing(friend, Message.Bye(newId(MESSAGE_ID_BYTES), clock()), Kind.CARD, notBefore = clock())
-        val kept = storage.change { state ->
-            state.copy(
-                friends = state.friends.filterNot { it.id == friendId },
-                inbox = state.inbox.filterNot { it.friend == friendId },
-                plays = state.plays.filterNot { it.friend == friendId },
-                outbox = state.outbox.filterNot { it.box == friend.outBox } + listOfNotNull(bye),
-                joined = state.joined - friendId,
-            )
+        // Their cards and plays go first, after a sync under way (which may still keep what they sent last): a removal whose
+        // history cannot be let go does not happen, so it can be asked again.
+        val kept = one.withLock {
+            forgetHistory(friendId) && storage.change { state ->
+                state.copy(
+                    friends = state.friends.filterNot { it.id == friendId },
+                    inbox = state.inbox.filterNot { it.friend == friendId },
+                    plays = state.plays.filterNot { it.friend == friendId },
+                    outbox = state.outbox.filterNot { it.box == friend.outBox } + listOfNotNull(bye),
+                    joined = state.joined - friendId,
+                )
+            }
         }
         if (!kept) return false
-        // After a sync under way, which may still keep what they sent last.
-        one.withLock { forgetHistory(friendId) }
         flush()
         server.dropBoxes(listOf(friend.inBox))
         return true
@@ -469,10 +476,10 @@ class Huddle(
     private suspend fun now(): HuddleState = storage.state.first()
 
     /**
-     * The history, once what huddle.json kept before it (KJB v4 test builds: the newest 100 cards, every play of 30 days)
-     * is in it: written to plays.db first, then the cards leave huddle.json and its plays keep each friend's latest, so a
-     * write that fails loses nothing and is tried again at the next read, and one run again adds nothing (each card and
-     * play is kept once). Once a run.
+     * The history, once what huddle.json holds outside it is in it: what KJB kept there before the history (KJB v4 test
+     * builds: the newest 100 cards, every play of 30 days), and the card an accepted invite brought ([accept]). Written to
+     * plays.db first, then the cards leave huddle.json and its plays keep each friend's latest, so a write that fails loses
+     * nothing and is tried again at the next read, and a second run adds nothing (each card and play is kept once).
      */
     private suspend fun moved(): HuddleLog {
         if (!inHistory) {
@@ -482,6 +489,7 @@ class Huddle(
                 if (!history.keep(old.inbox, old.plays, clock() - PLAYS_KEPT_MS)) return@withLock
                 inHistory = (old.inbox.isEmpty() && latestPlays(old.plays).size == old.plays.size) ||
                     storage.change { state -> state.copy(inbox = state.inbox - old.inbox.toSet(), plays = latestPlays(state.plays)) }
+                if (old.inbox.isNotEmpty()) _cardsWritten.update { it + 1 }
             }
         }
         return history
@@ -494,11 +502,15 @@ class Huddle(
             if (kept && plays.isNotEmpty()) _playsWritten.update { it + 1 }
         }
 
-    /** The friend [friendId]'s cards and plays let go from the history: you removed them, or they removed you. */
-    private suspend fun forgetHistory(friendId: String) {
-        if (!moved().forget(friendId)) return
-        _cardsWritten.update { it + 1 }
-        _playsWritten.update { it + 1 }
+    /**
+     * The friend [friendId]'s cards and plays let go from the history (you removed them, or they removed you); false when
+     * they could not be.
+     */
+    private suspend fun forgetHistory(friendId: String): Boolean = moved().forget(friendId).also { forgot ->
+        if (forgot) {
+            _cardsWritten.update { it + 1 }
+            _playsWritten.update { it + 1 }
+        }
     }
 
     private suspend fun changeFriend(friendId: String, change: (Friend) -> Friend): Boolean {
@@ -562,6 +574,10 @@ class Huddle(
                         val keys = joined.keys
                         val friend = friendOf(joined.name, keys.outBox, keys.inBox, HuddleCrypto.encode(keys.outKey), HuddleCrypto.encode(keys.inKey), joinId)
                         val card = invite.card?.let { outgoing(friend, Message.Share(newId(MESSAGE_ID_BYTES), now, it), Kind.CARD, notBefore = now) }
+                        // The card the link carried reached them with it: kept first, so the invite goes only once it is (or
+                        // at the next sync); a friend who could not be written takes it back.
+                        val linked = invite.linked?.let { Sent(newId(MESSAGE_ID_BYTES), friend.id, invite.madeAt, it) }
+                        if (linked != null && !keep(listOf(linked))) continue
                         val kept = storage.change { state ->
                             val named = newcomer(friend, state.friends)
                             val ask = named.taken?.let { state.name?.let { name -> profile(named, name, now) } }
@@ -572,11 +588,7 @@ class Huddle(
                                 joined = state.joined + named.id,
                             )
                         }
-                        if (kept) {
-                            server.deleteInvite(invite.owner)
-                            // The card the link carried reached them with it.
-                            invite.linked?.let { keep(listOf(Sent(newId(MESSAGE_ID_BYTES), friend.id, invite.madeAt, it))) }
-                        }
+                        if (kept) server.deleteInvite(invite.owner) else if (linked != null) forgetHistory(friend.id)
                     }
                 }
             }
@@ -627,13 +639,14 @@ class Huddle(
             }
         }
         // A card that went is kept in the history as sent; one let go (no answer, or refused, as long as the server would
-        // have kept it) as not delivered.
+        // have kept it) as not delivered. One the history could not keep stays, to be kept at the next go (sent again if it
+        // went: the friend keeps a card once, by its id).
         val sent = outbox.filter { it.id in gone }.mapNotNull { out ->
             val card = out.card ?: return@mapNotNull null
             state.friends.firstOrNull { it.outBox == out.box }?.let { Sent(out.id, it.id, out.at, card, delivered = out.id in posted) }
         }
-        if (sent.isNotEmpty()) keep(sent)
-        if (gone.isNotEmpty()) storage.change { state -> state.copy(outbox = state.outbox.filterNot { it.id in gone }) }
+        val leaving = if (sent.isEmpty() || keep(sent)) gone else gone - sent.mapTo(HashSet()) { it.id }
+        if (leaving.isNotEmpty()) storage.change { state -> state.copy(outbox = state.outbox.filterNot { it.id in leaving }) }
         return answered
     }
 
@@ -688,6 +701,13 @@ class Huddle(
             log("huddle: inbox not kept (not_written)")
             return false
         }
+        // A goodbye's friend: their cards and plays go before huddle.json lets them go, so one that cannot be let go reads
+        // the goodbye again at the next sync.
+        val byes = read.filter { it.second is Message.Bye }.mapTo(HashSet()) { it.first }
+        if (!byes.all { forgetHistory(it) }) {
+            log("huddle: inbox not kept (not_written)")
+            return false
+        }
         // Whether what came asks for an answer (a name taken in your list, or free again): it goes in this sync.
         var answers = false
         val written = storage.change { state ->
@@ -703,10 +723,7 @@ class Huddle(
         if (!acknowledged) log("huddle: inbox not acknowledged (no_answer)")
         // What was let go is gone: the next one that does not open gets its reads again.
         if (acknowledged && dropped > 0) storage.change { state -> state.copy(friends = state.friends.map { if (it.notOpenedReads > NOT_OPENED_RETRIES) it.copy(notOpenedReads = 0) else it }) }
-        read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> friends.firstOrNull { it.id == id } }.forEach { gone ->
-            forgetHistory(gone.id)
-            server.dropBoxes(listOf(gone.inBox, gone.outBox))
-        }
+        byes.mapNotNull { id -> friends.firstOrNull { it.id == id } }.forEach { gone -> server.dropBoxes(listOf(gone.inBox, gone.outBox)) }
         if (answers) flushNow()
         return acknowledged
     }
@@ -722,9 +739,10 @@ class Huddle(
             // A friend's clock may be ahead: nothing is kept as from later than now.
             val at = minOf(message.at, now)
             if (message is Message.Play) {
-                // Each friend's latest play only (every play is in the history, [fetch]). Plays are many: the ids kept are
-                // those of cards and goodbyes only.
-                state = state.copy(plays = latestPlays(state.plays + FriendPlay(friendId, at, message.song, message.favourite)))
+                // Each friend's latest play only (every play is in the history, [fetch]); the one just read first, so it wins
+                // a tie (two cut to now from a clock ahead: read in order, the later is the newer). Plays are many: the ids
+                // kept are those of cards and goodbyes only.
+                state = state.copy(plays = latestPlays(listOf(FriendPlay(friendId, at, message.song, message.favourite)) + state.plays))
                 continue
             }
             if (message.id in friend.seen) continue

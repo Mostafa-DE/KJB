@@ -319,10 +319,24 @@ class HuddleScreenTest {
         val history = File("src/main/java/app/lyrify/ui/HuddleHistory.kt").readText()
         listOf("huddle.thread(friendId, from, limit)", "huddle.received(from, limit)", "huddle.friendPlays(friendId, from, limit)").forEach { assertTrue(it, history.contains(it)) }
         assertTrue(history.contains("playIt(context, "))
-        // A card or play kept at the top between two pages moves the next page down: what was read already shows once.
-        assertTrue(history.contains("rows = (rows + page).distinct()"))
+        // A card or play kept at the top between two pages moves the next page down: what was read already shows once,
+        // sorted out off the main thread.
+        assertTrue(history.contains("rows = withContext(Dispatchers.Default) { (rows + page).distinct() }"))
+        // After a turn of the phone as many rows as were read come back at once, so the list is where it was.
+        assertTrue(history.contains("var reached by rememberSaveable { mutableIntStateOf(0) }"))
+        assertTrue(history.contains("val asked = maxOf(PAGE, value?.size ?: reached)"))
         val peek = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText().substringAfter("private fun PeekSheet(").substringBefore("private fun RowScope.PeekTile(")
         assertTrue(peek.contains("playIt(context, "))
+    }
+
+    @Test
+    fun `a friend gone while their page is open shows they left, under Back, and closes nothing by itself`() {
+        val history = File("src/main/java/app/lyrify/ui/HuddleHistory.kt").readText()
+        // Back would close the player first when it is up over the page (NavState.back), and leave the page blank.
+        assertFalse(history.contains("onBack() }"))
+        listOf("private fun ThreadPage(", "private fun PlaysPage(").forEach { page ->
+            assertTrue(page, history.substringAfter(page).substringBefore("\n}\n").contains("stringResource(R.string.huddle_gone_title)"))
+        }
     }
 
     @Test

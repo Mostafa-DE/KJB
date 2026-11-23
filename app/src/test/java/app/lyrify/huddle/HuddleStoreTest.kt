@@ -122,6 +122,12 @@ class HuddleStoreTest {
     }
 
     @Test
+    fun `a history that cannot be read keeps Huddle out of that backup, as any store that cannot be read`() = runBlocking {
+        val key = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)
+        assertNull(HuddleBackup.seal(full.copy(backupKey = key), history(cards, plays).apply { failing = true }, random))
+    }
+
+    @Test
     fun `a section made before the history came opens with its cards and plays as the history`() {
         // KJB v4 test builds (format 1): the whole state sealed as huddle.json keeps it, the newest 100 cards and 30 days of plays in it.
         val passphrase = "correct horse".toCharArray()

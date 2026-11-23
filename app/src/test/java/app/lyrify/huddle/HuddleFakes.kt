@@ -129,10 +129,11 @@ val bell = CardSong("Brass Bell", "Kit Calloway", "Harbour Glass", 187_500)
  * Huddle's history on plays.db's own SQL ([PlaysSchema], version 6) on the laptop's SQLite, in memory ([db]): what
  * [SqlHuddleLog] runs on the phone, the same statements with the same values ([keptCardArgs], [friendPlayArgs]), a query's
  * values bound as text as the phone binds them, and rows read the same way ([keptCardOf], [friendPlayOf]). [failing]:
- * every write and read fails, as a full or damaged plays.db would.
+ * every write and read fails, as a full or damaged plays.db would; [forgetFails]: only letting a friend go fails.
  */
 class JdbcHuddleLog(val db: JdbcPlayLog = JdbcPlayLog()) : HuddleLog, AutoCloseable {
     var failing: Boolean = false
+    var forgetFails: Boolean = false
 
     override suspend fun keep(cards: List<KeptCard>, plays: List<FriendPlay>, playsFrom: Long): Boolean = write {
         cards.forEach { db.update(PlaysSchema.KEEP_CARD, *keptCardArgs(it)) }
@@ -159,7 +160,7 @@ class JdbcHuddleLog(val db: JdbcPlayLog = JdbcPlayLog()) : HuddleLog, AutoClosea
 
     override suspend fun opened(id: String, dismissed: Boolean): Boolean = write { db.update(PlaysSchema.CARD_OPENED, if (dismissed) 1L else 0L, id) }
 
-    override suspend fun forget(friend: String): Boolean = write {
+    override suspend fun forget(friend: String): Boolean = !forgetFails && write {
         db.update(PlaysSchema.FORGET_FRIEND_CARDS, friend)
         db.update(PlaysSchema.FORGET_FRIEND_PLAYS, friend)
     }

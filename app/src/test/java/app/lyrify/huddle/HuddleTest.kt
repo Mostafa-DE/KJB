@@ -1285,4 +1285,103 @@ class HuddleTest {
         assertEquals(HuddleBackup.ROUNDS, key.rounds)
         assertFalse(HuddleJson.encode(wrenState.now).contains("correct horse"))
     }
+
+    @Test
+    fun `of two plays read at once from a friend whose clock runs ahead, the later one is what they played last`() = runTest {
+        val (wren, _) = phone("Wren", ahead = Huddle.HOUR_MS)
+        val (juniper, juniperState) = phone("Juniper")
+        friends(wren, juniper)
+        val at = now + Huddle.HOUR_MS + testScheduler.currentTime
+        wren.played(bell, at)
+        wren.played(lantern, at + 1_000)
+        assertTrue(juniper.sync())
+        // Both are cut to Juniper's now: the one read last is the newer.
+        assertEquals(lantern, juniperState.now.plays.single().song)
+    }
+
+    @Test
+    fun `a card that went while the history could not be written stays on the phone, and is kept once it can, and arrives once`() = runTest {
+        val history = history()
+        val (wren, wrenState) = phone("Wren", history = history)
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        history.failing = true
+        val id = wren.send(juniperOnWren.id, song)!!
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        assertEquals("waits on the phone to be kept", listOf(id), wrenState.now.outbox.map { it.id })
+        history.failing = false
+        assertTrue(wren.flush())
+        assertEquals(listOf(id), wren.thread(juniperOnWren.id, 0, 10).map { it.id })
+        assertTrue("it went", (wren.card(id) as Sent).delivered)
+        assertTrue(wrenState.now.outbox.isEmpty())
+        assertTrue(juniper.sync())
+        assertEquals("sent twice, one card", listOf(id), juniper.cards().map { it.id })
+    }
+
+    @Test
+    fun `the card an invite brought waits with the friend in huddle_json while the history cannot be written, and moves there once it can`() = runTest {
+        val (wren, _) = phone("Wren")
+        val history = history().apply { failing = true }
+        val (juniper, juniperState) = phone("Juniper", history = history)
+        val accepted = juniper.accept(checkNotNull(juniper.parse(link(wren, song)))) as Accepted.Joined
+        assertEquals(listOf(accepted.received), juniperState.now.inbox.map { it.id })
+        assertEquals(listOf(accepted.friend.id), juniperState.now.inbox.map { it.friend })
+        history.failing = false
+        assertEquals(listOf(accepted.received), juniper.cards().map { it.id })
+        assertTrue(juniperState.now.inbox.isEmpty())
+    }
+
+    @Test
+    fun `the card your link carried is kept before the invite leaves the phone, and a friend that could not be written leaves no card behind`() = runTest {
+        val history = history()
+        val (wren, wrenState) = phone("Wren", history = history)
+        val (juniper, _) = phone("Juniper")
+        juniper.accept(checkNotNull(juniper.parse(link(wren, song))))
+        history.failing = true
+        wren.sync()
+        assertTrue("the invite waits for the history", wrenState.now.friends.isEmpty())
+        assertEquals(1, wrenState.now.invites.size)
+        history.failing = false
+        wrenState.writable = false
+        wren.sync()
+        assertTrue(wrenState.now.friends.isEmpty())
+        assertTrue("no card for a friend who is not there", history.cards(0, 10).orEmpty().isEmpty())
+        wrenState.writable = true
+        wren.sync()
+        val juniperOnWren = wrenState.now.friends.single()
+        assertEquals(listOf(song), wren.thread(juniperOnWren.id, 0, 10).filterIsInstance<Sent>().map { it.card })
+        assertEquals(1, history.cards(0, 10)?.size)
+        assertTrue(wrenState.now.invites.isEmpty())
+    }
+
+    @Test
+    fun `a friend whose history cannot be let go is not removed, and goes with it once it can`() = runTest {
+        val history = history()
+        val (wren, wrenState) = phone("Wren", history = history)
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper, song)
+        history.forgetFails = true
+        assertFalse(wren.remove(juniperOnWren.id))
+        assertEquals(listOf(juniperOnWren.id), wrenState.now.friends.map { it.id })
+        history.forgetFails = false
+        assertTrue(wren.remove(juniperOnWren.id))
+        assertTrue(wrenState.now.friends.isEmpty())
+        assertTrue(history.cards(0, 10).orEmpty().isEmpty())
+    }
+
+    @Test
+    fun `a goodbye whose friend's history cannot be let go is read again, and the friend goes with their history once it can`() = runTest {
+        val history = history()
+        val (wren, wrenState) = phone("Wren", history = history)
+        val (juniper, _) = phone("Juniper")
+        val (_, wrenOnJuniper) = friends(wren, juniper, song)
+        assertTrue(juniper.remove(wrenOnJuniper.id))
+        history.forgetFails = true
+        assertFalse(wren.sync())
+        assertEquals("a friend until their history goes", 1, wrenState.now.friends.size)
+        history.forgetFails = false
+        assertTrue(wren.sync())
+        assertTrue(wrenState.now.friends.isEmpty())
+        assertTrue(history.cards(0, 10).orEmpty().isEmpty())
+    }
 }

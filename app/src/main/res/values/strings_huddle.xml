@@ -258,4 +258,6 @@
     <string name="huddle_played_row_text">Their plays of the last year</string>
     <string name="huddle_played_empty">Nothing played yet</string>
     <string name="huddle_played_empty_text">What %1$s plays shows here for a year.</string>
+    <string name="huddle_gone_title">No longer friends</string>
+    <string name="huddle_gone">Their songs, notes and plays went with them.</string>
 </resources>
