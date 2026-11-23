@@ -1,7 +1,6 @@
 package app.lyrify.ui
 
 import android.text.format.DateFormat
-import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -140,14 +138,16 @@ private fun HuddleFriends(tab: LibraryTab, modifier: Modifier, bleed: Dp = 0.dp)
                 onHide = { scope.launch { huddle.opened(received.id, dismissed = true) } },
             )
         }
-        Box(Modifier.padding(start = 20.dp - bleed, end = 20.dp - bleed, top = 4.dp, bottom = 2.dp).fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
     }
 }
 
 /**
- * The friends row: a lock first while you listen privately (until when), Invite, then every friend ([friendsNow]):
- * playing now with the live ring, the bars and their song's title, paused with a quiet ring and "Paused", else a quiet
- * ring and when they last played; a card not opened yet wiggles a badge on its sender's face.
+ * The friends row, compact (user 2026-11-23): a lock first while you listen privately, Invite, then every friend
+ * ([friendsNow]: those playing now first, then the others by their latest play), each a 40 dp face over their name.
+ * Playing now shows their song's cover in the face when their KJB sent one (else their letter, in colour) with the live
+ * ring and the bars; paused or not playing, their letter greyed through, still, with a pause mark when paused. A card not
+ * opened yet wiggles a badge on its sender's face. What a face does not say in words (their song, Paused, when they last
+ * played, until when you listen privately) TalkBack says.
  */
 @Composable
 internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFriend: (String) -> Unit, onInvite: () -> Unit, onPrivately: () -> Unit) {
@@ -156,19 +156,22 @@ internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFri
     val chrome = LocalChromeColors.current
     val waiting = rememberHuddleInbox().orEmpty().filter { !it.opened }.mapTo(HashSet()) { it.friend }
     val until = state.privateUntil?.takeIf { now < it }
-    LazyRow(modifier, contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    LazyRow(modifier, contentPadding = PaddingValues(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         if (until != null) {
             item(key = "private") {
-                val line = if (until == HuddleState.FOREVER) stringResource(R.string.huddle_row_private_on) else stringResource(R.string.huddle_row_private_until, DateFormat.getTimeFormat(context).format(Date(until)))
-                RowFace(stringResource(R.string.huddle_row_private), line, strong = false, description = stringResource(R.string.huddle_private_desc, line), onClick = onPrivately) {
-                    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(56.dp).background(chrome.action, CircleShape)) {
-                        Icon(painterResource(R.drawable.ic_lock), contentDescription = null, tint = chrome.onAction, modifier = Modifier.size(24.dp))
+                RowFace(
+                    stringResource(R.string.huddle_row_private),
+                    description = stringResource(R.string.huddle_private_desc, if (until == HuddleState.FOREVER) stringResource(R.string.huddle_row_private_on) else stringResource(R.string.huddle_row_private_until, DateFormat.getTimeFormat(context).format(Date(until)))),
+                    onClick = onPrivately,
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(40.dp).background(chrome.action, CircleShape)) {
+                        Icon(painterResource(R.drawable.ic_lock), contentDescription = null, tint = chrome.onAction, modifier = Modifier.size(18.dp))
                     }
                 }
             }
         }
         item(key = "invite") {
-            RowFace(stringResource(R.string.huddle_row_invite), stringResource(R.string.huddle_row_invite_line), strong = false, description = stringResource(R.string.huddle_invite), onClick = onInvite) { SeatFace(56.dp) }
+            RowFace(stringResource(R.string.huddle_row_invite), description = stringResource(R.string.huddle_invite), onClick = onInvite) { SeatFace(40.dp) }
         }
         items(friendsNow(state, now), key = { it.friend.id }) { friend ->
             val name = friend.friend.shownName
@@ -177,22 +180,11 @@ internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFri
             val said = when {
                 play == null -> name
                 friend.playing -> stringResource(R.string.huddle_row_playing, name, songBy(resources, play.song))
-                friend.paused -> stringResource(R.string.huddle_row_paused, name, songBy(resources, play.song))
-                else -> stringResource(R.string.huddle_row_played, name, songBy(resources, play.song), ago(play.at, now))
+                friend.paused -> stringResource(R.string.huddle_row_paused, name)
+                else -> stringResource(R.string.huddle_row_played, name, ago(play.at, now))
             }
-            RowFace(
-                name,
-                when {
-                    play == null -> null
-                    friend.playing -> play.song.title
-                    friend.paused -> stringResource(R.string.huddle_paused)
-                    else -> DateUtils.getRelativeTimeSpanString(play.at, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString()
-                },
-                strong = friend.playing,
-                description = if (sent) listOf(said, stringResource(R.string.huddle_sent_you)).joinToString(", ") else said,
-                onClick = { onFriend(friend.friend.id) },
-            ) {
-                FriendFace(name, friendColor(friend.friend.id), 56.dp, ring = if (friend.playing) FaceRing.LIVE else FaceRing.IDLE, playing = friend.playing, mail = sent)
+            RowFace(name, description = if (sent) listOf(said, stringResource(R.string.huddle_sent_you)).joinToString(", ") else said, onClick = { onFriend(friend.friend.id) }) {
+                FriendFace(name, friendColor(friend.friend.id), 40.dp, ring = if (friend.playing) FaceRing.LIVE else FaceRing.AWAY, playing = friend.playing, paused = friend.paused, mail = sent, cover = friend.cover?.takeIf { friend.playing }?.picture)
             }
         }
     }

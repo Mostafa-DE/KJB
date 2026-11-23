@@ -1,5 +1,8 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
+import androidx.compose.ui.graphics.luminance
 import app.lyrify.R
 import app.lyrify.huddle.Card
 import app.lyrify.huddle.CardKind
@@ -118,25 +121,31 @@ class HuddleScreenTest {
     }
 
     @Test
-    fun `friends playing now come first, the newest song first, then those paused, then the others by their latest play, then by name`() {
+    fun `friends playing now come first, the song begun last first, then everyone else by their latest play, paused or not, then by name`() {
         val now = 10_000_000L
         val state = HuddleState(
-            friends = listOf(friend("f1", "Wren"), friend("f2", "Juniper"), friend("f3", "Rook"), friend("f4", "Ash"), friend("f5", "Moss"), friend("f6", "Birch"), friend("f7", "Fern")),
+            friends = listOf(
+                friend("f1", "Wren"), friend("f2", "Juniper"), friend("f3", "Rook"), friend("f4", "Ash"), friend("f5", "Moss"), friend("f6", "Birch"),
+                friend("f7", "Fern"), friend("f8", "Sorrel"), friend("f9", "Larch"),
+            ),
             plays = listOf(
                 FriendPlay("f1", now - 100_000, lantern),
                 FriendPlay("f2", now - 30_000, bell),
                 FriendPlay("f3", now - 900_000, bell),
                 FriendPlay("f4", now - 600_000, lantern),
+                FriendPlay("f8", now - 60_000, lantern),
             ),
             live = mapOf(
                 "f1" to told(lantern, NowState.PLAYING, now - 40_000, positionMs = 60_000),
                 "f2" to told(bell, NowState.PLAYING, now - 20_000, positionMs = 10_000),
-                "f7" to told(bell, NowState.PAUSED, now - 50_000),
+                // Paused on a song begun before Sorrel's latest play, and one begun after it.
+                "f7" to told(bell, NowState.PAUSED, now - 50_000, positionMs = 120_000),
+                "f9" to told(lantern, NowState.PAUSED, now - 5_000, positionMs = 10_000),
             ),
         )
-        assertEquals(listOf("f2", "f1", "f7", "f4", "f3", "f6", "f5"), friendsNow(state, now).map { it.friend.id })
-        assertEquals(listOf(true, true, false, false, false, false, false), friendsNow(state, now).map { it.playing })
-        assertEquals(listOf(false, false, true, false, false, false, false), friendsNow(state, now).map { it.paused })
+        assertEquals(listOf("f2", "f1", "f9", "f8", "f7", "f4", "f3", "f6", "f5"), friendsNow(state, now).map { it.friend.id })
+        assertEquals(listOf(true, true, false, false, false, false, false, false, false), friendsNow(state, now).map { it.playing })
+        assertEquals(listOf(false, false, true, false, true, false, false, false, false), friendsNow(state, now).map { it.paused })
     }
 
     @Test
@@ -267,6 +276,82 @@ class HuddleScreenTest {
             assertTrue("$tab has the row", row > 0)
             assertTrue("$tab: ${lines[row - 1]}", lines[row - 1].contains("recapCard(LibraryTab.$tab)") || lines[row - 2].contains("recapCard(LibraryTab.$tab)"))
         }
+    }
+
+    @Test
+    fun `the friends row is compact, 40 dp faces over one line of name, and TalkBack still hears what each friend played and when`() {
+        val everywhere = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText()
+        val row = everywhere.substringAfter("internal fun FriendsRow(").substringBefore("\n}\n")
+        // The lock, Invite and every friend at 40 dp (was 56), the live ring and the bars on a playing friend's face.
+        listOf(
+            "Modifier.size(40.dp).background(chrome.action, CircleShape)",
+            "RowFace(stringResource(R.string.huddle_row_invite), description = stringResource(R.string.huddle_invite), onClick = onInvite) { SeatFace(40.dp) }",
+            "FriendFace(name, friendColor(friend.friend.id), 40.dp, ring = if (friend.playing) FaceRing.LIVE else FaceRing.AWAY, playing = friend.playing, paused = friend.paused, mail = sent, cover = friend.cover?.takeIf { friend.playing }?.picture)",
+            // Less room above and below the faces.
+            "contentPadding = PaddingValues(horizontal = 10.dp)",
+        ).forEach { assertTrue(it, row.contains(it)) }
+        // No line under the name ("15 min ago", Paused, their song): TalkBack still says it, the time in words.
+        assertFalse(row.contains("FORMAT_ABBREV_RELATIVE"))
+        assertTrue(row.contains("stringResource(R.string.huddle_row_played, name, ago(play.at, now))"))
+        val parts = File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText()
+        // The bars' badge and a card's badge scaled down with the face (24 dp on the 56 dp one).
+        assertTrue(parts.substringAfter("internal fun FriendFace(").substringBefore("\n}\n").contains(".size(18.dp)"))
+        assertTrue(parts.substringAfter("private fun MailBadge(").substringBefore("\n}\n").contains(".size(18.dp)"))
+        val face = parts.substringAfter("internal fun RowFace(").substringBefore("\n}\n")
+        assertTrue(face.startsWith("name: String, description: String, onClick: () -> Unit, face: @Composable () -> Unit)"))
+        assertEquals("the name alone", 1, Regex("""\bText\(""").findAll(face).count())
+        assertTrue(face.contains("maxLines = 1, overflow = TextOverflow.Ellipsis"))
+        // Each face is still a 48 dp touch target.
+        assertTrue(face.contains(".heightIn(min = 48.dp)"))
+        // No divider under the row: the For you card and the lists' headers below start bands of their own.
+        assertFalse(everywhere.substringAfter("private fun HuddleFriends(").substringBefore("\n}\n").contains("outlineVariant"))
+    }
+
+    @Test
+    fun `on the friends row a friend playing now shows their song's cover in the ring, and a paused or quiet one their letter greyed and still`() {
+        val everywhere = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText()
+        val row = everywhere.substringAfter("internal fun FriendsRow(").substringBefore("\n}\n")
+        // The cover only from what friendsNow says of each friend (their newest now), never read again from the state.
+        assertTrue(row.contains("items(friendsNow(state, now), key = { it.friend.id }) { friend ->"))
+        assertTrue(row.contains("cover = friend.cover?.takeIf { friend.playing }?.picture"))
+        assertFalse(row.contains("state.live"))
+        val parts = File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText()
+        val face = parts.substringAfter("internal fun FriendFace(").substringBefore("\n}\n")
+        // The cover fills the face inside the live ring and its gap, cut round; without one, the letter as before.
+        assertTrue(face.contains("cover: ImageBitmap? = null,"))
+        assertTrue(face.contains("Image(cover, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize().clip(CircleShape))"))
+        // Away: the quiet ring, no motion, the face greyed through but as light as its colour, so the letter reads as well.
+        assertTrue(face.contains("FaceRing.IDLE, FaceRing.AWAY -> Box(Modifier.matchParentSize().border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))"))
+        assertTrue(face.contains("FaceRing.AWAY -> color.luminance().let { Color(it, it, it, colorSpace = ColorSpaces.LinearSrgb).convert(ColorSpaces.Srgb) }"))
+        FriendColors.forEach { color ->
+            val away = color.luminance().let { Color(it, it, it, colorSpace = ColorSpaces.LinearSrgb).convert(ColorSpaces.Srgb) }
+            assertEquals("$color", 0f, away.red - away.blue, 0.001f)
+            assertTrue("$color", contrast(BrandLilac, away) >= 4.5f)
+        }
+        // Paused: a still pause mark where a playing face has its bars, on the face's own grey.
+        assertTrue(face.contains("if (playing) Equaliser(BrandLilac, Modifier.size(9.dp, 8.dp)) else Icon(painterResource(R.drawable.ic_pause_fill), contentDescription = null, tint = BrandLilac, modifier = Modifier.size(10.dp))"))
+        assertTrue(face.contains(".background(lerp(ground, BrandBlack, 0.18f), CircleShape)"))
+        // The Huddle page, the sheets, the player and the Now bar keep their faces: only the friends row greys one through,
+        // pauses one or shows a cover in one.
+        val calls = listOf("HuddleParts.kt", "HuddleScreen.kt", "HuddleSheets.kt", "HuddleInvite.kt", "HuddleEverywhere.kt")
+            .flatMap { File("src/main/java/app/lyrify/ui/$it").readText().lines() }
+            .filter { "FriendFace(" in it && "fun FriendFace(" !in it }
+        assertTrue(calls.size >= 15)
+        calls.filter { "FaceRing.AWAY" in it || "paused = " in it || "cover = " in it }.let { assertEquals(listOf(row.lines().single { "FriendFace(" in it }), it) }
+    }
+
+    @Test
+    fun `TalkBack says each face on the friends row as playing a song by its artist, paused, or when they last played`() {
+        val strings = File("src/main/res/values/strings_huddle.xml").readText()
+        assertTrue("""<string name="huddle_row_playing">%1${'$'}s, playing %2${'$'}s</string>""" in strings)
+        assertTrue("""<string name="huddle_row_paused">%1${'$'}s, paused</string>""" in strings)
+        assertTrue("""<string name="huddle_row_played">%1${'$'}s, played %2${'$'}s</string>""" in strings)
+        val row = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText().substringAfter("internal fun FriendsRow(").substringBefore("\n}\n")
+        listOf(
+            "friend.playing -> stringResource(R.string.huddle_row_playing, name, songBy(resources, play.song))",
+            "friend.paused -> stringResource(R.string.huddle_row_paused, name)",
+            "else -> stringResource(R.string.huddle_row_played, name, ago(play.at, now))",
+        ).forEach { assertTrue(it, row.contains(it)) }
     }
 
     @Test
