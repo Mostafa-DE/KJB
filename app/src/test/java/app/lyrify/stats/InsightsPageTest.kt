@@ -340,6 +340,24 @@ class InsightsPageTest {
         assertEquals(emptyList<RecapMonth>(), recap(plays, YearMonth.of(2026, 10)).cards.recaps)
     }
 
+    @Test
+    fun `the rings of this month and this year so far have their own totals, whatever the page's period`() {
+        // Nothing this week (from Monday 23 November); three plays earlier this month, two in October.
+        val plays = plays(copper, 3, nov(10)) + plays(kite, 2, oct(5))
+        val november = Totals(heardMs = 3 * 120_000L, plays = 3, songs = 1, artists = 1, albums = 1)
+        val year = Totals(heardMs = 5 * 120_000L, plays = 5, songs = 2, artists = 2, albums = 1)
+
+        val week = page(plays, ListeningPeriod.WEEK).cards
+        assertNull(week.time)
+        assertEquals(november to year, week.monthSoFar to week.yearSoFar)
+        assertEquals(november to year, page(plays, ListeningPeriod.ALL_TIME).cards.let { it.monthSoFar to it.yearSoFar })
+        // A year page with nothing this month: no month ring, whose story would be empty.
+        val quietMonth = page(plays(kite, 2, oct(5)), ListeningPeriod.YEAR).cards
+        assertEquals(null to Totals(heardMs = 2 * 120_000L, plays = 2, songs = 1, artists = 1, albums = 0), quietMonth.monthSoFar to quietMonth.yearSoFar)
+        // A month's story has no stories row.
+        assertEquals(null to null, recap(plays, YearMonth.of(2026, 10)).cards.let { it.monthSoFar to it.yearSoFar })
+    }
+
     // The top lists
 
     @Test

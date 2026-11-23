@@ -112,8 +112,9 @@ fun insightsPageOf(
 }
 
 /**
- * A page's cards in the page's order, each null (or empty) below its minimum: the stories row ([recaps]; on the period
- * pages only), Your time, Every day you listened, Your day on a record, the top artists, songs and albums, Your taste,
+ * A page's cards in the page's order, each null (or empty) below its minimum: the stories row ([recaps], and the rings of
+ * this month and this year so far, [monthSoFar] and [yearSoFar], whatever the page's period; on the period pages only,
+ * each shown when its own page's Your time shows), Your time, Every day you listened, Your day on a record, the top artists, songs and albums, Your taste,
  * How you listen, [moments], New to you ([found]), Back again ([comebacks]) and the favourites still quiet ([forgotten]),
  * You and your friends, Read along, New favourites, Your searches, Where you listen ([outputs]), Top playlists, Books
  * and podcasts, Your library, your listening type ([traits]) and Milestones and badges. Where you listen and Top
@@ -121,6 +122,8 @@ fun insightsPageOf(
  */
 data class InsightsCards(
     val recaps: List<RecapMonth> = emptyList(),
+    val monthSoFar: Totals? = null,
+    val yearSoFar: Totals? = null,
     val time: TimeCard? = null,
     val days: DaysCard? = null,
     val clock: ClockCard? = null,

@@ -121,6 +121,8 @@ internal class PageWork(
         val albumCovers = tops.songs.mapNotNull { top -> albumKey(top.item)?.let { it to top.item } }.distinctBy { it.first }.toMap()
         return InsightsCards(
             recaps = if (period.going) recapsOf(library) else emptyList(),
+            monthSoFar = soFarOf(ListeningPeriod.MONTH),
+            yearSoFar = soFarOf(ListeningPeriod.YEAR),
             time = time,
             days = daysOf(),
             clock = clock,
@@ -713,6 +715,16 @@ internal class PageWork(
             nightMs = between(NIGHT_PART_FROM, MORNING_FROM),
             lateMs = between(NIGHT_FROM, NIGHT_OWL_UNTIL),
         )
+    }
+
+    /**
+     * This month's or this year's ([kind]) own totals so far, whatever the page's period, for its ring on the stories row
+     * (the period pages only): none when its own page's Your time would not show.
+     */
+    private fun soFarOf(kind: ListeningPeriod): Totals? = if (!period.going) {
+        null
+    } else {
+        totalsOf(periodOf(kind, now, zone, calendar.firstDayOfWeek)).takeIf { it.heardMs >= MIN_HEARD_MS || it.plays > 0 }
     }
 
     /** The stories row: each month with a recap ([recapMonths]) and its most played songs of different albums. */
