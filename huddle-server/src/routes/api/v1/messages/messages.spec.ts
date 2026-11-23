@@ -11,6 +11,8 @@ import { handleDeleteMessages } from "./delete"
 import { handleInbox } from "./inbox"
 import { handleSendMessage } from "./send"
 
+const KIB = 1024
+const MIB = 1024 * KIB
 const MINUTE_MS = 60 * 1000
 const HOUR_MS = 60 * MINUTE_MS
 const DAY_MS = 24 * HOUR_MS
@@ -70,6 +72,17 @@ describe("POST /api/v1/messages/send", () => {
     const fits = await call(handleSendMessage, { mailbox: randomId(), kind, data: sealed(limit) })
     const tooBig = await call(handleSendMessage, { mailbox: randomId(), kind, data: sealed(limit + 1) })
 
+    expect(fits.status).toBe(201)
+    expect(tooBig).toMatchObject({ status: 413, body: { error: "too_large" } })
+  })
+
+  it("takes a now with its song's cover, 10 KiB sealed, and refuses one over 12 KiB", async () => {
+    // The phone pads a now with a cover to 10 KiB and seals it with 29 bytes more (format, nonce and tag).
+    const cover = await call(handleSendMessage, { mailbox: randomId(), kind: "now", data: sealed(10 * KIB + 29) })
+    const fits = await call(handleSendMessage, { mailbox: randomId(), kind: "now", data: sealed(12 * KIB) })
+    const tooBig = await call(handleSendMessage, { mailbox: randomId(), kind: "now", data: sealed(12 * KIB + 1) })
+
+    expect(cover.status).toBe(201)
     expect(fits.status).toBe(201)
     expect(tooBig).toMatchObject({ status: 413, body: { error: "too_large" } })
   })
@@ -211,7 +224,18 @@ describe("POST /api/v1/messages/send", () => {
     expect(over).toMatchObject({ status: 429, body: { error: "rate_limited" } })
   })
 
-  it("allows 32 MiB of data an hour from one address", async () => {
+  it("takes a busy hour and a heavy day from 10 phones on one address, each new song's cover going to 9 friends", async () => {
+    const ip = randomIp()
+    // hd4's sizing (28 MiB in a busy hour, 200 MiB in a heavy day with 8 hours of music) and the covers on top: a new
+    // song every 3 minutes on each phone, its now 10,269 bytes sealed instead of 1,053.
+    const coversAnHour = 10 * 9 * 20 * (10_269 - 1_053)
+
+    expect(() => enforceRate(`bytes:${ip}`, LIMITS.rate.ipBytes, 28 * MIB + coversAnHour)).not.toThrow()
+    expect(() => enforceRate(`bytes-day:${ip}`, LIMITS.rate.ipBytesDay, 200 * MIB + 8 * coversAnHour)).not.toThrow()
+    expect((await call(handleSendMessage, { mailbox: randomId(), kind: "now", data: sealed(10_269) }, { ip })).status).toBe(201)
+  })
+
+  it("allows 48 MiB of data an hour from one address", async () => {
     const ip = randomIp()
     const cardsInBudget = LIMITS.rate.ipBytes.limit / LIMITS.dataBytes.card
     for (let i = 0; i < cardsInBudget; i++) await send(randomId(), "card", sealed(LIMITS.dataBytes.card), ip)
@@ -221,7 +245,7 @@ describe("POST /api/v1/messages/send", () => {
     expect(refused).toMatchObject({ status: 429, body: { error: "rate_limited" } })
   })
 
-  it("allows 320 MiB of data a day from one address", async () => {
+  it("allows 480 MiB of data a day from one address", async () => {
     const ip = randomIp()
     // All but two cards' worth of the day spent already, as some 5,000 earlier cards would have.
     enforceRate(`bytes-day:${ip}`, LIMITS.rate.ipBytesDay, LIMITS.rate.ipBytesDay.limit - 2 * LIMITS.dataBytes.card)
