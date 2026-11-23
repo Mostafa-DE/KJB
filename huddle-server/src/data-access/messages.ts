@@ -7,19 +7,27 @@ type MessageKind = (typeof messageKinds)[number]
 
 /** Held inbox reads by mailbox hash: each one's wake-up, called when a message is sent into that mailbox. */
 const listeners = new Map<string, Set<() => void>>()
+/** Held reads at once, in all and by the address that holds them. */
 let listening = 0
+const listeningFrom = new Map<string, number>()
 
 /**
  * Calls `wake` each time a message is sent into one of `mailboxes`, until the function returned is called; null when
- * the server already holds `LIMITS.inboxWaiters` reads, so this one is answered at once.
+ * the server already holds `LIMITS.inboxWaiters` reads, or `ip` holds `LIMITS.inboxWaitersPerIp`, so this one is
+ * answered at once.
  */
-export function listen(mailboxes: string[], wake: () => void) {
-  if (listening >= LIMITS.inboxWaiters) return null
+export function listen(ip: string, mailboxes: string[], wake: () => void) {
+  const fromIp = listeningFrom.get(ip) ?? 0
+  if (listening >= LIMITS.inboxWaiters || fromIp >= LIMITS.inboxWaitersPerIp) return null
   listening++
+  listeningFrom.set(ip, fromIp + 1)
   const hashes = mailboxes.map(storageKey)
   for (const hash of hashes) listeners.set(hash, (listeners.get(hash) ?? new Set()).add(wake))
   return () => {
     listening--
+    const left = (listeningFrom.get(ip) ?? 1) - 1
+    if (left > 0) listeningFrom.set(ip, left)
+    else listeningFrom.delete(ip)
     for (const hash of hashes) {
       const wakes = listeners.get(hash)
       wakes?.delete(wake)

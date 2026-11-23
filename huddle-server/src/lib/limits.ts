@@ -19,8 +19,10 @@ export const LIMITS = {
   inboxBytes: MIB,
   // A held inbox read (`wait`) answers at the latest after this, well inside Railway's 5 minutes without data.
   inboxWaitMs: 25_000,
-  // Held reads at once, server-wide; past it a read is answered at once, as without `wait`.
+  // Held reads at once, server-wide and from one address; past either a read is answered at once, as without `wait`.
+  // 10 phones behind one address hold one each, and one more each for a quick return to the front.
   inboxWaiters: 1_000,
+  inboxWaitersPerIp: 20,
   batchEntries: 64,
   deleteIds: 100,
   // Per-address limits leave room for carrier NAT and one home Wi-Fi. 10 friends behind one address, all with KJB in

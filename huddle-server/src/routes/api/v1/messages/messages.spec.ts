@@ -398,17 +398,20 @@ describe("POST /api/v1/messages/inbox", () => {
   it("holds a read with wait until a message lands in one of its mailboxes, then answers with it", async () => {
     const mailbox = randomId()
     const other = randomId()
+    let answered = false
     const reading = (async () => {
       const began = Date.now()
       const answer = await call(handleInbox, { mailboxes: [{ mailbox: other }, { mailbox }], wait: 5_000 })
+      answered = true
       return { ...answer, tookMs: Date.now() - began }
     })()
     await sleep(300)
+    const heldWhileEmpty = !answered
     const landed = await send(mailbox, "now")
     const answer = await reading
 
+    expect(heldWhileEmpty).toBe(true)
     expect(answer.status).toBe(200)
-    expect(answer.tookMs).toBeGreaterThanOrEqual(250)
     expect(answer.tookMs).toBeLessThan(2_000)
     expect(answer.body.mailboxes.map((entry: { messages: unknown[] }) => entry.messages.length)).toEqual([0, 1])
     expect(answer.body.mailboxes[1].messages[0].id).toBe(landed.id)
@@ -442,6 +445,7 @@ describe("POST /api/v1/messages/inbox", () => {
     }
     expect(empty.status).toBe(200)
     expect(empty.tookMs).toBeGreaterThanOrEqual(380)
+    expect(empty.tookMs).toBeLessThan(1_500)
     expect(empty.body.mailboxes[0]).toMatchObject({ messages: [], more: false })
   })
 
@@ -464,6 +468,39 @@ describe("POST /api/v1/messages/inbox", () => {
     } finally {
       LIMITS.inboxWaiters = cap
     }
+  })
+
+  it("holds only so many reads at once from one address, answering its others at once", async () => {
+    const most = LIMITS.inboxWaitersPerIp
+    LIMITS.inboxWaitersPerIp = 2
+    try {
+      const ip = randomIp()
+      const parked = [held(randomId(), 1_500, { ip }), held(randomId(), 1_500, { ip })]
+      await sleep(200)
+      const over = await held(randomId(), 1_500, { ip })
+      const other = await held(randomId(), 400)
+      const answers = await Promise.all(parked)
+
+      expect(over.tookMs).toBeLessThan(1_000)
+      expect(other.tookMs).toBeGreaterThanOrEqual(380)
+      expect(answers.every((answer) => answer.tookMs >= 1_400)).toBe(true)
+      expect((await held(randomId(), 400, { ip })).tookMs).toBeGreaterThanOrEqual(380)
+    } finally {
+      LIMITS.inboxWaitersPerIp = most
+    }
+  })
+
+  it("reads nothing for a phone already gone, so plays and nows wait for its next read", async () => {
+    const mailbox = randomId()
+    const now = await send(mailbox, "now")
+    const gone = new AbortController()
+    gone.abort()
+
+    const answer = await call(handleInbox, { mailboxes: [{ mailbox }], wait: 5_000 }, { signal: gone.signal })
+    const next = await inbox(mailbox)
+
+    expect(answer.body.mailboxes[0].messages).toEqual([])
+    expect(next.mailboxes[0].messages.map((message) => message.id)).toEqual([now.id])
   })
 
   it("counts held reads in their own window per address, and past it answers at once", async () => {

@@ -196,8 +196,9 @@ every waiting message comes back.
 holds the read until a message is sent into one of them, the time is up, or the phone goes, and then answers as below
 (with nothing, at the time's end). Something waiting already is answered at once. Without `wait` (KJB before it) the
 read is answered at once, as it always was. A held read counts once more in a window of its own per IP (3,000 per 10
-minutes), and the server holds 1,000 reads at once; past either, the read is answered at once, as without `wait`, so a
-phone treats an empty answer that came early as the end of its wait. `200`:
+minutes), and the server holds 1,000 reads at once, 20 of them from one IP; past any of those, the read is answered at
+once, as without `wait`, so a phone treats an empty answer that came early as the end of its wait. A phone already gone
+when its wait ends gets nothing read, so no play is handed to a closed connection. `200`:
 
 ```json
 {
@@ -293,7 +294,7 @@ per 10 minutes, 28 MiB of data in a busy hour and 200 MiB in a heavy day.
 | Plays waiting in one mailbox | 500 (oldest dropped) |
 | Nows waiting in one mailbox | 1 (the newest) |
 | Kept: card, profile / play / now / waiting invite / accepted invite | 30 days / 24 h / 10 min / 7 days / 7 days after accept |
-| Held `inbox` read (`wait`) | 25,000 ms at most; 1,000 held at once on the server |
+| Held `inbox` read (`wait`) | 25,000 ms at most; 1,000 held at once on the server, 20 from one IP |
 | `inbox` | 64 mailboxes, 100 messages each, about 1 MiB of data per answer |
 | `ack` / `mailboxes/delete` / `messages/delete` | 64 entries / 64 ids / 100 ids |
 | All `/api/v1` calls, per IP | 6,000 per 10 minutes |

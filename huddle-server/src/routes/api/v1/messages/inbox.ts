@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router"
 import { z } from "zod"
 import { listen, readInbox } from "@/data-access/messages"
-import { apiRoute, eachMailboxOnce, enforceRate, idSchema, json, messageIdSchema } from "@/lib/api"
+import { ApiError, apiRoute, eachMailboxOnce, enforceRate, idSchema, json, messageIdSchema } from "@/lib/api"
 import { LIMITS } from "@/lib/limits"
 
 /**
@@ -23,16 +23,18 @@ export const handleInbox = apiRoute(
     let holds = wait > 0
     try {
       if (holds) enforceRate(`waits:${ip}`, LIMITS.rate.inboxWaits)
-    } catch {
+    } catch (error) {
+      if (!(error instanceof ApiError) || error.status !== 429) throw error
       // Past its own window: answered at once, as without `wait`.
       holds = false
     }
     let landed = false
     let wake = () => {}
-    // Listening starts before the first read, so a message sent while it runs ends the wait too. Null past the server's
-    // cap of held reads: answered at once.
+    // Listening starts before the first read, so a message sent while it runs ends the wait too. Null past the caps of
+    // held reads: answered at once.
     const stop = holds
       ? listen(
+          ip,
           mailboxes.map((entry) => entry.mailbox),
           () => {
             landed = true
@@ -42,10 +44,14 @@ export const handleInbox = apiRoute(
       : null
     try {
       for (;;) {
+        // A phone already gone gets nothing read: plays and nows go once read, so they wait for its next read.
+        if (signal.aborted) {
+          return json(200, { now: Date.now(), mailboxes: mailboxes.map(({ mailbox }) => ({ mailbox, messages: [], more: false })) })
+        }
         const now = new Date()
         const read = await readInbox(mailboxes, now)
         const left = until - Date.now()
-        if (!stop || left <= 0 || signal.aborted || read.some((entry) => entry.messages.length > 0 || entry.more)) {
+        if (!stop || left <= 0 || read.some((entry) => entry.messages.length > 0 || entry.more)) {
           return json(200, { now: now.getTime(), mailboxes: read })
         }
         // Woken by a send, the time up or the phone gone; a play or a now another read took first means a read again.
