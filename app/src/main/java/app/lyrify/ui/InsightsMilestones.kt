@@ -106,7 +106,10 @@ import kotlinx.coroutines.flow.first
 
 // Books and podcasts
 
-/** Books and podcasts in real minutes, each on its own tile, then the time faster speeds saved, the bookmarks and the books finished. */
+/**
+ * Books and podcasts in real minutes, each on its own tile with the cover of the book or episode heard most (a book's
+ * standing like a book, 42 by 58), then the time faster speeds saved, the bookmarks and the books finished.
+ */
 @Composable
 internal fun BooksAndPodcasts(spoken: SpokenCard) {
     val colors = MaterialTheme.colorScheme
@@ -115,15 +118,21 @@ internal fun BooksAndPodcasts(spoken: SpokenCard) {
     InsightsCard {
         CardHead(stringResource(R.string.insights_spoken_title), R.drawable.ic_auto_stories, stringResource(R.string.insights_spoken_line))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            listOf(Triple(spoken.booksMs, R.drawable.ic_auto_stories, R.string.insights_in_books), Triple(spoken.podcastsMs, R.drawable.ic_headset_mic, R.string.insights_in_podcasts))
+            listOf(Triple(spoken.booksMs, spoken.book?.parts?.firstOrNull(), R.string.insights_in_books), Triple(spoken.podcastsMs, spoken.podcast, R.string.insights_in_podcasts))
                 .filter { it.first > 0 }
-                .forEach { (ms, icon, label) ->
+                .forEach { (ms, cover, label) ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.weight(1f).background(colors.surface, RoundedCornerShape(20.dp)).padding(12.dp).semantics(mergeDescendants = true) {},
                     ) {
-                        Tile(icon, brand.highlightContainer, brand.onHighlightContainer, size = 44.dp)
+                        val book = label == R.string.insights_in_books
+                        SongCover(
+                            cover?.let { SongArt(it.path, it.ref.mediaStoreId) },
+                            if (book) Modifier.padding(horizontal = 5.dp).width(42.dp) else Modifier,
+                            size = if (book) 58.dp else 52.dp,
+                            shape = if (book) RoundedCornerShape(topStart = 4.dp, bottomStart = 4.dp, topEnd = 10.dp, bottomEnd = 10.dp) else RoundedCornerShape(12.dp),
+                        )
                         Column(Modifier.weight(1f)) {
                             Counted(ms, display(21, 24, -0.02, weight = 700), colors.onSurface) { bigTime(it, unit) }
                             Text(stringResource(label), style = FigureLabel.copy(fontSize = 12.5.sp), color = colors.onSurfaceVariant)

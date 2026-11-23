@@ -178,13 +178,6 @@ class InsightsViewTest {
     }
 
     @Test
-    fun `the day's parts sum its hours, the night wrapping past midnight`() {
-        val hours = List(24) { (it + 1).toLong() }
-        assertEquals(listOf((7..12).sum(), (13..18).sum(), (19..22).sum(), (23..24).sum() + (1..6).sum()).map { it.toLong() }, dayParts(hours))
-        assertEquals(hours.sum(), dayParts(hours).sum())
-    }
-
-    @Test
     fun `genre bubbles sit inside their box, never on each other, the biggest first and in the middle`() {
         val shares = listOf(31, 19, 14, 11, 9, 7)
         val bubbles = packBubbles(shares, 322f, 200f, 29f, 60f, 4f)
@@ -237,6 +230,16 @@ class InsightsViewTest {
         listOf("semantics { contentDescription = words }", "R.string.insights_share_of", "placeWords(place, row.before, card.compared)").forEach { assertTrue(it, tops.contains(it)) }
         val milestones = File(ui, "InsightsMilestones.kt").readText()
         listOf("R.string.insights_library_ring", "R.string.insights_next_ring").forEach { assertTrue(it, milestones.contains(it)) }
+    }
+
+    @Test
+    fun `Books and podcasts show the book's and the episode's covers, and the record's parts are the page's own`() {
+        val ui = File("src/main/java/app/lyrify/ui")
+        val milestones = File(ui, "InsightsMilestones.kt").readText()
+        listOf("spoken.book?.parts?.firstOrNull()", "spoken.podcast").forEach { assertTrue(it, milestones.contains(it)) }
+        val time = File(ui, "InsightsTime.kt").readText()
+        assertTrue(time.contains("listOf(clock.morningMs, clock.afternoonMs, clock.eveningMs, clock.nightMs)"))
+        assertFalse(time.contains("fun dayParts"))
     }
 
     @Test

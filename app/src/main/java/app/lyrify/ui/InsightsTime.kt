@@ -598,8 +598,8 @@ internal fun DayOnARecord(clock: ClockCard) {
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
     val insights = if (LocalDarkTheme.current) DarkInsights else LightInsights
-    val total = clock.hours.sum()
-    val parts = dayParts(clock.hours)
+    val parts = listOf(clock.morningMs, clock.afternoonMs, clock.eveningMs, clock.nightMs)
+    val total = parts.sum()
     val top = parts.withIndex().maxByOrNull { it.value }?.index
     InsightsCard {
         CardHead(stringResource(R.string.insights_record_title), R.drawable.ic_schedule, stringResource(R.string.insights_record_line))
@@ -638,9 +638,6 @@ internal fun DayOnARecord(clock: ClockCard) {
         }
     }
 }
-
-/** The real minutes of the four parts of the day from 24 [hours]: morning 6 to 12, afternoon 12 to 6 pm, evening 6 to 10 pm, night 10 pm to 6 am. */
-fun dayParts(hours: List<Long>): List<Long> = listOf(6 until 12, 12 until 18, 18 until 22, (22 until 24) + (0 until 6)).map { range -> range.sumOf { hours.getOrElse(it) { 0L } } }
 
 /**
  * The record of the day: [hours] as 24 lines round a disc, the [peak] hour in [peakColor] and named in the middle;
