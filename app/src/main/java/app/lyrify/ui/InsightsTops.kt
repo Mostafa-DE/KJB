@@ -33,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -92,7 +93,9 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 
 // Insights' cards of what you listen to (the approved mockup, handoff/insights/preview-insights-v1.html): the top
 // artists, songs and albums, your taste, how you listen and moments. Their frame, motion and words are in
@@ -383,7 +386,11 @@ internal fun YourTaste(taste: TasteCard) {
                 val density = LocalDensity.current
                 val width = with(density) { maxWidth.toPx() }
                 val height = with(density) { maxHeight.toPx() }
-                val placed = remember(shares, width) { packBubbles(shares, width, height, with(density) { BUBBLE_MIN.toPx() }, with(density) { BUBBLE_MAX.toPx() }, with(density) { 4.dp.toPx() }) }
+                val sizes = with(density) { Triple(BUBBLE_MIN.toPx(), BUBBLE_MAX.toPx(), 4.dp.toPx()) }
+                // Laid out off the main thread (a few thousand spots tried); the bubbles pop in once placed.
+                val placed by produceState(emptyList<Bubble>(), shares, width, height) {
+                    value = withContext(Dispatchers.Default) { packBubbles(shares, width, height, sizes.first, sizes.second, sizes.third) }
+                }
                 val clock = LocalArrivalClock.current
                 placed.forEach { bubble ->
                     val color = FriendColors[bubble.index % BUBBLES]

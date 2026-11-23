@@ -75,6 +75,13 @@
         <item quantity="other">, down %1$d places</item>
     </plurals>
 
+    <!-- For you's row (lane sg1's card, as the mockup draws it). -->
+    <plurals name="insights_for_you_songs">
+        <item quantity="one">%1$d song from what you play</item>
+        <item quantity="other">%1$d songs from what you play</item>
+    </plurals>
+    <string name="insights_for_you_line">New ones and old ones, picked on your phone</string>
+
     <!-- The top bar, the period switch and its line. -->
     <string name="insights_story_play_yours">Play your story</string>
     <string name="insights_how_title">How Insights count</string>
