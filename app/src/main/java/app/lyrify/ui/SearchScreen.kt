@@ -63,6 +63,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -166,27 +167,27 @@ fun shownCount(results: SearchResults, group: SearchGroup, all: Boolean): Int =
     results.count(group).let { if (all) it else minOf(it, SEARCH_PREVIEW) }
 
 /**
- * Search, the second tab, at its root: the field at the top, focused when the tab opens and when Search is tapped
- * again, not when the phone turns. With the field empty, the recent searches, each with an "×"; else the results in
- * groups. The search goes among the recent ones, and into the interaction log with the result tapped, when the
- * keyboard's search key is pressed, View all or a result is tapped; its "×" forgets the words there too.
+ * Search, the second tab, at its root: the field at the top, focused with its words selected (typing replaces them)
+ * whenever Search is tapped, not when the phone turns. With the field empty, the recent searches, each with an "×";
+ * else the results in groups. The search goes among the recent ones, and into the interaction log with the result
+ * tapped, when the keyboard's search key is pressed, View all or a result is tapped; its "×" forgets the words there too.
  */
 @Composable
 fun SearchPage() {
     val nav = LocalNavigator.current
     val context = LocalContext.current
-    var query by rememberSaveable { mutableStateOf("") }
+    var query by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val recentList = rememberLazyListState()
     val resultList = rememberLazyListState()
     val reselects = nav.state.reselectsOf(DockTab.SEARCH)
-    FocusOnOpen(focus, reselects, toTop = listOf({ recentList.scrollToItem(0) }, { resultList.scrollToItem(0) }))
+    FocusOnOpen(focus, reselects, toTop = listOf({ recentList.scrollToItem(0) }, { resultList.scrollToItem(0) }), onOpen = { query = nameField(query.text) })
     // New words start at the top; coming back to the tab or turning the phone keeps the place.
-    var shownQuery by rememberSaveable { mutableStateOf(query) }
-    LaunchedEffect(query) {
-        if (query != shownQuery) {
-            shownQuery = query
+    var shownQuery by rememberSaveable { mutableStateOf(query.text) }
+    LaunchedEffect(query.text) {
+        if (query.text != shownQuery) {
+            shownQuery = query.text
             resultList.scrollToItem(0)
         }
     }
@@ -196,10 +197,10 @@ fun SearchPage() {
     // The lyrics index looks again when Search opens and after lyrics were written or removed.
     val ledger = LocalLyrics.current.ledger
     LaunchedEffect(ledger) { SearchGraph.refreshLyrics() }
-    val results = rememberSearchResults(query)
+    val results = rememberSearchResults(query.text)
     val commit = { result: Target? ->
-        recent.add(query)
-        interactions.searched(query, result)
+        recent.add(query.text)
+        interactions.searched(query.text, result)
     }
     val ui = rememberLibraryUi()
     val sheets = rememberSongSheets()
@@ -213,9 +214,9 @@ fun SearchPage() {
         },
     ) { padding ->
         val modifier = Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()
-        FadeThrough(query.isBlank()) { blank ->
+        FadeThrough(query.text.isBlank()) { blank ->
             if (blank) {
-                RecentSearches(searches, recentList, onPick = { query = it }, onRemove = { recent.remove(it); interactions.forget(it) }, modifier)
+                RecentSearches(searches, recentList, onPick = { query = query.copy(text = it) }, onRemove = { recent.remove(it); interactions.forget(it) }, modifier)
             } else {
                 val play = rememberPlay(commit)
                 val reading by remember(context) { SearchGraph.lyrics(context).building }.collectAsStateWithLifecycle()
@@ -482,18 +483,19 @@ private fun LazyListScope.resultRows(
 }
 
 /**
- * Each time [opens] grows (Search opened from the dock, or tapped again at its root; 1 for a dialog's field), its lists
+ * Each time [opens] grows (each Search tap; 1 for a dialog's field), [onOpen] runs (Search selects its words), its lists
  * go back to the top ([toTop]) and the field of [focus] takes the focus with the keyboard shown ([openAndFocus]). The
  * count already handled is kept across a turn of the phone, so the keyboard never pops up again then.
  */
 @Composable
-fun FocusOnOpen(focus: FocusRequester, opens: Int, toTop: List<suspend () -> Unit> = emptyList()) {
+fun FocusOnOpen(focus: FocusRequester, opens: Int, toTop: List<suspend () -> Unit> = emptyList(), onOpen: () -> Unit = {}) {
     val keyboard = LocalSoftwareKeyboardController.current
     val window = LocalWindowInfo.current
     var handled by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(opens) {
         if (!focusDue(opens, handled)) return@LaunchedEffect
         handled = opens
+        onOpen()
         // The keyboard comes up only in a window that has the focus: a dialog's gets it a few frames after it shows.
         snapshotFlow { window.isWindowFocused }.first { it }
         val taken = openAndFocus(toTop, frame = { withFrameNanos { } }) {
@@ -531,7 +533,7 @@ private const val FOCUS_TRIES = 60
 
 /** The header, then the field in the same band: Clear while there is text; the keyboard's search key calls [onSearch]. */
 @Composable
-private fun SearchBar(query: String, onQuery: (String) -> Unit, focus: FocusRequester, onSearch: () -> Unit, under: Boolean, backdrop: GlassBackdrop) {
+private fun SearchBar(query: TextFieldValue, onQuery: (TextFieldValue) -> Unit, focus: FocusRequester, onSearch: () -> Unit, under: Boolean, backdrop: GlassBackdrop) {
     // The main pages' header, "KJB Music · Search", with the field under it in the same band.
     MainTopBar(DockTab.SEARCH, under, backdrop) {
         Row(
@@ -546,9 +548,9 @@ private fun SearchBar(query: String, onQuery: (String) -> Unit, focus: FocusRequ
                 onSearch = onSearch,
                 modifier = Modifier.weight(1f),
             ) {
-                if (query.isNotEmpty()) {
+                if (query.text.isNotEmpty()) {
                     ChromeIconButton(R.drawable.ic_close, stringResource(R.string.search_clear), {
-                        onQuery("")
+                        onQuery(TextFieldValue())
                         focus.requestFocus()
                     }, glass = false, size = 36.dp)
                 }

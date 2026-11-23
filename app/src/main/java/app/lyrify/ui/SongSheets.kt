@@ -497,7 +497,7 @@ internal fun NameField(name: TextFieldValue, onName: (TextFieldValue) -> Unit, l
     LyrifyField(name, onName, Modifier.fillMaxWidth().focusRequester(focus), label = label)
 }
 
-/** A name field's start: [start] all selected, so typing replaces it; empty for a new name. */
+/** A name field's start, and Search's words at each Search tap: [start] all selected, so typing replaces it; empty for a new name. */
 fun nameField(start: String): TextFieldValue = TextFieldValue(start, TextRange(0, start.length))
 
 /** KJB's own "Move 2 songs to trash?", before the phone's: from the song sheet, a selection, the player and Duplicates. */

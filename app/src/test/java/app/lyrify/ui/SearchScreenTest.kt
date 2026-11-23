@@ -1,5 +1,7 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import app.lyrify.library.Album
 import app.lyrify.library.Artist
 import app.lyrify.library.Folder
@@ -135,6 +137,20 @@ class SearchScreenTest {
         // A turn of the phone restores the handled count: no keyboard then.
         assertFalse(focusDue(opens = 1, handled = 1))
         assertFalse(focusDue(opens = 0, handled = 0))
+    }
+
+    /** User 2026-11-23 (r4): a Search tap selects the words in the field, so typing replaces them; no clearing first. */
+    @Test
+    fun `each Search tap selects the words in the field, and an empty field just gets the caret`() {
+        // What a tap leaves in the field: its words all selected, as a rename's name starts.
+        assertEquals(TextFieldValue("lantern", TextRange(0, "lantern".length)), nameField(TextFieldValue("lantern", TextRange(3)).text))
+        assertEquals(TextFieldValue("", TextRange(0)), nameField(""))
+        // Search's field keeps its selection, and the count of Search taps (opens) selects its words each time.
+        val screen = File("src/main/java/app/lyrify/ui/SearchScreen.kt").readText()
+        assertTrue(screen.contains("var query by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }"))
+        assertTrue(Regex("""FocusOnOpen\(focus, reselects, [^\n]*onOpen = \{ query = nameField\(query\.text\) }""").containsMatchIn(screen))
+        val focusOnOpen = screen.substringAfter("fun FocusOnOpen(").substringBefore("\n}\n")
+        assertTrue(Regex("""if \(!focusDue\(opens, handled\)\) return@LaunchedEffect\s+handled = opens\s+onOpen\(\)""").containsMatchIn(focusOnOpen))
     }
 
     @Test
