@@ -154,6 +154,12 @@ class SearchScreenTest {
     }
 
     @Test
+    fun `a recent search picked fills the field with the caret after its words, as an Edit tags suggestion does`() {
+        val screen = File("src/main/java/app/lyrify/ui/SearchScreen.kt").readText()
+        assertTrue(screen.contains("onPick = { query = TextFieldValue(it, TextRange(it.length)) }"))
+    }
+
+    @Test
     fun `the field takes the focus while a list not laid out yet waits to go to the top`() = runTest {
         // With the field empty the results list is not composed, so its scroll to the top waits for a first layout
         // that may never come (the phone: Search opened with no keyboard).

@@ -101,7 +101,7 @@ class SearchFocusDeviceTest {
         compose.setContent {
             val focus = remember { FocusRequester() }
             FocusOnOpen(focus, opens, onOpen = { words = nameField(words.text) })
-            BasicTextField(words, { words = it }, Modifier.testTag(FIELD).focusRequester(focus))
+            LyrifySearchField(words, { words = it }, "Search", Modifier.testTag(FIELD), focus = focus)
         }
         opens = 1
         compose.waitForIdle()

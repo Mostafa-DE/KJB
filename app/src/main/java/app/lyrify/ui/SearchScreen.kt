@@ -62,6 +62,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -216,7 +217,7 @@ fun SearchPage() {
         val modifier = Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()
         FadeThrough(query.text.isBlank()) { blank ->
             if (blank) {
-                RecentSearches(searches, recentList, onPick = { query = query.copy(text = it) }, onRemove = { recent.remove(it); interactions.forget(it) }, modifier)
+                RecentSearches(searches, recentList, onPick = { query = TextFieldValue(it, TextRange(it.length)) }, onRemove = { recent.remove(it); interactions.forget(it) }, modifier)
             } else {
                 val play = rememberPlay(commit)
                 val reading by remember(context) { SearchGraph.lyrics(context).building }.collectAsStateWithLifecycle()
