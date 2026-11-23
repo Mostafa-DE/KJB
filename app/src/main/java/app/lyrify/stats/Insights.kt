@@ -187,7 +187,7 @@ internal const val MIN_STREAK_DAYS = 2
 private const val MIN_SPOKEN_MS: Long = 60_000
 
 /** Never played: this many plays that counted ever, here or imported, so a new phone is not told it never played anything. */
-private const val MIN_HISTORY_PLAYS = 20
+internal const val MIN_HISTORY_PLAYS = 20
 
 /** Dig deeper: an album of this many songs or more, this many never played; at most [DIG_MAX] albums. */
 private const val DIG_MIN_ALBUM_SONGS = 4
@@ -302,7 +302,7 @@ internal fun runFrom(start: LocalDate, days: Set<LocalDate>, step: Long): Int = 
  * the plays that counted (never a book's) and the hours heard (books' too); and while it [going] the next one. Shown
  * once one was reached in the period, or while it goes on once one was ever reached.
  */
-private fun milestonesOf(data: InsightsData, period: Period?, going: Boolean, kinds: Kinds): Milestones? {
+internal fun milestonesOf(data: InsightsData, period: Period?, going: Boolean, kinds: Kinds): Milestones? {
     val counted = data.plays.filter { it.counted && kinds.of(it) != Kind.BOOK }
     val reached = PLAY_MILESTONES.mapNotNull { count -> counted.getOrNull(count - 1)?.let { Milestone(MilestoneKind.PLAYS, count, it.startedAt) } }.toMutableList()
     var heardMs = 0L
@@ -335,7 +335,7 @@ private fun spokenOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Ki
 }
 
 /** The library's music no play counted for ([played]: here or imported), the newest added first. */
-private fun neverPlayedOf(library: Library, played: Set<String>): List<Song> {
+internal fun neverPlayedOf(library: Library, played: Set<String>): List<Song> {
     val collator = Collator.getInstance()
     return library.songs.filter { !it.isPodcast && it.path !in played }
         .sortedWith(compareByDescending<Song> { it.addedAt ?: Long.MIN_VALUE }.thenBy(collator) { it.title }.thenBy { it.path })
@@ -345,7 +345,7 @@ private fun neverPlayedOf(library: Library, played: Set<String>): List<Song> {
  * The albums of the [music] played in the period, with their songs never played ([played]: here or imported), the most
  * played album first, then the latest played; each with its song played most there.
  */
-private fun digDeeperOf(music: List<LoggedPlay>, library: Library, played: Set<String>): List<DigDeeper> {
+internal fun digDeeperOf(music: List<LoggedPlay>, library: Library, played: Set<String>): List<DigDeeper> {
     class Heard(val album: Album, val song: Song, val at: Long)
     val heard = music.filter { it.counted }.mapNotNull { play ->
         val song = library.resolver.find(play.song) ?: return@mapNotNull null

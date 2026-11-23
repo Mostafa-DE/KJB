@@ -7,6 +7,7 @@ import app.lyrify.library.Library
 import app.lyrify.library.Song
 import app.lyrify.library.albumKey
 import app.lyrify.player.SourceKind
+import app.lyrify.settings.ListPeriod
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -398,6 +399,20 @@ private const val KEPT_DAYS = 3
 private const val QUIET_DAYS = 60
 private const val COMEBACKS_SHOWN = 3
 
+/** Your listening type: three words, each past its bar; night is 9 pm to 4 am. */
+private const val TRAITS_SHOWN = 3
+private const val NIGHT_OWL_UNTIL = 4
+private const val NIGHT_OWL_BAR = 30
+private const val SHUFFLER_BAR = 20
+private const val ALBUM_LOVER_BAR = 25
+private const val EXPLORER_BAR = 15
+private const val LOYAL_BAR = 10
+private const val PERCENT = 100
+
+/** Milestones: the next one's month is given up to this many days ahead. */
+private const val MAX_AROUND_DAYS = 3_650.0
+private const val DAY_MS: Long = 86_400_000
+
 /**
  * One page's working out, each part once for the cards that share it: [heard], the play log's plays in the period (an
  * import's and the short ones left out), and [books], the book log's.
@@ -420,6 +435,7 @@ private class PageWork(private val data: InsightsData, private val period: PageP
         val shows = ledger.heardMs >= MIN_HEARD_MS || ledger.plays > 0
         val time = timeOf().takeIf { shows }
         if (library == null) return InsightsCards(time = time)
+        val found = foundOf(library)
         return InsightsCards(
             recaps = if (period.going) recapsOf(library) else emptyList(),
             time = time,
@@ -433,10 +449,105 @@ private class PageWork(private val data: InsightsData, private val period: PageP
             taste = tasteOf(library),
             how = howOf(),
             moments = momentsOf(library),
-            found = foundOf(library),
+            found = found,
             comebacks = comebacksOf(),
             forgotten = if (period.going) forgottenOf(data, now, library, kinds) else emptyList(),
+            library = if (period.going) libraryOf(library) else null,
+            traits = traitsOf(found),
+            milestones = milestonesCardOf(library),
         )
+    }
+
+    /**
+     * Your library, now (on the period pages only): its music, ever played here or imported, added in the period (all
+     * time: the last 30 days, as the Songs tab counts them), by file type, never played and dig deeper (in1's nudges).
+     */
+    private fun libraryOf(library: Library): LibraryCard? {
+        val songs = library.songs.filter { !it.isPodcast }.takeIf { it.isNotEmpty() } ?: return null
+        val ever = data.everPlayed.filter { it.count > 0 }
+        val played = ever.mapNotNullTo(HashSet()) { library.resolver.find(it.song)?.path }
+        val from = period.bounds?.from ?: checkNotNull(sinceOf(ListPeriod.DAYS_30, now, zone))
+        val added = songs.filter { song -> song.addedAt?.let { it >= from && (period.bounds == null || it < period.bounds.until) } == true }
+        return LibraryCard(
+            songs = songs.size,
+            bytes = songs.sumOf { it.sizeBytes.coerceAtLeast(0) },
+            durationMs = songs.sumOf { it.durationMs.coerceAtLeast(0) },
+            played = songs.count { it.path in played },
+            added = added.size,
+            addedPlayed = added.count { it.path in played },
+            types = songs.groupingBy { it.mimeType }.eachCount().map { (type, count) -> FileType(type, count) }.sortedWith(compareByDescending<FileType> { it.songs }.thenBy { it.mimeType }),
+            neverPlayed = if (ever.sumOf { it.count.toLong() } < MIN_HISTORY_PLAYS) emptyList() else neverPlayedOf(library, played),
+            digDeeper = digDeeperOf(music, library, played),
+        )
+    }
+
+    /** Your listening type: the [TRAITS_SHOWN] strongest words of those past their bar, from [MIN_TOP_PLAYS] music plays; never "explorer" for all time. */
+    private fun traitsOf(found: FoundCard?): List<Trait> {
+        if (!enough) return emptyList()
+        val night = (heard + books).filter { localTimeOf(it, zone).hour.let { hour -> hour >= NIGHT_FROM || hour < NIGHT_OWL_UNTIL } }.sumOf { it.realMs }
+        val starts = startedPlays.mapNotNull { it.start }
+        val top = tops.artists.firstOrNull()
+        val shares = listOfNotNull(
+            Trait(TraitKind.NIGHT_OWL, percentOf(night, ledger.heardMs)),
+            Trait(TraitKind.SHUFFLER, percentOf(starts.count { it.shuffled }.toLong(), starts.size.toLong())),
+            Trait(TraitKind.ALBUM_LOVER, percentOf(starts.count { !it.shuffled && it.source == SourceKind.ALBUM }.toLong(), starts.size.toLong())),
+            found?.takeIf { period.bounds != null }?.let { Trait(TraitKind.EXPLORER, percentOf(it.newPlays.toLong(), it.plays.toLong())) },
+            top?.let { Trait(TraitKind.LOYAL, percentOf(it.plays.toLong(), music.count { play -> play.counted }.toLong()), it.item) },
+        )
+        return shares.filter { it.percent >= barOf(it.kind) }.sortedByDescending { it.percent.toDouble() / barOf(it.kind) }.take(TRAITS_SHOWN)
+    }
+
+    private fun percentOf(part: Long, whole: Long): Int = if (whole <= 0) 0 else ((part * PERCENT + whole / 2) / whole).toInt()
+
+    /** How far past it a word must be: a share of the time (night owl) or of the plays (the others), in percent. */
+    private fun barOf(kind: TraitKind): Int = when (kind) {
+        TraitKind.NIGHT_OWL -> NIGHT_OWL_BAR
+        TraitKind.SHUFFLER -> SHUFFLER_BAR
+        TraitKind.ALBUM_LOVER -> ALBUM_LOVER_BAR
+        TraitKind.EXPLORER -> EXPLORER_BAR
+        TraitKind.LOYAL -> LOYAL_BAR
+    }
+
+    /**
+     * Milestones in the period (in1's), the next one with when this month's pace reaches it, and the badges of all time;
+     * a month over keeps only its own.
+     */
+    private fun milestonesCardOf(library: Library): MilestonesCard? {
+        val own = milestonesOf(data, period.bounds, period.going, kinds)
+        if (!period.going) return own?.let { MilestonesCard(it.reached, null, null, null, null, null, null, 0) }
+        val ever = milestonesOf(data, null, going = false, kinds)?.reached.orEmpty()
+        val days = countedDays(data.plays)
+        val longest = days.filter { it.minusDays(1) !in days }.map { Run(runFrom(it, days, step = 1), it) }
+            .maxWithOrNull(compareBy<Run> { it.days }.thenBy { it.from })?.takeIf { it.days >= MIN_STREAK_DAYS }
+        val artistsMonth = data.plays.filter { it.counted && kinds.of(it) == Kind.MUSIC }
+            .mapNotNull { play -> songOf(play)?.let { YearMonth.from(dayOf(play.startedAt, zone).date) to it } }
+            .groupBy({ it.first }, { it.second })
+            .map { (month, songs) -> MonthArtists(month, songs.flatMapTo(HashSet()) { song -> library.artistsOf(song).map { it.name } }.size) }
+            .maxWithOrNull(compareBy<MonthArtists> { it.artists }.thenBy { it.month })
+        val card = MilestonesCard(
+            reached = own?.reached.orEmpty(),
+            next = own?.next,
+            nextAround = own?.next?.let(::aroundOf),
+            longestRun = longest,
+            plays = ever.filter { it.kind == MilestoneKind.PLAYS }.maxByOrNull { it.count },
+            hours = ever.filter { it.kind == MilestoneKind.HOURS }.maxByOrNull { it.count },
+            artistsMonth = artistsMonth,
+            booksFinished = 0,
+        )
+        return card.takeIf { own != null || longest != null || artistsMonth != null }
+    }
+
+    /** The month [next] is reached at this month's pace so far: plays that counted, or real minutes; none without a pace, or past [MAX_AROUND_DAYS]. */
+    private fun aroundOf(next: NextMilestone): YearMonth? {
+        val monthStart = YearMonth.from(dayOf(now, zone).date).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val done = if (next.kind == MilestoneKind.PLAYS) {
+            data.plays.count { it.startedAt >= monthStart && it.counted && kinds.of(it) != Kind.BOOK }.toDouble()
+        } else {
+            (data.plays + data.books).filter { it.startedAt >= monthStart }.sumOf { it.realMs }.toDouble()
+        }
+        val days = (now - monthStart).coerceAtLeast(DAY_MS).toDouble() / DAY_MS
+        val left = next.left / (done / days)
+        return left.takeIf { done > 0 && it <= MAX_AROUND_DAYS }?.let { YearMonth.from(Instant.ofEpochMilli(now + (it * DAY_MS).toLong()).atZone(zone)) }
     }
 
     /** [play]'s song in the library now (found again by its path, then its id hint), once per path. */
@@ -448,8 +559,11 @@ private class PageWork(private val data: InsightsData, private val period: PageP
     private val musicSongs by lazy { music.mapNotNull { play -> songOf(play)?.let { play to it } } }
 
     /** How you listen: from [MIN_HOW_PLAYS] plays that keep how they began, quick skips too; books left out. */
+    /** The period's plays that keep how they began, quick skips too; books left out. */
+    private val startedPlays by lazy { (heard + data.skips.within(period.bounds)).filter { it.start != null && kinds.of(it) != Kind.BOOK } }
+
     private fun howOf(): HowCard? {
-        val plays = (heard + data.skips.within(period.bounds)).filter { it.start != null && kinds.of(it) != Kind.BOOK }
+        val plays = startedPlays
         if (plays.size < MIN_HOW_PLAYS) return null
         val ways = plays.groupingBy { wayOf(checkNotNull(it.start)) }.eachCount()
         val ended = plays.mapNotNull { play -> endOf(play)?.let { end -> songOf(play)?.takeIf { kinds.of(play) == Kind.MUSIC }?.let { it to end } } }

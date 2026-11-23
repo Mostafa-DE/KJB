@@ -515,6 +515,70 @@ class InsightsPageTest {
         assertEquals(emptyList<Top<Song>>(), recap(plays, YearMonth.of(2026, 10)).cards.forgotten)
     }
 
+    // Your library
+
+    @Test
+    fun `your library counts its music, what was ever played, what the period added, file types, never played and dig deeper`() {
+        val library = Library.of(
+            listOf(copper, tide.copy(addedAt = nov(20)), lantern, signal, harbour, glass.copy(addedAt = nov(21), mimeType = "audio/flac"), north, kite.copy(mimeType = "audio/flac"), talk),
+            Settings(),
+        )
+        val plays = plays(copper, 12, nov(3)) + plays(harbour, 8, nov(4)) + play(glass, nov(22)) + LoggedPlay(kite.ref, oct(1), 0, counted = true, imported = true)
+        val lowSun = checkNotNull(library.albums.firstOrNull { it.title == "Low Sun" })
+
+        val card = shown(page(plays, library = library).cards.library)
+
+        assertEquals(Triple(8, 8 * 4_000_000L, 8 * 200_000L), Triple(card.songs, card.bytes, card.durationMs))
+        assertEquals(4, card.played)
+        assertEquals(2 to 1, card.added to card.addedPlayed)
+        assertEquals(listOf(FileType("audio/mpeg", 6), FileType("audio/flac", 2)), card.types)
+        assertEquals(listOf(tide.path, north.path, signal.path, lantern.path), card.neverPlayed.map { it.path })
+        assertEquals(listOf(DigDeeper(lowSun, copper, lowSun.songs.drop(1))), card.digDeeper)
+        // All time: added in the last 30 days.
+        assertEquals(2, shown(page(plays, ListeningPeriod.ALL_TIME, library = library).cards.library).added)
+        assertNull(recap(plays + plays(copper, 10, oct(5)), YearMonth.of(2026, 10)).cards.library)
+    }
+
+    // Milestones and badges
+
+    @Test
+    fun `milestones have those reached in the period, the next one and when this month's pace reaches it, and the badges of all time`() {
+        val october = (1..20).flatMap { day -> plays(copper, 3, oct(day)) }
+        val november = (1..15).flatMap { day -> listOf(play(copper, nov(day)), play(harbour, nov(day, "13:00")), play(copper, nov(day, "14:00"))) }
+        val hundredth = (october + november).sortedBy { it.startedAt }[99].startedAt
+
+        val card = shown(page(october + november).cards.milestones)
+
+        assertEquals(listOf(Milestone(MilestoneKind.PLAYS, 100, hundredth)), card.reached)
+        assertEquals(NextMilestone(MilestoneKind.PLAYS, 250, 145), card.next)
+        assertEquals(YearMonth.of(2027, 2), card.nextAround)
+        assertEquals(Run(20, LocalDate.of(2026, 10, 1)), card.longestRun)
+        assertEquals(Milestone(MilestoneKind.PLAYS, 100, hundredth), card.plays)
+        assertNull(card.hours)
+        assertEquals(MonthArtists(YearMonth.of(2026, 11), 2), card.artistsMonth)
+        assertEquals(0, card.booksFinished)
+    }
+
+    // Your listening type
+
+    @Test
+    fun `your listening type has the three strongest words, each with its number`() {
+        val night = List(10) { started(play(copper, nov(10 + it, "22:00")), StartedBy.AUTO, shuffled = true) }
+        val day = List(5) { started(play(harbour, nov(10 + it, "10:00")), StartedBy.PICKED) }
+        val album = List(5) { started(play(north, nov(10 + it, "12:00")), StartedBy.AUTO, SourceKind.ALBUM) }
+        val kestrel = checkNotNull(library.artist("Kestrel"))
+
+        assertEquals(
+            listOf(Trait(TraitKind.EXPLORER, 100), Trait(TraitKind.LOYAL, 50, kestrel), Trait(TraitKind.SHUFFLER, 50)),
+            page(night + day + album).cards.traits,
+        )
+        assertEquals(
+            listOf(Trait(TraitKind.LOYAL, 50, kestrel), Trait(TraitKind.SHUFFLER, 50), Trait(TraitKind.NIGHT_OWL, 50)),
+            page(night + day + album, ListeningPeriod.ALL_TIME).cards.traits,
+        )
+        assertEquals(emptyList<Trait>(), page(night.take(9)).cards.traits)
+    }
+
     // Nothing to show
 
     @Test
