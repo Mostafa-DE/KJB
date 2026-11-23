@@ -104,7 +104,7 @@ private fun HuddleFriends(tab: LibraryTab, modifier: Modifier, bleed: Dp = 0.dp)
     var opened by rememberSaveable { mutableStateOf<String?>(null) }
     var playNow by rememberSaveable { mutableStateOf(false) }
     val player = { nav.show(FullScreen.Player) }
-    HuddleSheetsHost(sheet, LocalLyrics.current.ledger, player) { sheet = it }
+    HuddleSheetsHost(sheet, LocalLyrics.current.ledger, player, nav::open) { sheet = it }
     ReceivedHost(opened, player, onSendBack = { sheet = HuddleSheet.SendTo(it) }, playNow = playNow) { opened = null }
     val state = rememberHuddleState() ?: return
     val read = settings ?: return
@@ -277,7 +277,7 @@ internal fun FromCard(received: Received, friend: Friend, now: Long, matcher: So
 fun NowBarFriend(title: String, artist: String?) {
     val nav = LocalNavigator.current
     var sheet by rememberSaveable(stateSaver = HuddleSheetSaver) { mutableStateOf<HuddleSheet?>(null) }
-    HuddleSheetsHost(sheet, LocalLyrics.current.ledger, { nav.show(FullScreen.Player) }) { sheet = it }
+    HuddleSheetsHost(sheet, LocalLyrics.current.ledger, { nav.show(FullScreen.Player) }, nav::open) { sheet = it }
     val state = rememberHuddleState() ?: return
     val now by rememberNow()
     val on = friendsOn(state, now, title, artist).firstOrNull() ?: return
@@ -305,7 +305,7 @@ fun NowBarFriend(title: String, artist: String?) {
 internal fun PlayerFriendChip(title: String, artist: String?) {
     val nav = LocalNavigator.current
     var sheet by rememberSaveable(stateSaver = HuddleSheetSaver) { mutableStateOf<HuddleSheet?>(null) }
-    HuddleSheetsHost(sheet, LocalLyrics.current.ledger, { nav.show(FullScreen.Player) }) { sheet = it }
+    HuddleSheetsHost(sheet, LocalLyrics.current.ledger, { nav.show(FullScreen.Player) }, nav::open) { sheet = it }
     val state = rememberHuddleState() ?: return
     val now by rememberNow()
     val on = friendsOn(state, now, title, artist).firstOrNull() ?: return

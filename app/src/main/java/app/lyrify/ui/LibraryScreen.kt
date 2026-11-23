@@ -395,9 +395,9 @@ private val AddedWhen.words: Int
         AddedWhen.EARLIER -> R.string.header_earlier
     }
 
-/** A heading over the rows as they scroll under it: a small capsule at the start. */
+/** A heading over the rows as they scroll under it: a small capsule at the start (Library's lists, a friend's plays by day). */
 @Composable
-private fun SectionChip(text: String) {
+internal fun SectionChip(text: String) {
     Box(Modifier.fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 6.dp)) {
         SectionTitle(
             text,

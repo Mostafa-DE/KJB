@@ -454,7 +454,7 @@ class Huddle(
     /** The cards between you and the friend [friendId], both ways, the newest first: [limit] from the [from]th ("You and <name>"). */
     suspend fun thread(friendId: String, from: Int, limit: Int): List<KeptCard> = moved().thread(friendId, from, limit).orEmpty()
 
-    /** Every card friends sent you, the newest first: [limit] from the [from]th (Sent to you's See all). */
+    /** Every card friends sent you, the newest first: [limit] from the [from]th (Sent to you's View all). */
     suspend fun received(from: Int, limit: Int): List<Received> = moved().received(from, limit).orEmpty()
 
     /** The card [id], either way: the card opened from a list; null for none. */

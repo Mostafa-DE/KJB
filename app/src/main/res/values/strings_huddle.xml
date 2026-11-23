@@ -242,4 +242,20 @@
     <!-- The bar's Huddle item, for TalkBack while a friend plays now. -->
     <string name="huddle_live_dot">a friend is playing</string>
     <string name="huddle_joined_sharing_off">Off. %1$s doesn\'t see what you play. Songs still go both ways</string>
+    <!-- Huddle's history (HY1): what went between you and a friend, every card friends sent, a friend's plays of the year. -->
+    <string name="huddle_thread_title">You and %1$s</string>
+    <string name="huddle_thread_row_text">Every song and note between you</string>
+    <string name="huddle_thread_empty">Nothing between you yet</string>
+    <string name="huddle_thread_empty_text">Songs and notes you and %1$s send each other stay here.</string>
+    <string name="huddle_from_you">From you</string>
+    <string name="huddle_not_delivered">Not delivered</string>
+    <string name="huddle_you_sent_song">You sent %1$s a song</string>
+    <string name="huddle_you_sent_album">You sent %1$s an album</string>
+    <string name="huddle_you_sent_playlist">You sent %1$s a playlist</string>
+    <string name="huddle_cards_empty">No songs yet</string>
+    <string name="huddle_cards_empty_text">Songs and notes friends send you stay here.</string>
+    <string name="huddle_played_title">What %1$s played</string>
+    <string name="huddle_played_row_text">Their plays of the last year</string>
+    <string name="huddle_played_empty">Nothing played yet</string>
+    <string name="huddle_played_empty_text">What %1$s plays shows here for a year.</string>
 </resources>

@@ -165,6 +165,22 @@ class NavTest {
     }
 
     @Test
+    fun `Huddle's history opens on Tools from the Huddle page, in Library from its friends row, on Huddle's own bar item there, and outlives a turn of the phone`() {
+        val tools = NavState.start(DockTab.TOOLS).open(Page.Huddle).open(Page.HuddleThread("f1")).open(Page.HuddlePlays("f1"))
+        assertEquals(DockTab.TOOLS, tools.tab)
+        assertEquals(listOf(Page.Huddle, Page.HuddleThread("f1"), Page.HuddlePlays("f1")), tools.pages)
+        val library = NavState.start(DockTab.LIBRARY).open(Page.HuddlePlays("f1"))
+        assertEquals(DockTab.LIBRARY, library.tab)
+        val bar = listOf(DockTab.LIBRARY, DockTab.HUDDLE, DockTab.SEARCH, DockTab.TOOLS)
+        val own = NavState.start(DockTab.HUDDLE).open(Page.HuddleCards, docked = bar).open(Page.HuddleThread("f2"), docked = bar)
+        assertEquals(DockTab.HUDDLE, own.tab)
+        assertEquals(listOf(Page.HuddleCards, Page.HuddleThread("f2")), own.pages)
+        assertEquals("from Search's Now bar", DockTab.TOOLS, NavState.start(DockTab.SEARCH).open(Page.HuddleThread("f1")).tab)
+        assertEquals("from the player", DockTab.TOOLS, NavState.start(DockTab.LIBRARY).show(FullScreen.Player).open(Page.HuddleThread("f1")).tab)
+        assertEquals(tools, NavState.decode(tools.encode()))
+    }
+
+    @Test
     fun `an album or artist opened inside Playlists stays in Playlists`() {
         val nav = NavState.start(DockTab.PLAYLISTS).open(Page.BuiltIn(BuiltInList.FAVOURITES)).open(album).open(artist)
         assertEquals(DockTab.PLAYLISTS, nav.tab)
