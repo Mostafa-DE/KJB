@@ -579,11 +579,12 @@ const val REPOST_QUIET_MS: Long = 1_500
 
 /**
  * The media notification posted once more when its updates stop. The phone's media card (the shade, quick settings,
- * the lock screen) reads the song only when the notification is posted, and Android drops the posts of an app that
- * posts more than about five a second. One song change is several posts (the song, buffering, ready, its cover, its
- * buttons), so a few quick Nexts could leave the card on a song skipped past, often with no cover, until the next song.
- * So once [quietMs] go by with no update ([posted]), [post] posts it again, slowly enough to get through. Its own post
- * is not an update. Main thread.
+ * the lock screen) reads the song only when the notification is posted, and a read can end wrong: Android drops an
+ * app's updates above about five a second, and one song change is several posts (the song, buffering, ready, its
+ * cover, its buttons), so Nexts in quick succession lose the last ones; a card coming back to life reads at once and
+ * can land after a newer read. Media3 never posts again once a song settles, so the card stayed on a song skipped past,
+ * often with no cover, until the next song. So once [quietMs] go by with no update ([posted]), [post] posts it again,
+ * long enough after the last post for Android to let it through. Its own post is not an update. Main thread.
  */
 class NotificationRepost(private val scope: CoroutineScope, private val quietMs: Long = REPOST_QUIET_MS, private val post: () -> Unit) {
     private var waiting: Job? = null

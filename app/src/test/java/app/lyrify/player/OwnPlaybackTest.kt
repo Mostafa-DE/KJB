@@ -279,8 +279,8 @@ class OwnPlaybackTest {
     /**
      * The phone's media card as Android runs it (AOSP): SystemUI reads the song playing only when KJB posts its media
      * notification, and NotificationManagerService drops an update while the app's posting rate is over five a second.
-     * The rate is its estimate (NotificationUsageStats' RateEstimator): the time between posts, moved toward each new
-     * gap by 0.3, read again at the post itself.
+     * The rate is RateEstimator's: the time between the posts it let through, each new gap weighed 0.3, read before the
+     * post; a dropped post moves nothing.
      */
     private class PhoneCard(private val clock: () -> Long) {
         var shows: String? = null
@@ -289,55 +289,46 @@ class OwnPlaybackTest {
 
         fun posted(song: String) {
             val now = clock()
-            lastAt?.let { gapS = estimate(now, it) }
+            lastAt?.let { last ->
+                val estimate = 0.7 * gapS + 0.3 * maxOf((now - last) / 1_000.0, 0.0005)
+                if (1 / estimate > 5) return
+                gapS = estimate
+            }
             lastAt = now
-            if (1 / estimate(now, now) <= 5) shows = song
-        }
-
-        private fun estimate(now: Long, last: Long): Double = 0.7 * gapS + 0.3 * maxOf((now - last) / 1_000.0, 0.0005)
-    }
-
-    /**
-     * Song [song] comes on: the posts Media3 makes for one song change (the new song, buffering, ready, then its
-     * cover), each one heard by [repost] as Media3's update.
-     */
-    private fun TestScope.songChange(card: PhoneCard, repost: NotificationRepost, song: String) {
-        listOf(0L, 20, 60, 300).fold(0L) { at, postAt ->
-            advanceTimeBy(postAt - at)
-            runCurrent()
-            card.posted(song)
-            repost.posted()
-            postAt
+            shows = song
         }
     }
 
     @Test
-    fun `after a few quick Nexts the phone's media card ends on the song playing, not one skipped past`() = runTest {
-        var playing = "Song 1"
+    fun `after Next is pressed fast many times, NotificationRepost's post brings the phone's media card to the song playing`() = runTest {
         val card = PhoneCard { currentTime }
+        // The song before came on minutes ago: Media3 posted the song, buffering, ready, then its cover.
+        listOf(0L, 20, 40, 240).forEach { gap ->
+            advanceTimeBy(gap)
+            card.posted("Song 1")
+        }
+        advanceTimeBy(180_000)
+        var playing = "Song 1"
         lateinit var repost: NotificationRepost
         repost = NotificationRepost(backgroundScope) {
             card.posted(playing)
             // KJB's own post reaches Media3's update hook too, as triggerNotificationUpdate does.
             repost.posted()
         }
-        // Five songs played through, three minutes each.
-        repeat(5) { n ->
-            playing = "Song ${n + 1}"
-            songChange(card, repost, playing)
-            advanceTimeBy(180_000)
+        // Next nine times, a tenth of a second apart, each cover read ahead: Media3 posts the song, buffering and ready.
+        repeat(9) { n ->
+            playing = "Song ${n + 2}"
+            listOf(0L, 20, 40).forEach { gap ->
+                advanceTimeBy(gap)
+                runCurrent()
+                card.posted(playing)
+                repost.posted()
+            }
+            advanceTimeBy(40)
             runCurrent()
         }
-        assertEquals("Song 5", card.shows)
-        // Then Next six times, 0.4 s apart: Android drops the last posts, and the card is left on a song skipped past.
-        repeat(6) { n ->
-            playing = "Song ${n + 6}"
-            songChange(card, repost, playing)
-            advanceTimeBy(100)
-            runCurrent()
-        }
-        assertEquals("Song 11", playing)
-        assertEquals("the card is behind, as on the phone", "Song 10", card.shows)
+        assertEquals("Song 10", playing)
+        assertEquals("Android dropped the last posts: the card is behind, as on the phone", "Song 9", card.shows)
 
         advanceTimeBy(REPOST_QUIET_MS)
         runCurrent()
