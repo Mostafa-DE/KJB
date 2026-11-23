@@ -2,7 +2,6 @@ package app.lyrify.ui
 
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -267,11 +266,11 @@ internal fun HuddleButton(onClick: () -> Unit) {
     val count = remember { Kept(2) }
     if (live.playing.size > 1) count.value = live.playing.size
     val glyph = ImageVector.vectorResource(R.drawable.ic_huddle)
-    val parts = remember(glyph) { glyph.root.filterIsInstance<VectorPath>().associate { it.name to it.pathData.toPath() } }
+    val (friends, note) = remember(glyph) { listOf("friends", "note").map { name -> glyph.root.filterIsInstance<VectorPath>().first { it.name == name }.pathData.toPath() } }
     Box {
         // The ring, under the circle, and its clock only while a friend plays (or the ring fades).
         if (lit > 0f) {
-            val pulse = if (huddleMoves()) rememberInfiniteTransition(label = "huddle ring").animateFloat(0f, 1f, infiniteRepeatable(tween(RING_PULSE_MS, easing = RingPulse)), label = "pulse") else null
+            val pulse = if (huddleMoves()) rememberInfiniteTransition(label = "huddle ring").animateFloat(0f, 1f, infiniteRepeatable(tween(RING_PULSE_MS, easing = Motion.Pulse)), label = "pulse") else null
             Canvas(Modifier.matchParentSize()) {
                 val width = 1.5.dp.toPx()
                 drawCircle(
@@ -299,8 +298,7 @@ internal fun HuddleButton(onClick: () -> Unit) {
             Box(Modifier.size(GLYPH)) {
                 Canvas(Modifier.matchParentSize()) {
                     scale(size.width / glyph.viewportWidth, pivot = Offset.Zero) {
-                        drawPath(parts.getValue("friends"), ink)
-                        val note = parts.getValue("note")
+                        drawPath(friends, ink)
                         val shown = 1f - lit.coerceIn(0f, 1f)
                         if (shown > 0f) {
                             scale(0.3f + 0.7f * shown, pivot = note.getBounds().bottomCenter) {
@@ -691,11 +689,10 @@ private val GLYPH_BARS = Rect(8.9f, 7f, 15.15f, 21.2f)
 
 /**
  * The live ring round the glass circle: still, this size at 60%; moving, it pulses from 92% to 136% of it, fading from
- * 80%, every [RING_PULSE_MS] on [RingPulse] (the mockup's).
+ * 80%, every [RING_PULSE_MS] on [Motion.Pulse] (the mockup's).
  */
 private val RING = 44.dp
 private const val RING_PULSE_MS = 2_200
-private val RingPulse = CubicBezierEasing(0.2f, 0.6f, 0.4f, 1f)
 
 private val CardName = display(17, 22, weight = 650)
 private val CardTitle = display(21, 26, -0.01, weight = 700)

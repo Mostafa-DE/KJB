@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import android.os.Build
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.SnapSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.Color
@@ -385,9 +386,15 @@ class ChromeTest {
         assertTrue(bars, bars.trimStart().startsWith("brand.highlight,") && "count = 3," in bars && "gap = ground," in bars)
         val ring = button.substringAfter("        if (lit > 0f) {").substringBefore("ChromeIconButton(")
         assertTrue(ring, "if (huddleMoves()) rememberInfiniteTransition(label = \"huddle ring\")" in ring)
+        // The ring pulses on the mockup's curve, a Motion token as every screen's motion is (Grok round 2, reuse).
+        assertTrue(ring, "tween(RING_PULSE_MS, easing = Motion.Pulse)" in ring)
+        assertEquals(CubicBezierEasing(0.2f, 0.6f, 0.4f, 1f), Motion.Pulse)
+        // The glyph's two paths, parsed once and drawn by name: the friends, then the note in front of them.
+        assertTrue(button, "drawPath(friends, ink)" in button && "drawPath(note, ink, shown)" in button && "getValue(" !in button)
         assertTrue(button, "AnimatedVisibility(live.joined && live.playing.size > 1" in button && "CountBadge(count.value)" in button)
         assertTrue(button, "AnimatedVisibility(!live.joined" in button && "R.drawable.ic_add" in button && "chrome.action" in button)
         val parts = java.io.File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText()
+        assertFalse(parts, "CubicBezierEasing(" in parts)
         assertTrue("internal fun Equaliser(color: Color, modifier: Modifier = Modifier, count: Int = EQ_MS.size, gap: Color? = null)" in parts)
         // One state for the bar's dot and every header: the shell's, never a second clock that could disagree with the bar.
         assertTrue(button, "val live = LocalDockBar.current.huddleLive?.value ?: HuddleLive()" in button)
