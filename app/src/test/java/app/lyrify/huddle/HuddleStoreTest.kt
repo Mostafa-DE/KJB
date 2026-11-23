@@ -10,7 +10,9 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.ByteArrayOutputStream
 import java.security.SecureRandom
+import java.util.zip.GZIPOutputStream
 
 /**
  * `huddle.json` there and back, the history in plays.db (its SQL on the laptop's SQLite), and the backup's Huddle section:
@@ -197,10 +199,23 @@ class HuddleStoreTest {
         val key = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)
         val plain = HuddleBackup.seal(full.copy(backupKey = null), history(cards, plays), random)!!
         val sealed = HuddleBackup.seal(full.copy(backupKey = key), history(cards, plays), random)!!
-        assertNull(HuddleBackup.open(plain, CharArray(0), limit = 100))
-        assertNull(HuddleBackup.open(sealed, "correct horse".toCharArray(), limit = 100))
+        assertNull(HuddleBackup.open(plain, CharArray(0), ZipLimits(partsBytes = 100)))
+        assertNull(HuddleBackup.open(sealed, "correct horse".toCharArray(), ZipLimits(partsBytes = 100)))
         assertNotNull(HuddleBackup.open(plain, CharArray(0)))
         assertNotNull(HuddleBackup.open(sealed, "correct horse".toCharArray()))
+    }
+
+    @Test
+    fun `one line past what a backup entry holds stops the reading there, before it is read whole`() {
+        // Made by hand: one endless line would fill the memory before its end was ever counted.
+        val packed = ByteArrayOutputStream()
+        GZIPOutputStream(packed).bufferedWriter().use { out ->
+            out.appendLine(HuddleJson.encode(HuddleState(name = "Wren")))
+            out.appendLine("x".repeat(4_096))
+        }
+        val section = """{"format":2,"lines":"${HuddleCrypto.encode(packed.toByteArray())}"}"""
+        assertEquals("a line it cannot read is left out", "Wren", HuddleBackup.open(section, CharArray(0))?.state?.name)
+        assertNull(HuddleBackup.open(section, CharArray(0), ZipLimits(entryBytes = 1_024)))
     }
 
     @Test

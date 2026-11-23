@@ -35,6 +35,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -308,11 +309,11 @@ object HuddleBackup {
     /**
      * What [section] holds: a plain one as it is, with no key, so a restore keeps the phone's own; a sealed one ([locked])
      * opened with [passphrase], its box only, with the key that opened it ([HuddleState.backupKey]) for the next backups.
-     * Null for another passphrase, a changed section, none, or one whose lines unpack past [limit] characters (a zip
-     * bomb, or not KJB's: as much as a backup holds of the play log's parts, [ZipLimits.partsBytes]). A line of the
+     * Null for another passphrase, a changed section, none, or one that unpacks past [limits] (a zip bomb, or not KJB's),
+     * as the play log's parts do: [ZipLimits.partsBytes] in all, [ZipLimits.entryBytes] in one line. A line of the
      * history this version cannot read (a newer KJB's) is left out. A sealed one is slow, as [newKey].
      */
-    fun open(section: String, passphrase: CharArray, limit: Long = ZipLimits().partsBytes): Opened? {
+    fun open(section: String, passphrase: CharArray, limits: ZipLimits = ZipLimits()): Opened? {
         val root = jsonObject(section) ?: return null
         val format = root.int(FORMAT_KEY)?.takeIf { it in 1..FORMAT } ?: return null
         val plain: ByteArray
@@ -336,13 +337,22 @@ object HuddleBackup {
             if (format == 1) {
                 HuddleJson.decode(plain.decodeToString()).let { Opened(it.copy(inbox = emptyList(), backupKey = backupKey), it.inbox, it.plays) }
             } else {
-                GZIPInputStream(plain.inputStream()).bufferedReader().useLines { text ->
-                    var read = 0L
-                    // Counted as they are read: reading stops past the limit (an IOException, as a damaged one).
-                    val lines = text.onEach { line ->
-                        read += line.length
-                        if (read > limit) throw IOException("past $limit")
-                    }.iterator()
+                // Counted as they unpack, before a line is read whole (the reader takes blocks): past the limits, reading
+                // stops (an IOException, as a damaged one), so one endless line never fills the memory.
+                object : FilterInputStream(GZIPInputStream(plain.inputStream())) {
+                    private var unpacked = 0L
+                    private var line = 0L
+
+                    override fun read(b: ByteArray, off: Int, len: Int): Int = super.read(b, off, len).also { read ->
+                        for (i in off until off + read) {
+                            line = if (b[i] == '\n'.code.toByte()) 0 else line + 1
+                            if (line > limits.entryBytes) throw IOException("a line past ${limits.entryBytes}")
+                        }
+                        unpacked += maxOf(read, 0)
+                        if (unpacked > limits.partsBytes) throw IOException("past ${limits.partsBytes}")
+                    }
+                }.bufferedReader().useLines { text ->
+                    val lines = text.iterator()
                     if (!lines.hasNext()) return null
                     val state = HuddleJson.decode(lines.next()).copy(backupKey = backupKey)
                     val cards = ArrayList<KeptCard>()
