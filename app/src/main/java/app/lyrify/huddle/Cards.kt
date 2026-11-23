@@ -92,8 +92,8 @@ object Messages {
             keep /= 2
             plain = json(
                 when (message) {
-                    is Message.Play -> message.copy(song = message.song.clipped(keep))
-                    is Message.Now -> message.copy(song = message.song.clipped(keep))
+                    is Message.Play -> message.copy(song = message.song.let { CardSong(clip(it.title, keep).orEmpty(), clip(it.artist, keep), clip(it.album, keep), it.durationMs) })
+                    is Message.Now -> message.copy(song = message.song.let { CardSong(clip(it.title, keep).orEmpty(), clip(it.artist, keep), clip(it.album, keep), it.durationMs) })
                 },
             )
         }
@@ -187,9 +187,6 @@ object Messages {
     ).toString().encodeToByteArray()
 
     private fun Message.Share.withSongs(count: Int): Message.Share = copy(card = card.copy(songs = card.songs.take(count)))
-
-    /** This song with its title, artist and album at most [max] characters each. */
-    private fun CardSong.clipped(max: Int): CardSong = CardSong(clip(title, max).orEmpty(), clip(artist, max), clip(album, max), durationMs)
 
     private fun songJson(song: CardSong): JsonElement = JsonObject(
         buildMap {
