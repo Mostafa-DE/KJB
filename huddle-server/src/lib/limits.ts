@@ -7,7 +7,8 @@ const DAY_MS = 24 * HOUR_MS
 /** Every size, count, time and rate limit of the Huddle API. API.md documents the same numbers. */
 export const LIMITS = {
   bodyBytes: 96 * KIB,
-  // A now with its song's cover (the first of a song that has one) is 10 KiB padded, 10,269 bytes sealed; any other 1 KiB.
+  // A now with its song's cover (a now of its own, once the song played 5 s) is 10 KiB padded, 10,269 bytes sealed; any
+  // other 1 KiB.
   dataBytes: { card: 64 * KIB, profile: 4 * KIB, play: 2 * KIB, now: 12 * KIB },
   acceptBytes: 4 * KIB,
   keepMs: { card: 30 * DAY_MS, profile: 30 * DAY_MS, play: DAY_MS, now: 10 * MINUTE_MS },
@@ -30,17 +31,18 @@ export const LIMITS = {
   // front and all playing, each keep a held inbox read open (answered at each message that lands, about 15 a minute)
   // and send each play, card and now (every change, and a heartbeat a minute) to 9 friends: about 3,000 API calls per
   // 10 minutes, 28 MiB of data in a busy hour and 200 MiB in a heavy day (the nows of 8 hours of music, about 60 MiB,
-  // on top of 140). Each new song's cover adds 9,216 bytes to its now: a song every 3 minutes on each phone is 1,800
-  // covers an hour, 16 MiB, so 44 MiB in a busy hour and 327 MiB in a heavy day. Pages count apart from API calls;
-  // /health and assetlinks.json are never limited (src/server.ts).
+  // on top of 140). Each song that plays 5 s sends its cover in a now of its own, 10,269 bytes: a song every 2.5
+  // minutes on each phone is 2,160 covers an hour, 21 MiB, so 49 MiB in a busy hour and 369 MiB in a heavy day; 64 and
+  // 640 MiB leave about 30 % and 70 % over that. A song skipped within 5 s sends no cover. Pages count apart from API
+  // calls; /health and assetlinks.json are never limited (src/server.ts).
   // Held reads also count in a window of their own.
   rate: {
     ip: { limit: 6000, windowMs: 10 * MINUTE_MS },
     pages: { limit: 3000, windowMs: 10 * MINUTE_MS },
     inviteCreate: { limit: 60, windowMs: HOUR_MS },
     inviteAccept: { limit: 60, windowMs: HOUR_MS },
-    ipBytes: { limit: 48 * MIB, windowMs: HOUR_MS },
-    ipBytesDay: { limit: 480 * MIB, windowMs: DAY_MS },
+    ipBytes: { limit: 64 * MIB, windowMs: HOUR_MS },
+    ipBytesDay: { limit: 640 * MIB, windowMs: DAY_MS },
     mailboxSends: { limit: 240, windowMs: HOUR_MS },
     mailboxNows: { limit: 1200, windowMs: HOUR_MS },
     inboxWaits: { limit: 3000, windowMs: 10 * MINUTE_MS },
