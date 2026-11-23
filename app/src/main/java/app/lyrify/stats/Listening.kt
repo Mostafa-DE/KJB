@@ -235,7 +235,8 @@ class PlayStats(
      * now" moves); a page going on, also until the day turns, so it is never a month's story once the month is over.
      */
     private suspend fun page(kind: ListeningPeriod, bounds: Period?, before: Period?, now: Long, calendar: PhoneCalendar): InsightsPage {
-        val logs = logs()
+        // The copy of the logs is made off the caller's thread too: the first read is every play.
+        val logs = withContext(compute) { logs() }
         val library = library()
         val favourites = favourites()
         val stamp = library to favourites
@@ -253,9 +254,9 @@ class PlayStats(
             val read = sources(bounds?.from).copy(interactions = store.interactions(bounds?.from, bounds?.until).orEmpty())
             insightsPageOf((logs ?: InsightsData(emptyList())).copy(favourites = favourites), read, kind, bounds, before, now, calendar, library)
         }
-        // A log that could not be read gives nothing, worked out again next time; nor is a page kept when another read took
-        // in a play meanwhile (the copy of the logs it was worked out from is no longer the one kept).
-        if (logs != null) held.withLock { if (pagesFor == stamp && logs.plays === music && logs.books === bookPlays.orEmpty()) pages[key] = now to page }
+        // A log that could not be read gives nothing (the book log, no books), worked out again next time; nor is a page kept
+        // when another read took in a play meanwhile (the copy of the logs it was worked out from is no longer the one kept).
+        if (logs != null) held.withLock { if (pagesFor == stamp && logs.plays === music && logs.books === bookPlays) pages[key] = now to page }
         return page
     }
 

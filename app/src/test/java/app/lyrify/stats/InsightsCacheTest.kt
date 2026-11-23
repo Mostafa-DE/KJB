@@ -280,10 +280,12 @@ class InsightsCacheTest {
     fun `a page worked out while another read took in a new play is not kept`() = runBlocking {
         val log = FakePlayLog(history)
         var meanwhile: (() -> Unit)? = null
-        // The page's work begins; just then a play is written and another page reads it.
+        var dispatches = 0
+        // The page's work begins (its second step off the caller's thread, after its copy of the logs); just then a play is
+        // written and another page reads it.
         val compute = object : CoroutineDispatcher() {
             override fun dispatch(context: CoroutineContext, block: Runnable) {
-                meanwhile?.also { meanwhile = null }?.invoke()
+                if (++dispatches == 2) meanwhile?.invoke()
                 block.run()
             }
         }
@@ -300,6 +302,31 @@ class InsightsCacheTest {
         val again = stats.page(ListeningPeriod.MONTH, now + 1_000, calendar)
 
         assertEquals(missed.cards.time?.totals?.plays?.plus(1), again.cards.time?.totals?.plays)
+    }
+
+    @Test
+    fun `a page worked out while the book log could not be read is not kept`() = runBlocking {
+        val books = FakePlayLog(bookHistory).apply { failing = true }
+        val stats = stats(FakePlayLog(history), books)
+        stats.page(ListeningPeriod.MONTH, now, calendar)
+
+        books.failing = false
+
+        assertEquals(runBlocking { stats(FakePlayLog(history), FakePlayLog(bookHistory)).page(ListeningPeriod.MONTH, now + 1_000, calendar) }, stats.page(ListeningPeriod.MONTH, now + 1_000, calendar))
+    }
+
+    @Test
+    fun `a page reads the logs off the caller's thread`() = runBlocking {
+        val worker = Executors.newSingleThreadExecutor { Thread(it, "insights-work") }.asCoroutineDispatcher()
+        var readOn: String? = null
+        val log = object : PlayLogStore by FakePlayLog(history) {
+            override suspend fun all(): List<LoggedPlay>? = FakePlayLog(history).all().also { readOn = Thread.currentThread().name }
+        }
+
+        PlayStats(log, { library }, worker).page(ListeningPeriod.MONTH, now, calendar)
+        worker.close()
+
+        assertTrue("read on $readOn", readOn?.startsWith("insights-work") == true)
     }
 
     @Test

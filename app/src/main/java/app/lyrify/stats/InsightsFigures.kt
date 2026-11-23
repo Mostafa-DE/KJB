@@ -498,13 +498,14 @@ internal class PageWork(
     }
 
     /**
-     * The time zones the period's plays were heard in, from two, the most heard first; a play heard in the phone's own
-     * time zone is in it as it is now, so its summer time is never a second one.
+     * The time zones the period's plays were heard in, from two, the most heard first: the phone's own (a play heard at
+     * its offset then) is one however its summer time moved it, shown at the offset heard most there; any other offset is
+     * one of its own.
      */
     private fun onTheMoveOf(): Moment.OnTheMove? = (heard + books).filter { it.zoneOffsetMinutes != null }
-        .groupBy { play -> checkNotNull(play.zoneOffsetMinutes).takeIf { it != zoneOffsetMinutes(zone, play.startedAt) } ?: zoneOffsetMinutes(zone, now) }
-        .mapValues { (_, its) -> its.sumOf { it.realMs } }
-        .entries.sortedByDescending { it.value }.map { it.key }
+        .groupBy { play -> checkNotNull(play.zoneOffsetMinutes).takeIf { it != zoneOffsetMinutes(zone, play.startedAt) } }
+        .values.map { plays -> plays.groupBy { checkNotNull(it.zoneOffsetMinutes) }.maxBy { (_, its) -> its.sumOf { it.realMs } }.key to plays.sumOf { it.realMs } }
+        .sortedByDescending { it.second }.map { it.first }
         .takeIf { it.size >= MIN_ZONES }
         ?.let(Moment::OnTheMove)
 
@@ -687,7 +688,8 @@ internal class PageWork(
         val days = countedDays(heard, zone, kinds)
         if (days.size < MIN_DAYS) return null
         val current = if (period.going) runUpTo(period.lastDay, countedDays(data.plays, zone, kinds)) else null
-        val byDay = (heard + books).groupBy(::localDay).mapValues { (_, its) -> its.sumOf { it.realMs } }
+        // On the day the steps show it: one a time zone took past either end of the days shown is on the first or the last.
+        val byDay = (heard + books).groupBy { localDay(it).coerceIn(period.firstDay, period.lastDay) }.mapValues { (_, its) -> its.sumOf { it.realMs } }
         val busiest = byDay.entries.maxWith(compareBy<Map.Entry<LocalDate, Long>> { it.value }.thenBy { it.key })
         return DaysCard(stepsOf(heard + books, if (period.bounds == null) Step.MONTH else Step.DAY), current, longestRunOf(days)?.takeIf { it.days >= MIN_STREAK_DAYS }, DayHeard(busiest.key, busiest.value))
     }

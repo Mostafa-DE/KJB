@@ -9,7 +9,6 @@ import app.lyrify.library.SongRef
 import app.lyrify.library.albumKey
 import java.text.Collator
 import java.time.DayOfWeek
-import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -266,14 +265,15 @@ private fun versusOf(ledger: Ledger, data: InsightsData, period: Period?, previo
 }
 
 /**
- * As far into [previous] as [now] is into [period] by the phone's clock, the same day and time of day (a day of 23 or 25
- * hours is still a day), and no further than its end; all of it once [period] is over.
+ * As far into [previous] as [now] is into [period] by the phone's calendar: the same date and time a week, a month or a
+ * year earlier (a day of 23 or 25 hours is still a day; a date the shorter month lacks, 31 March or 29 February, at its
+ * last day), and no further than its end; all of it once [period] is over.
  */
 internal fun samePointIn(previous: Period, period: Period, now: Long, zone: ZoneId): Long {
     if (now !in period) return previous.until
     fun local(at: Long): LocalDateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(at), zone)
-    val into = Duration.between(local(period.from), local(now))
-    return minOf(previous.until, local(previous.from).plus(into).atZone(zone).toInstant().toEpochMilli())
+    val back = local(previous.from).toLocalDate().until(local(period.from).toLocalDate())
+    return minOf(previous.until, local(now).minus(back).atZone(zone).toInstant().toEpochMilli())
 }
 
 private fun clockOf(heard: List<LoggedPlay>, zone: ZoneId): ListeningClock? {

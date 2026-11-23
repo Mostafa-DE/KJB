@@ -214,14 +214,15 @@ class InsightsPageTest {
     }
 
     @Test
-    fun `a play heard where it is tomorrow already counts on today's step, so the steps still add up`() {
+    fun `a play heard where it is tomorrow already counts on today's step and day, so the steps still add up`() {
         // Thursday 21:30 in Amman is Friday 03:30 in Tokyo, where it was heard.
-        val ahead = play(copper, nov(26, "21:30"), heardMs = 10 * MINUTE, zone = 540)
+        val ahead = play(copper, nov(26, "21:30"), heardMs = 30 * MINUTE, zone = 540)
 
         val cards = page(plays(harbour, 9, nov(23)) + ahead, ListeningPeriod.WEEK).cards
 
-        assertEquals(minutes(18, 0, 0, 10, null, null, null), shown(cards.time).heard.heardMs)
-        assertEquals(minutes(18, 0, 0, 10, null, null, null), shown(cards.days).heard.heardMs)
+        assertEquals(minutes(18, 0, 0, 30, null, null, null), shown(cards.time).heard.heardMs)
+        assertEquals(minutes(18, 0, 0, 30, null, null, null), shown(cards.days).heard.heardMs)
+        assertEquals(DayHeard(LocalDate.of(2026, 11, 26), 30 * MINUTE), shown(cards.days).busiest)
     }
 
     @Test
@@ -242,6 +243,16 @@ class InsightsPageTest {
         // in1's Insights set the week against the same point.
         val insights = runBlocking { stats(plays, emptyList(), library).insights(ListeningPeriod.WEEK, sundayNoon, berlin.zone, DayOfWeek.MONDAY) }
         assertEquals(40 * MINUTE, insights.versus?.beforeHeardMs)
+    }
+
+    @Test
+    fun `the period before goes up to the same date a year or a month earlier, a day the shorter month lacks at its last`() {
+        fun beforeUntil(period: ListeningPeriod, now: String): Long? = page(emptyList(), period, now = at(now)).period.beforeUntil
+
+        // 2024 has 29 February: 15 March is a day further into it than into 2025, but the same date.
+        assertEquals(at("2024-03-15T12:00+03:00[Asia/Amman]"), beforeUntil(ListeningPeriod.YEAR, "2025-03-15T12:00+03:00[Asia/Amman]"))
+        assertEquals(at("2023-02-28T12:00+03:00[Asia/Amman]"), beforeUntil(ListeningPeriod.YEAR, "2024-02-29T12:00+03:00[Asia/Amman]"))
+        assertEquals(at("2025-02-28T12:00+03:00[Asia/Amman]"), beforeUntil(ListeningPeriod.MONTH, "2025-03-31T12:00+03:00[Asia/Amman]"))
     }
 
     @Test
@@ -270,6 +281,13 @@ class InsightsPageTest {
         assertEquals(Run(5, LocalDate.of(2026, 11, 10)), days.longest)
         assertEquals(DayHeard(LocalDate.of(2026, 11, 12), 3 * 120_000L), days.busiest)
         assertEquals(page(plays).cards.time?.heard, days.heard)
+    }
+
+    @Test
+    fun `of two runs as long, the longest run is the earlier`() {
+        val plays = (2..4).map { play(kite, nov(it)) } + (10..12).map { play(kite, nov(it)) }
+
+        assertEquals(Run(3, LocalDate.of(2026, 11, 2)), shown(page(plays).cards.days).longest)
     }
 
     @Test
@@ -551,12 +569,16 @@ class InsightsPageTest {
     @Test
     fun `on the move needs a time zone other than the phone's own, never only its summer time`() {
         val berlin = ammanCalendar.copy(zone = ZoneId.of("Europe/Berlin"), weekend = setOf(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY))
-        val home = listOf(play(copper, at("2026-07-10T12:00+02:00[Europe/Berlin]"), zone = 120), play(harbour, at("2026-11-10T12:00+01:00[Europe/Berlin]"), zone = 60))
-        val away = play(north, at("2026-08-01T12:00+03:00[Asia/Amman]"), zone = 180)
+        val home = listOf(play(copper, at("2026-07-10T12:00+02:00[Europe/Berlin]"), heardMs = 10 * MINUTE, zone = 120), play(harbour, at("2026-11-10T12:00+01:00[Europe/Berlin]"), zone = 60))
+        val amman = play(north, at("2026-08-01T12:00+03:00[Asia/Amman]"), zone = 180)
+        // London in July is UTC+1, as Berlin is now in November: still a trip.
+        val london = play(kite, at("2026-07-20T12:00+01:00[Europe/London]"), zone = 60)
+        fun onTheMove(plays: List<LoggedPlay>) = page(plays, ListeningPeriod.YEAR, calendar = berlin).cards.moments.filterIsInstance<Moment.OnTheMove>()
 
-        assertEquals(emptyList<Moment>(), page(home, ListeningPeriod.YEAR, calendar = berlin).cards.moments.filterIsInstance<Moment.OnTheMove>())
-        // The phone's own time zone as it is now (UTC+1 in November), the most heard first.
-        assertEquals(listOf(Moment.OnTheMove(listOf(60, 180))), page(home + away, ListeningPeriod.YEAR, calendar = berlin).cards.moments.filterIsInstance<Moment.OnTheMove>())
+        assertEquals(emptyList<Moment>(), onTheMove(home))
+        // The phone's own time zone at the offset heard most there (UTC+2, its summer), the most heard first.
+        assertEquals(listOf(Moment.OnTheMove(listOf(120, 180))), onTheMove(home + amman))
+        assertEquals(listOf(Moment.OnTheMove(listOf(120, 60))), onTheMove(home + london))
     }
 
     @Test
