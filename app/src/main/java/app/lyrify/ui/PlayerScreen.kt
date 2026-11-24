@@ -111,8 +111,10 @@ import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.books.BookNow
 import app.lyrify.books.bookNowAt
-import app.lyrify.books.chapterStepPart
 import app.lyrify.books.knownBookPart
+import app.lyrify.books.nextChapter
+import app.lyrify.books.previousChapter
+import app.lyrify.books.toChapter
 import app.lyrify.cut.CutFormats
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.Song
@@ -123,7 +125,6 @@ import app.lyrify.lyrics.LrcLine
 import app.lyrify.player.PlayerConnection
 import app.lyrify.player.PlayerGraph
 import app.lyrify.player.PlayerUi
-import app.lyrify.player.Queue
 import app.lyrify.player.QueueItem
 import app.lyrify.player.Repeat
 import app.lyrify.player.SourceKind
@@ -275,24 +276,26 @@ fun swipeOutcome(axis: SwipeAxis?, dx: Float): SwipeOutcome = when {
 }
 
 /**
- * The song whose cover slides in for a skip [way]: the one Next or Previous plays, as the player decides it (Next on the
- * last song goes to the first whatever Repeat says, LyrifyPlayer's sessionSeek; Previous wraps round only with Repeat all,
- * and past 3 s starts this song over). Null when no other song comes: a queue of one, the first song's Previous, or
- * Previous starting the song over. In a [book] the swipe goes by chapter, as the player's buttons do: the part the
- * chapter goes to ([chapterStepPart]), none inside the part playing.
+ * The song whose cover slides in for a skip [way] on the player [ui]: the one Next or Previous plays, as the player
+ * decides it (Next on the last song goes to the first whatever Repeat says, LyrifyPlayer's sessionSeek; Previous wraps
+ * round only with Repeat all, and past 3 s starts this song over). Null when no other song comes: a queue of one, the
+ * first song's Previous, or Previous starting the song over. In a [book] the swipe goes by chapter, as the player's
+ * buttons do: the part the chapter plays in ([toChapter]), put back when it was taken out of the queue; none inside the
+ * part playing.
  */
-fun incoming(queue: Queue, way: SkipWay, repeat: Repeat, positionMs: Long, book: BookNow? = null): QueueItem? {
+fun incoming(ui: PlayerUi, way: SkipWay, positionMs: Long, book: BookNow? = null): QueueItem? {
     if (book != null) {
-        val part = chapterStepPart(bookNowAt(book, positionMs), forward = way == SkipWay.NEXT) ?: return null
-        val path = book.book.parts[part].path
-        return queue.items.firstOrNull { it.song.path == path }?.takeIf { it.uid != queue.current?.uid }
+        val fresh = bookNowAt(book, positionMs)
+        val chapter = (if (way == SkipWay.NEXT) nextChapter(fresh) else previousChapter(fresh)) ?: return null
+        // Only a look at the part the step plays: the time is not kept.
+        return ui.book.toChapter(fresh, chapter, ui.library, now = 0).book.current?.current?.takeIf { it.uid != ui.queue.current?.uid }
     }
-    val items = queue.items
+    val items = ui.queue.items
     val at = when (way) {
-        SkipWay.NEXT -> (queue.index + 1).let { if (it < items.size) it else 0 }
-        SkipWay.PREVIOUS -> if (positionMs > PREVIOUS_RESTARTS_MS) -1 else (queue.index - 1).let { if (it >= 0) it else if (repeat == Repeat.ALL) items.lastIndex else -1 }
+        SkipWay.NEXT -> (ui.queue.index + 1).let { if (it < items.size) it else 0 }
+        SkipWay.PREVIOUS -> if (positionMs > PREVIOUS_RESTARTS_MS) -1 else (ui.queue.index - 1).let { if (it >= 0) it else if (ui.repeat == Repeat.ALL) items.lastIndex else -1 }
     }
-    return items.getOrNull(at)?.takeIf { it.uid != queue.current?.uid }
+    return items.getOrNull(at)?.takeIf { it.uid != ui.queue.current?.uid }
 }
 
 /** Previous starts the song over once it has played this long (the player's own rule, LyrifyPlayer's MAX_SEEK_TO_PREVIOUS_MS). */
@@ -1092,7 +1095,7 @@ internal fun CoverFace(
     val moving by remember { derivedStateOf { comingFrom(dragging ?: shift.value) } }
     val way = if (arrived) null else landing?.way ?: moving
     val beside = remember(moving, ui.item.uid, ui.queue, ui.repeat, book) {
-        moving?.let { incoming(ui.queue, it, ui.repeat, ui.positionAt(SystemClock.elapsedRealtime()), book) }
+        moving?.let { incoming(ui, it, ui.positionAt(SystemClock.elapsedRealtime()), book) }
     }
     val neighbour = if (arrived) null else landing?.item ?: beside
     val label = stringResource(if (onFlip != null) R.string.player_cover else R.string.book_cover, ui.named?.title ?: ui.item.song.path.substringAfterLast('/'))
@@ -1160,7 +1163,7 @@ internal fun CoverFace(
                         val outcome = if (lifted) swipeOutcome(axis, moved.x / density.density) else SwipeOutcome.Return
                         val from = dragging ?: shift.value
                         val now = latest
-                        val coming = (outcome as? SwipeOutcome.Skip)?.let { incoming(now.queue, it.way, now.repeat, now.positionAt(SystemClock.elapsedRealtime()), latestBook) }
+                        val coming = (outcome as? SwipeOutcome.Skip)?.let { incoming(now, it.way, now.positionAt(SystemClock.elapsedRealtime()), latestBook) }
                         val (next, previous) = actions
                         scope.launch {
                             shift.snapTo(from)

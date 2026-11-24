@@ -391,20 +391,20 @@ internal fun rememberBookNow(ui: PlayerUi): BookNow? {
     return remember(playing, state, chapter) { look() }
 }
 
-/** Chapter [index] of the book playing ([now]) plays: a seek in a single file, or its part from the start. */
-internal fun goToChapter(connection: PlayerConnection, ui: PlayerUi, now: BookNow, index: Int) {
+/**
+ * Chapter [index] of the book playing ([now]) plays: a seek in the part playing (a single file's chapters), or its part
+ * from the start, put back first when it was taken out of the queue ([PlayerConnection.toChapter]).
+ */
+internal fun goToChapter(connection: PlayerConnection, now: BookNow, index: Int) {
     val place: BookPlace = chapterPlace(now, index)
-    if (place.partIndex == now.partIndex) return connection.seekTo(place.positionMs)
-    val part = now.book.parts.getOrNull(place.partIndex) ?: return
-    val at = ui.queue.items.indexOfFirst { it.song.path == part.path }
-    if (at >= 0) connection.jump(ui.queue.id, at)
+    if (place.partIndex == now.partIndex) connection.seekTo(place.positionMs) else connection.toChapter(now, index)
 }
 
 /** The player's Previous and Next in a book: the chapter before (or this one's start) and the one after. */
 internal fun chapterStep(connection: PlayerConnection, ui: PlayerUi, now: BookNow, forward: Boolean) {
     val fresh = bookNowAt(now, ui.positionAt(SystemClock.elapsedRealtime()))
     val target = if (forward) nextChapter(fresh) else previousChapter(fresh)
-    if (target != null) goToChapter(connection, ui, fresh, target) else if (!forward) connection.seekTo(0)
+    if (target != null) goToChapter(connection, fresh, target) else if (!forward) connection.seekTo(0)
 }
 
 /** A chapter's title, or "Chapter 7" when the file names none. */
@@ -457,7 +457,7 @@ internal fun ChapterSheet(ui: PlayerUi, onDismiss: () -> Unit) {
                     .clip(RoundedCornerShape(14.dp))
                     .background(if (index == now.chapter) LocalBrandColors.current.highlightContainer else MaterialTheme.colorScheme.surface.copy(alpha = 0f))
                     .combinedClickable(role = Role.Button) {
-                        goToChapter(connection, ui, now, index)
+                        goToChapter(connection, now, index)
                         onDismiss()
                     }
                     .semantics(mergeDescendants = true) { if (index == now.chapter) selected = true }
