@@ -74,16 +74,21 @@ import coil3.request.ImageRequest
 import kotlinx.coroutines.delay
 
 /**
- * KJB's own player as the Now bar shows it: the song loaded, its cover, whether it plays and how far it is (0 to 1).
- * Milestone P1 supplies it ([rememberOwnNow] in PlayerScreen.kt); the bar only shows it.
+ * KJB's own player as the Now bar shows it: the song loaded, its cover and whether it plays; how far it is comes apart
+ * ([OwnNowSource.progress]). Milestone P1 supplies it ([rememberOwnNow] in PlayerScreen.kt); the bar only shows it.
  */
 @Immutable
-data class OwnNow(val title: String, val artist: String?, val cover: Any?, val playing: Boolean, val progress: Float, val path: String? = null, val album: String? = null)
+data class OwnNow(val title: String, val artist: String?, val cover: Any?, val playing: Boolean, val path: String? = null, val album: String? = null)
 
-/** KJB's own player for the Now bar: what is loaded ([now], null when nothing is) and its Play/Pause. */
+/**
+ * KJB's own player for the Now bar: what is loaded ([now], null when nothing is), how far it is (0 to 1, moving on while
+ * it plays: read it where the ring is drawn, so a tick redraws the ring alone) and its Play/Pause.
+ */
 @Stable
 interface OwnNowSource {
     val now: OwnNow?
+
+    val progress: Float
 
     fun playPause()
 }
@@ -91,6 +96,8 @@ interface OwnNowSource {
 /** Until milestone P1: KJB's own player has nothing loaded. */
 object NothingLoaded : OwnNowSource {
     override val now: OwnNow? = null
+
+    override val progress: Float = 0f
 
     override fun playPause() = Unit
 }
@@ -249,23 +256,33 @@ fun barPlayPause(bar: NowBarShows, ownPlayPause: () -> Unit, otherPlayback: Othe
  * Album" (each tag's placeholder when it is missing), or "In Samsung Music" for another app's song, and Play/Pause. A
  * tap or a swipe up opens the player (growing out of the bar), or for another app's song the Companion Now screen.
  * Without the other app's session, its Play/Pause is left out. It rises in when a song loads and fades away when
- * nothing is left, keeping its last song while it leaves. [friend]: before Play/Pause on KJB's own song, a friend playing
- * it or its artist now (Huddle's face, [NowBarFriend]).
+ * nothing is left, keeping its last song while it leaves. [progress]: how far KJB's own song is ([OwnNowSource.progress]),
+ * read only where its ring is drawn. [friend]: before Play/Pause on KJB's own song, a friend playing it or its artist now
+ * (Huddle's face, [NowBarFriend]).
  */
 @Composable
-fun NowBar(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?, modifier: Modifier = Modifier, friend: (@Composable (OwnNow) -> Unit)? = null) {
+fun NowBar(
+    shows: NowBarShows,
+    ledger: LedgerState,
+    other: OtherPlayback?,
+    onOpen: () -> Unit,
+    onPlayPause: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    progress: () -> Float = { 0f },
+    friend: (@Composable (OwnNow) -> Unit)? = null,
+) {
     val reduced = LocalReducedMotion.current
     val kept = remember { Kept(shows) }
     if (shows != NowBarShows.Hidden) kept.value = shows
     AnimatedVisibility(shows != NowBarShows.Hidden, modifier, enter = barEnter(reduced), exit = barExit(reduced)) {
         // The gap above the dock goes with the bar, so nothing is left where it was.
         // The tour's Play a song points at the bar itself, above its gap; a tap there opens the player as the bar does.
-        Box(Modifier.padding(bottom = 8.dp).tourTarget(TourStop.NOW_BAR, stringResource(R.string.tour_open_player), onOpen)) { BarFor(kept.value, ledger, other, onOpen, onPlayPause, friend) }
+        Box(Modifier.padding(bottom = 8.dp).tourTarget(TourStop.NOW_BAR, stringResource(R.string.tour_open_player), onOpen)) { BarFor(kept.value, ledger, other, onOpen, onPlayPause, progress, friend) }
     }
 }
 
 @Composable
-private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?, friend: (@Composable (OwnNow) -> Unit)?) {
+private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?, progress: () -> Float, friend: (@Composable (OwnNow) -> Unit)?) {
     val ink = barInk(MaterialTheme.colorScheme)
     when (shows) {
         NowBarShows.Hidden -> Unit
@@ -278,7 +295,7 @@ private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback
             BarRow(
                 cover = now.cover,
                 status = null,
-                ring = now.progress,
+                ring = progress,
                 title = now.title,
                 line = { BarLine(metaText(meta, artist, album, ink.line, MaterialTheme.colorScheme.outline)) },
                 playing = now.playing,
@@ -300,11 +317,11 @@ private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback
                     delay(RING_TICK_MS)
                 }
             }
-            val ring = other?.let { ringShare(sessionPosition(it.positionMs, it.reportedAt, it.speed, it.playing, clock, it.durationMs), it.durationMs) } ?: 0f
             BarRow(
                 cover = orb.cover,
                 status = orb.status,
-                ring = ring,
+                // The clock read where the ring is drawn: a tick redraws the ring, not the bar.
+                ring = { other?.let { ringShare(sessionPosition(it.positionMs, it.reportedAt, it.speed, it.playing, clock, it.durationMs), it.durationMs) } ?: 0f },
                 title = orb.title,
                 line = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -350,7 +367,7 @@ private fun PrewarmCover(cover: Any?) {
 private fun BarRow(
     cover: Any?,
     status: LyricsStatus?,
-    ring: Float,
+    ring: () -> Float,
     title: String,
     line: @Composable () -> Unit,
     playing: Boolean,
@@ -428,7 +445,7 @@ private fun BarLine(text: AnnotatedString) {
  * cover stays put under the player's as it goes.
  */
 @Composable
-private fun Orb(cover: Any?, status: LyricsStatus?, ring: Float, shared: Modifier) {
+private fun Orb(cover: Any?, status: LyricsStatus?, ring: () -> Float, shared: Modifier) {
     val highlight = LocalBrandColors.current.highlight
     Box(
         Modifier.size(48.dp).drawBehind {
@@ -436,7 +453,8 @@ private fun Orb(cover: Any?, status: LyricsStatus?, ring: Float, shared: Modifie
             val inset = stroke / 2
             val arc = Size(size.width - stroke, size.height - stroke)
             drawArc(highlight.copy(alpha = RING_TRACK_ALPHA), 0f, 360f, useCenter = false, topLeft = Offset(inset, inset), size = arc, style = Stroke(stroke))
-            if (ring > 0f) drawArc(highlight, -90f, 360f * ring, useCenter = false, topLeft = Offset(inset, inset), size = arc, style = Stroke(stroke, cap = StrokeCap.Round))
+            val share = ring()
+            if (share > 0f) drawArc(highlight, -90f, 360f * share, useCenter = false, topLeft = Offset(inset, inset), size = arc, style = Stroke(stroke, cap = StrokeCap.Round))
         },
     ) {
         Box(Modifier.align(Alignment.Center).size(ORB_COVER).then(shared))

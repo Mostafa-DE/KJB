@@ -3,6 +3,7 @@ package app.lyrify.ui
 import app.lyrify.stats.StatsGraph
 import kotlinx.coroutines.CoroutineScope
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.State
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.graphics.BlendMode
@@ -434,8 +435,11 @@ fun clock(ms: Long): String {
  */
 fun shownTitle(ui: PlayerUi, settings: LibrarySettings): String = ui.named?.let { displayTitle(it, settings) } ?: ui.item.song.path.substringAfterLast('/')
 
-/** KJB's own song for the Now bar: as every surface names it ([displayTitle]), its cover, and how far it is at [now]. */
-fun ownNow(ui: PlayerUi?, settings: LibrarySettings, now: Long): OwnNow? {
+/**
+ * KJB's own song for the Now bar: as every surface names it ([displayTitle]), and its cover. How far it is goes to the
+ * ring alone ([OwnNowSource.progress]), so this stays one value while the song plays.
+ */
+fun ownNow(ui: PlayerUi?, settings: LibrarySettings): OwnNow? {
     if (ui == null) return null
     val path = ui.item.song.path
     return OwnNow(
@@ -444,7 +448,6 @@ fun ownNow(ui: PlayerUi?, settings: LibrarySettings, now: Long): OwnNow? {
         album = ui.named?.album,
         cover = SongArt(path),
         playing = ui.playing,
-        progress = ringShare(ui.positionAt(now), ui.durationMs),
         path = path,
     )
 }
@@ -483,7 +486,8 @@ fun rememberOwnNow(): OwnNowSource {
     val store = remember(context) { Lyrify.settings(context) }
     val settings by store.settings.collectAsStateWithLifecycle(initialValue = Settings())
     val ui by connection.ui.collectAsStateWithLifecycle()
-    val now = rememberClock(ui?.playing == true)
+    // Read only where the ring is drawn: a tick redraws the ring, not the shell that holds this (PW1).
+    val clock = rememberClockState(ui?.playing == true)
     ExtrasToasts()
     AutoplayMessage(ui)
     val toasts = LocalToasts.current
@@ -497,24 +501,27 @@ fun rememberOwnNow(): OwnNowSource {
             toasts.show(Toast(resources.getString(R.string.player_recent_hint), R.drawable.ic_history))
         }
     }
-    return OwnPlayer(ownNow(ui, settings.library, now), connection)
+    return OwnPlayer(ownNow(ui, settings.library), connection) { ui?.let { ringShare(it.positionAt(clock.value), it.durationMs) } ?: 0f }
 }
 
-private class OwnPlayer(override val now: OwnNow?, private val connection: PlayerConnection) : OwnNowSource {
+private class OwnPlayer(override val now: OwnNow?, private val connection: PlayerConnection, private val share: () -> Float) : OwnNowSource {
+    override val progress: Float get() = share()
+
     override fun playPause() = connection.playPause()
 }
 
 /** Elapsed realtime, ticking while [running], for positions that move on. */
 @Composable
-internal fun rememberClock(running: Boolean, everyMs: Long = 250): Long {
-    val now by produceState(SystemClock.elapsedRealtime(), running) {
+internal fun rememberClock(running: Boolean, everyMs: Long = 250): Long = rememberClockState(running, everyMs).value
+
+/** [rememberClock] as a state, for a reader that draws: read in a draw lambda, a tick redraws without recomposing. */
+@Composable
+private fun rememberClockState(running: Boolean, everyMs: Long = 250): State<Long> = produceState(SystemClock.elapsedRealtime(), running) {
+    value = SystemClock.elapsedRealtime()
+    while (running) {
+        delay(everyMs)
         value = SystemClock.elapsedRealtime()
-        while (running) {
-            delay(everyMs)
-            value = SystemClock.elapsedRealtime()
-        }
     }
-    return now
 }
 
 // The player

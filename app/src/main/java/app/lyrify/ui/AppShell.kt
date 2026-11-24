@@ -317,6 +317,7 @@ fun AppShell(
                             other = otherPlayback,
                             onOpen = { nav.show(if (bar is NowBarShows.Own) FullScreen.Player else FullScreen.CompanionNow) },
                             onPlayPause = barPlayPause(bar, own::playPause, otherPlayback, other?.let { session -> session::playPause }),
+                            progress = { own.progress },
                             friend = { NowBarFriend(it.title, it.artist) },
                         )
                     },
