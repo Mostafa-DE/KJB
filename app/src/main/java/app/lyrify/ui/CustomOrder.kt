@@ -6,7 +6,7 @@ import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -93,10 +93,11 @@ import java.time.Instant
 import java.time.ZoneId
 
 // Custom order (user feedback 2026-11-13): Favourites' songs and every playlist list in their custom order by default,
-// the order the rows' handles change. A drag on a handle (at the row's end, before "⋯") moves the song at once, no long
-// press: the row lifts and follows the finger, its neighbours slide out of its way with a light tick per place, and the
-// list scrolls near its edges. TalkBack moves a song with "Move up" and "Move down". Each move is stored at once in
-// playlists.json, as the whole order shown, which the backup carries as it is.
+// the order the rows' handles change. A handle (at the row's end, before "⋯") held for the phone's long press lifts its
+// row with a tick (a quick swipe on it scrolls the list; user feedback 2026-11-22, item 67); the row then follows the
+// finger, its neighbours slide out of its way with a light tick per place, and the list scrolls near its edges. TalkBack
+// moves a song with "Move up" and "Move down". Each move is stored at once in playlists.json, as the whole order shown,
+// which the backup carries as it is.
 
 // Sort keys (features 2026-11-15, item 5): every list of songs, the Albums and the Artists tabs sort by more keys, each
 // either way round, remembered per list in settings.json. Favourites' songs and the playlists keep their custom order
@@ -554,13 +555,15 @@ fun edgeStep(info: LazyListLayoutInfo, row: LazyListItemInfo, offset: Float, edg
 }
 
 /**
- * A row's drag handle (a 48 dp target at its end, before "⋯", clear of the system's back gesture): an upright drag on it
- * moves the song, at [place] of [songs], at once, no long press, through [reorder]; a sideways one is left to the tab
- * pages. [row] is the row's height in px. TalkBack has the row's Move up and Move down instead, so the handle is no stop
- * of its own.
+ * A row's drag handle (a 48 dp target at its end, before "⋯", clear of the system's back gesture): held for the phone's
+ * long press, it lifts the song, at [place] of [songs], with a tick, and a drag then moves it through [reorder]; a quick
+ * swipe on it is left to the list's scroll, or a sideways one to the tab pages, so a thumb scrolling by never moves a
+ * song (user feedback 2026-11-22, item 67). [row] is the row's height in px. TalkBack has the row's Move up and Move down
+ * instead, so the handle is no stop of its own.
  */
 @Composable
 fun DragHandle(reorder: SongReorder, songs: List<Song>, place: Int, key: Any, row: () -> Float) {
+    val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val list by rememberUpdatedState(songs)
     val at by rememberUpdatedState(place)
@@ -572,18 +575,25 @@ fun DragHandle(reorder: SongReorder, songs: List<Song>, place: Int, key: Any, ro
             .testTag(HANDLE_TAG)
             .clearAndSetSemantics {}
             .pointerInput(reorder, key) {
+                // The gesture also ends when its row leaves the list (scrolled away under another row held), so it
+                // lets go only of a row it lifted.
+                var lifted = false
                 val letGo = {
-                    reorder.drop(list)
-                    scope.launch { reorder.settle(motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced)) }
+                    if (lifted) {
+                        lifted = false
+                        reorder.drop(list)
+                        scope.launch { reorder.settle(motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced)) }
+                    }
                 }
-                detectVerticalDragGestures(
-                    onDragStart = { reorder.start(list, at, key) },
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        lifted = true
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        reorder.start(list, at, key)
+                    },
                     onDragEnd = { letGo() },
                     onDragCancel = { letGo() },
-                ) { change, amount ->
-                    change.consume()
-                    reorder.drag(amount, row())
-                }
+                ) { _, amount -> reorder.drag(amount.y, row()) }
             },
     ) {
         Icon(painterResource(R.drawable.ic_drag_indicator), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))

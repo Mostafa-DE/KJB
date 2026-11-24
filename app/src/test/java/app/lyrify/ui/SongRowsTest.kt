@@ -261,6 +261,23 @@ class SongRowsTest {
     }
 
     @Test
+    fun `every list's handle lifts its row only once held for the phone's long press, with a tick, so a quick swipe on it scrolls`() {
+        // User feedback 2026-11-22, item 67. Unit tests run in the module's folder; the files that draw a grip are read
+        // whole, wherever their gestures sit, as the JVM tests have no Compose renderer (SongRowsDeviceTest drags one).
+        val handles = File("src/main/java").walkTopDown().filter { it.isFile && it.extension == "kt" }
+            .map { it.name to it.readText() }.filter { (_, source) -> "R.drawable.ic_drag_indicator" in source }.toList()
+
+        // The queue's (the Queue sheet and a queue's page), and DragHandle's (Favourites and playlists).
+        assertEquals(listOf("CustomOrder.kt", "QueueScreens.kt"), handles.map { it.first }.sorted())
+        handles.forEach { (file, source) ->
+            val grips = source.split("R.drawable.ic_drag_indicator").size - 1
+            assertTrue(file, source.split("detectDragGesturesAfterLongPress(").size - 1 >= grips)
+            assertTrue(file, source.split("HapticFeedbackType.LongPress").size - 1 >= grips)
+            assertFalse(file, "detectDragGestures(" in source || "detectVerticalDragGestures(" in source)
+        }
+    }
+
+    @Test
     fun `the auto-scroll's edges are those of the room the bars leave the list, its padding not counted twice`() {
         // A 1000 px list under a 100 px top bar and over 200 px of Now bar and dock: Compose starts the rows' offsets
         // after the top padding (the viewport starts 100 px before them), so the room shown runs from 0 to 700.
