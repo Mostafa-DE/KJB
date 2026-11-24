@@ -71,7 +71,7 @@ class CoversAheadDeviceTest {
     fun resetLoader() = SingletonImageLoader.reset()
 
     @Test
-    fun `a song read ahead shows its cover in the player and the Now bar in the first frame, read once only`() {
+    fun aSongReadAheadShowsItsCoverInThePlayerAndTheNowBarInTheFirstFrameReadOnceOnly() {
         val density = Density(context)
         val read = SongArt(PATH, mediaStoreId = 7L)
         runBlocking { coverAheadRequests(context, read, with(density) { SIDE.roundToPx() }, with(density) { ORB_COVER.roundToPx() }).forEach { loader.execute(it) } }
