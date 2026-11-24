@@ -26,6 +26,7 @@ import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertWidthIsEqualTo
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
@@ -136,6 +137,33 @@ class SongRowsDeviceTest {
 
         assertEquals(emptyList<List<SongRef>>(), moves)
         assertTrue(rows.firstVisibleItemIndex > 0 || rows.firstVisibleItemScrollOffset > 0)
+    }
+
+    @Test
+    fun aRowHeldWhileTheListScrollsUnderItStaysHeldWhenARowWhoseHandleWasTouchedLeaves() {
+        val moves = mutableListOf<List<SongRef>>()
+        val rows = LazyListState()
+        val songs = (1..80).map { made("%02d Shore Song %d".format(it, it), "Shore Song $it") }
+        compose.setContent { Shell { Rows(songs, moves, rows) } }
+        val row = with(compose.density) { 64.dp.toPx() }
+        val handles = compose.onAllNodesWithTag(HANDLE_TAG, useUnmergedTree = true)
+
+        // A tap on the first row's handle wakes its gesture, which ends when its row leaves the list; that must never let
+        // go of another row.
+        handles[0].performTouchInput { click() }
+        // The second row held and taken thirty rows down, past the list's end: the list scrolls under it and the first
+        // row leaves.
+        handles[1].performTouchInput {
+            down(center)
+            advanceEventTime(viewConfiguration.longPressTimeoutMillis + 100)
+            repeat(300) { moveBy(Offset(0f, row / 10)) }
+            up()
+        }
+        compose.waitForIdle()
+
+        // Still held all the way: thirty places on at least, and stored once.
+        assertEquals(1, moves.size)
+        assertTrue("${moves.single().indexOf(songs[1].ref)}", moves.single().indexOf(songs[1].ref) >= 31)
     }
 
     @OptIn(ExperimentalTestApi::class)

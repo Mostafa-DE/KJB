@@ -1102,9 +1102,17 @@ private fun QueueSongRow(
                     .size(48.dp)
                     .semantics { contentDescription = resources.getString(R.string.queue_move, title) }
                     .pointerInput(queue.id, item.uid) {
-                        val drop = { scope.launch { reorder.drop(latest, connection) } }
+                        // The gesture also ends when the row leaves the list, so it drops only a song it lifted.
+                        var lifted = false
+                        val drop = {
+                            if (lifted) {
+                                lifted = false
+                                scope.launch { reorder.drop(latest, connection) }
+                            }
+                        }
                         detectDragGesturesAfterLongPress(
                             onDragStart = {
+                                lifted = true
                                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 reorder.start(latest, item.uid)
                             },

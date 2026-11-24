@@ -93,10 +93,11 @@ import java.time.Instant
 import java.time.ZoneId
 
 // Custom order (user feedback 2026-11-13): Favourites' songs and every playlist list in their custom order by default,
-// the order the rows' handles change. A drag on a handle (at the row's end, before "⋯") moves the song at once, no long
-// press: the row lifts and follows the finger, its neighbours slide out of its way with a light tick per place, and the
-// list scrolls near its edges. TalkBack moves a song with "Move up" and "Move down". Each move is stored at once in
-// playlists.json, as the whole order shown, which the backup carries as it is.
+// the order the rows' handles change. A handle (at the row's end, before "⋯") held for the phone's long press lifts its
+// row with a tick (a quick swipe on it scrolls the list; user feedback 2026-11-22, item 67); the row then follows the
+// finger, its neighbours slide out of its way with a light tick per place, and the list scrolls near its edges. TalkBack
+// moves a song with "Move up" and "Move down". Each move is stored at once in playlists.json, as the whole order shown,
+// which the backup carries as it is.
 
 // Sort keys (features 2026-11-15, item 5): every list of songs, the Albums and the Artists tabs sort by more keys, each
 // either way round, remembered per list in settings.json. Favourites' songs and the playlists keep their custom order
@@ -574,12 +575,19 @@ fun DragHandle(reorder: SongReorder, songs: List<Song>, place: Int, key: Any, ro
             .testTag(HANDLE_TAG)
             .clearAndSetSemantics {}
             .pointerInput(reorder, key) {
+                // The gesture also ends when its row leaves the list (scrolled away under another row held), so it
+                // lets go only of a row it lifted.
+                var lifted = false
                 val letGo = {
-                    reorder.drop(list)
-                    scope.launch { reorder.settle(motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced)) }
+                    if (lifted) {
+                        lifted = false
+                        reorder.drop(list)
+                        scope.launch { reorder.settle(motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced)) }
+                    }
                 }
                 detectDragGesturesAfterLongPress(
                     onDragStart = {
+                        lifted = true
                         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                         reorder.start(list, at, key)
                     },
