@@ -1009,7 +1009,7 @@ private fun FlipArea(
     LaunchedEffect(showLyrics, reduced) { fade.animateTo(if (showLyrics) 1f else 0f, tween(if (reduced) FADE_MS else 0)) }
     val density = LocalDensity.current.density
     BoxWithConstraints(modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
-        val side = minOf(maxWidth - 8.dp, maxHeight - 8.dp, 360.dp).coerceAtLeast(72.dp)
+        val side = minOf(maxWidth - 8.dp, maxHeight - 8.dp, COVER_MAX).coerceAtLeast(72.dp)
         val area = maxWidth
         val lyricsShown = if (reduced) fade.value > 0.5f else turn.value > 90f
         val frontAlpha = if (reduced) 1f - fade.value else 1f
@@ -1426,6 +1426,9 @@ private const val BACKDROP_SHARE = 0.6f
 
 /** A blurred backdrop's cover, in px: blurred some 50 dp, a larger one would only cost decoding and upload time. */
 internal const val BACKDROP_PX = 192
+
+/** The player's cover at its largest, on a wide screen; the Now bar loads it at most this size ([PrewarmCover]). */
+internal val COVER_MAX = 360.dp
 
 /** The player's side margin, past which the next cover waits. */
 private val PLAYER_EDGE = 24.dp

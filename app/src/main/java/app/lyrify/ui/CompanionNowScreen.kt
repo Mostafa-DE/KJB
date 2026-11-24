@@ -289,10 +289,14 @@ private fun NowHero(
 @Composable
 private fun CoverBackdrop(cover: Any?, height: Dp) {
     val colors = MaterialTheme.colorScheme
+    val context = LocalContext.current
     Box(Modifier.fillMaxWidth().height(height)) {
         Crossfade(targetState = cover?.takeIf { Build.VERSION.SDK_INT >= Build.VERSION_CODES.S }, animationSpec = tween(COVER_FADE_MS), label = "backdrop") { shown ->
             if (shown != null) {
-                AsyncImage(model = shown, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(48.dp).alpha(BACKDROP_ALPHA))
+                // A song on the phone gets the player's backdrop's small cover: blurred this much, a full-width one would
+                // only cost decoding and memory (PW1). Another app's picture is already in memory as it is.
+                val request = remember(shown, context) { (shown as? SongArt)?.let { backdropRequest(context, it) } ?: shown }
+                AsyncImage(model = request, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(48.dp).alpha(BACKDROP_ALPHA))
             } else {
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(colors.primaryContainer, colors.surface))))
             }

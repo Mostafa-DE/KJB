@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.minimumInteractiveComponentSize
 import android.animation.ValueAnimator
 import android.content.ContentUris
+import android.app.ActivityManager
 import android.content.Context
 import android.provider.MediaStore
 import androidx.annotation.DrawableRes
@@ -934,15 +935,25 @@ fun backdropRequest(context: Context, art: SongArt): ImageRequest = ImageRequest
 /** The extra on [backdropCoverKey] that sets the backdrop's bitmap apart. */
 private const val BACKDROP_EXTRA = "kjb#backdrop"
 
-/** The image loader of the whole app: song covers from MediaStore, cross-fading in. No network. */
+/**
+ * The image loader of the whole app: song covers from MediaStore, cross-fading in. No network. The covers it keeps in
+ * memory take at most [COVERS_IN_MEMORY] of the phone's ordinary heap for an app (its memory class): Coil's own share,
+ * which its default takes of the large heap KJB asks for (the manifest's largeHeap), some 100 MB on most phones (PW1).
+ */
 fun songImageLoader(context: Context): ImageLoader =
     ImageLoader.Builder(context)
         .components {
             add(SongArtKeyer())
             add(SongArtFetcher.Factory())
         }
+        .memoryCache { MemoryCache.Builder().maxSizeBytes((context.getSystemService(ActivityManager::class.java).memoryClass * BYTES_PER_MB * COVERS_IN_MEMORY).toLong()).build() }
         .crossfade(true)
         .build()
+
+/** The share of the ordinary heap the covers in memory may take ([songImageLoader]): a fifth, Coil's default share. */
+private const val COVERS_IN_MEMORY = 0.2
+
+private const val BYTES_PER_MB = 1_048_576L
 
 /** The audio file's MediaStore uri, by its path (readable for all audio with All files access). Blocking. */
 private fun audioUri(context: Context, path: String): android.net.Uri? {

@@ -350,12 +350,13 @@ fun metaText(meta: MetaLine, artist: String, album: String, ink: Color, placehol
 /**
  * The player's cover, loaded at the player's size while the bar shows its song: the cover that grows out of the bar
  * is already in memory, under the key the player's own request looks up ([CoverAt.PLAYER], Coil's own for the song), so
- * its first frame is never an empty tile.
+ * its first frame is never an empty tile. The window's width, at most the player's largest cover ([COVER_MAX]): a
+ * larger one is never drawn (PW1).
  */
 @Composable
 private fun PrewarmCover(cover: Any?) {
     val context = LocalContext.current
-    val side = LocalWindowInfo.current.containerSize.width
+    val side = minOf(LocalWindowInfo.current.containerSize.width, with(LocalDensity.current) { COVER_MAX.roundToPx() })
     val versions by CoverVersions.versions.collectAsState()
     val shown = (cover as? SongArt)?.let { it.copy(version = versions[it.path] ?: 0) } ?: cover
     LaunchedEffect(shown, side) {
