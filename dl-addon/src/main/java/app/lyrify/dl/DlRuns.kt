@@ -442,7 +442,8 @@ class DlRuns(
 
     /**
      * Looks up [url] and returns the lookup's id at once: the quick info from [quickInfo] while yt-dlp gets the full info,
-     * which the quick one never follows.
+     * which the quick one never follows. A playlist's link has its songs listed, none of them opened; a song's link that
+     * names a playlist too (&list=, a Mix started from it) is the song, its playlist listed after it.
      */
     fun info(url: String, events: InfoEvents): Long = lookup { id -> lookUp(id, url, events) }
 
@@ -493,9 +494,18 @@ class DlRuns(
             events.onFailed(DlEnd.Failed(DlFailure.ENGINE))
             return@coroutineScope
         }
-        val exit = answer(id, DlArgs::info, url)
+        val exit = answer(id, { DlArgs.info(it, DlArgs.PLAYLIST_SONGS) }, url)
         quick.cancel()
-        val info = (exit as? YtdlpExit.Done)?.let { Info.full(url, it.out) }
+        val found = (exit as? YtdlpExit.Done)?.let { Info.full(url, it.out) }
+        val list = Info.playlistId(url)
+        // A song's playlist that cannot be listed (a private one, Liked music) leaves the song as it is, logged by its kind.
+        val info = if (found == null || found.playlist != null || list == null) {
+            found
+        } else {
+            val listed = answer(id, { DlArgs.info(it, if (Info.isMix(list)) DlArgs.MIX_SONGS else DlArgs.PLAYLIST_SONGS, playlist = true) }, url)
+            if (listed is YtdlpExit.Failed) failure("lookup $id", listed)
+            found.copy(playlist = (listed as? YtdlpExit.Done)?.let { Info.playlist(it.out) }?.copy(withSong = true))
+        }
         synchronized(told) {
             full = true
             when {

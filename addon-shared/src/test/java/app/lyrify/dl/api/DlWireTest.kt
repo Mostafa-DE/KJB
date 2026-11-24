@@ -57,6 +57,25 @@ class DlWireTest {
     }
 
     @Test
+    fun `a lookup's playlist reads back as it was written, and an older add-on's info has none`() {
+        val song = DlSearchResult("https://www.youtube.com/watch?v=abc123def45", "Paper Lantern", "Paper Harbour", 214, "https://img.example.com/a.jpg")
+        val info = DlInfo(
+            "https://www.youtube.com/watch?v=abc123def45&list=PLq7",
+            "Paper Lantern",
+            "The Quiet Hours",
+            214,
+            playlist = DlPlaylist("Harbour Nights", listOf(song), more = 3, mix = true, withSong = true),
+        )
+
+        assertEquals(info, DlWire.info(DlWire.encode(info)))
+        // An add-on before VERSION 2 never says.
+        assertNull(DlWire.info("""{"url":"https://video.example.com/v","title":"Paper Lantern","artist":"The Quiet Hours"}""")!!.playlist)
+        // A playlist link's quick info: its title, its songs still to come.
+        assertEquals(DlPlaylist("Harbour Nights"), DlWire.info("""{"url":"u","title":"t","artist":"","partial":true,"playlist":{"title":"Harbour Nights"}}""")!!.playlist)
+        assertEquals(DlEnd.Failed(DlFailure.PRIVATE_PLAYLIST), DlWire.end(DlWire.encode(DlEnd.Failed(DlFailure.PRIVATE_PLAYLIST))))
+    }
+
+    @Test
     fun `what cannot be read is the safe answer`() {
         assertEquals(DlEnd.Failed(DlFailure.UNKNOWN), DlWire.end("""{"type":"teleported"}"""))
         assertEquals(DlEnd.Failed(DlFailure.UNKNOWN), DlWire.end("not json"))

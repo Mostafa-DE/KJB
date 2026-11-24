@@ -95,6 +95,9 @@ enum class DownloadFailure {
             DlFailure.OFFLINE -> OFFLINE
             DlFailure.NOT_FOUND -> NOT_FOUND
             DlFailure.SITE_CHANGED -> if (end.updated) SITE_CHANGED else SITE_CHANGED_NEWEST
+            // Only a playlist's own link queued as one download meets it in a run: one an older KJB queued, or one saved
+            // before its lookup said it is a playlist.
+            DlFailure.PRIVATE_PLAYLIST -> NOT_FOUND
             DlFailure.BLOCKED -> BLOCKED
             DlFailure.NO_ROOM -> NO_ROOM
             DlFailure.HAND_OFF -> HAND_OFF

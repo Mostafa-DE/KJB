@@ -191,7 +191,8 @@ data class VideoChoice(val height: Int?, val label: String, val bytes: Long? = n
 
 /**
  * What a link is (IDlAddon.info): [title] and [artist] as KJB shows them, the length, the thumbnail's address, and the
- * video qualities with sizes. [partial]: the quick info (oEmbed), with no length or sizes yet.
+ * video qualities with sizes. [partial]: the quick info (oEmbed), with no length or sizes yet. [playlist]: the playlist the
+ * link names (VERSION 2; an older add-on never says).
  */
 @Serializable
 data class DlInfo(
@@ -202,6 +203,23 @@ data class DlInfo(
     val thumbnail: String? = null,
     val partial: Boolean = false,
     val choices: List<VideoChoice> = emptyList(),
+    val playlist: DlPlaylist? = null,
+)
+
+/**
+ * A playlist a link names (a list, an album or a Mix), its songs listed and none of them opened: its [title], its [songs]
+ * in its order (as many as the add-on lists), [more] songs it has past those, and [mix] for a Mix, which has no end.
+ * [withSong]: the link names one of its songs too (a song's link with &list=, a Mix started from a song), and the info
+ * around it is that song's, so KJB asks which is meant; else the info is the playlist's own (its name and owner, a cover,
+ * its songs' length together). A playlist link's quick info has its title only, its songs still to come.
+ */
+@Serializable
+data class DlPlaylist(
+    val title: String,
+    val songs: List<DlSearchResult> = emptyList(),
+    val more: Int = 0,
+    val mix: Boolean = false,
+    val withSong: Boolean = false,
 )
 
 /**
@@ -227,8 +245,8 @@ data class DlSearch(val query: String, val limit: Int = DEFAULT_LIMIT) {
 }
 
 /**
- * One video a search found: its link, its [title] and [channel] as YouTube shows them (the title not cleaned up, so two
- * uploads of a song tell apart), its length, and its thumbnail's address when YouTube gave one.
+ * One video a search found, or a song of a playlist: its link, its [title] and [channel] as YouTube shows them (the title
+ * not cleaned up, so two uploads of a song tell apart), its length, and its thumbnail's address when YouTube gave one.
  */
 @Serializable
 data class DlSearchResult(val url: String, val title: String, val channel: String = "", val durationSec: Int = 0, val thumbnail: String? = null)
@@ -282,6 +300,12 @@ enum class DlFailure {
 
     /** No video at that link: removed, private, or a site yt-dlp does not know. */
     NOT_FOUND,
+
+    /**
+     * A playlist no one but its owner can list: a private one (Liked music is), one that is gone, or a kind YouTube shows
+     * no one. An older KJB reads it as [UNKNOWN].
+     */
+    PRIVATE_PLAYLIST,
 
     /** The site changed: an update of yt-dlp may fix it. */
     SITE_CHANGED,

@@ -204,6 +204,11 @@ class DownloadsModelTest {
     }
 
     @Test
+    fun `a playlist's own link an older KJB's download still holds, private or gone, reads as nothing found`() {
+        assertEquals(DownloadFailure.NOT_FOUND, DownloadFailure.of(DlEnd.Failed(DlFailure.PRIVATE_PLAYLIST)))
+    }
+
+    @Test
     fun `a download that failed before KJB told a site that changed by the update still reads with the updated words`() {
         val stored = DownloadsJson.encodeItem(item.copy(state = DownloadState.Failed(DownloadFailure.SITE_CHANGED)))
 
