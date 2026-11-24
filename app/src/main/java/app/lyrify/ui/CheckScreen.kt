@@ -277,7 +277,7 @@ private fun CheckPage(entry: LedgerEntry, busy: Boolean, preview: suspend (Long)
             SongCover(SongArt(entry.path), size = 72.dp, shape = MaterialTheme.shapes.medium)
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(entry.title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(stringResource(R.string.check_artist_length, artistOf(entry), songLength(entry.durationMs)), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+                Text(stringResource(R.string.check_artist_length, artistOf(entry), clock(entry.durationMs)), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
                 FileChip(File(entry.path).name)
             }
         }
@@ -377,7 +377,7 @@ private fun CandidateCard(candidate: Candidate, enabled: Boolean, preview: suspe
                 Icon(painterResource(if (candidate.synced) R.drawable.ic_lyrics_fill else R.drawable.ic_notes), contentDescription = null, tint = toneColors.onContainer, modifier = Modifier.size(18.dp))
             }
             Column(Modifier.weight(1f)) {
-                val length = songLength(candidate.duration.roundToLong() * MS_PER_SECOND)
+                val length = clock(candidate.duration.roundToLong() * MS_PER_SECOND)
                 Text(candidate.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(
                     candidate.album?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.check_candidate_album, kind, candidate.artist, it, length) }

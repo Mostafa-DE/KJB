@@ -145,9 +145,11 @@ private fun HuddleFriends(tab: LibraryTab, modifier: Modifier, bleed: Dp = 0.dp)
 }
 
 /**
- * The friends row: a lock first while you listen privately (until when), Invite, then every friend ([friendsNow]):
- * playing now with the live ring, the bars and their song's title, paused with a quiet ring and "Paused", else a quiet
- * ring and when they last played; a card not opened yet wiggles a badge on its sender's face.
+ * The friends row: a lock first while you listen privately (until when), Invite, then every friend ([friendsNow]: those
+ * playing now first, then the others by their latest play), each a 56 dp face over their name and a short line. Playing
+ * now shows their song's cover in the face when their KJB sent one (else their letter, in colour) with the live ring, the
+ * bars and their song's title; paused, their letter greyed through, still, with a pause mark and "Paused"; not playing,
+ * greyed and still, and when they last played. A card not opened yet wiggles a badge on its sender's face.
  */
 @Composable
 internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFriend: (String) -> Unit, onInvite: () -> Unit, onPrivately: () -> Unit) {
@@ -177,8 +179,8 @@ internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFri
             val said = when {
                 play == null -> name
                 friend.playing -> stringResource(R.string.huddle_row_playing, name, songBy(resources, play.song))
-                friend.paused -> stringResource(R.string.huddle_row_paused, name, songBy(resources, play.song))
-                else -> stringResource(R.string.huddle_row_played, name, songBy(resources, play.song), ago(play.at, now))
+                friend.paused -> stringResource(R.string.huddle_row_paused, name)
+                else -> stringResource(R.string.huddle_row_played, name, ago(play.at, now))
             }
             RowFace(
                 name,
@@ -192,7 +194,7 @@ internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFri
                 description = if (sent) listOf(said, stringResource(R.string.huddle_sent_you)).joinToString(", ") else said,
                 onClick = { onFriend(friend.friend.id) },
             ) {
-                FriendFace(name, friendColor(friend.friend.id), 56.dp, ring = if (friend.playing) FaceRing.LIVE else FaceRing.IDLE, playing = friend.playing, mail = sent)
+                FriendFace(name, friendColor(friend.friend.id), 56.dp, ring = if (friend.playing) FaceRing.LIVE else FaceRing.AWAY, playing = friend.playing, paused = friend.paused, mail = sent, cover = friend.cover?.takeIf { friend.playing }?.picture)
             }
         }
     }
@@ -200,8 +202,9 @@ internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFri
 
 /**
  * A card a friend sent, at the top of Library (the mockup's 4.1): who sent it and when (New until it is opened), its
- * cover tilted like a photo (yours, else their colour's pattern), what it is and the note, then Play (plays a song you
- * have at once, else opens the card), Send back and Hide (it stays on the Huddle page). A tap opens it.
+ * cover tilted like a photo (yours, else their colour's pattern), what it is (a song with its length) and the note, then
+ * Play (plays a song you have at once, else opens the card), Send back and Hide (it stays on the Huddle page). A tap opens
+ * it.
  */
 @Composable
 internal fun FromCard(received: Received, friend: Friend, now: Long, matcher: SongMatcher?, modifier: Modifier, onOpen: (Boolean) -> Unit, onSendBack: () -> Unit, onHide: () -> Unit) {
@@ -248,13 +251,17 @@ internal fun FromCard(received: Received, friend: Friend, now: Long, matcher: So
             ) { FriendArt((found as? Match.Found)?.song ?: (found as? Match.Maybe)?.song, color, 56.dp, RoundedCornerShape(3.dp)) }
             Column(Modifier.weight(1f)) {
                 Text(title, style = FromTitle, color = colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(
-                    if (card.kind == CardKind.SONG) first.artist.orEmpty() else pluralStringResource(R.plurals.lib_songs, card.songs.size, card.songs.size),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = colors.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (card.kind == CardKind.SONG) first.artist.orEmpty() else pluralStringResource(R.plurals.lib_songs, card.songs.size, card.songs.size),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    if (card.kind == CardKind.SONG) SongLength(first.durationMs)
+                }
                 card.note?.let {
                     Text(
                         stringResource(R.string.huddle_note_quoted, it),

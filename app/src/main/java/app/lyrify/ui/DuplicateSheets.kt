@@ -117,7 +117,7 @@ private fun FileRow(file: AudioFile, keep: Boolean, checked: Boolean, onCheck: (
             val format = fileFormat(file)
             Text(fileKbps(file)?.let { stringResource(R.string.dupes_file_format, format, formatCount(it)) } ?: format, style = MaterialTheme.typography.bodySmall, color = muted)
             val size = Formatter.formatShortFileSize(context, file.size)
-            val length = songLength(file.durationMs)
+            val length = clock(file.durationMs)
             Text(
                 file.addedAt?.let { added ->
                     val date = DateUtils.formatDateTime(context, added, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH or DateUtils.FORMAT_SHOW_YEAR)

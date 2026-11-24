@@ -89,6 +89,7 @@ import app.lyrify.huddle.HuddleGraph
 import app.lyrify.huddle.HuddleState
 import app.lyrify.huddle.Invites
 import app.lyrify.huddle.Match
+import app.lyrify.huddle.NowCover
 import app.lyrify.huddle.NowState
 import app.lyrify.huddle.PendingInvite
 import app.lyrify.huddle.Received
@@ -143,16 +144,17 @@ fun sendOrder(friends: List<Friend>): List<Friend> {
 
 /**
  * A friend on the Huddle page, by the name you see: the song they play or paused (as if begun when it would have, so
- * Play along finds their place), else their latest play; and whether it plays now, or is paused.
+ * Play along finds their place), else their latest play; whether it plays now, or is paused; and that song's [cover]
+ * while it plays or is paused, when their KJB sent one.
  */
-data class FriendNow(val friend: Friend, val play: FriendPlay?, val playing: Boolean, val paused: Boolean = false)
+data class FriendNow(val friend: Friend, val play: FriendPlay?, val playing: Boolean, val paused: Boolean = false, val cover: NowCover? = null)
 
 /**
  * Every friend as [FriendNow], the one place every screen reads what friends play: the friends row, the page, their
  * song's sheet, the player, the Now bar and the bar's dot. Playing only while their newest now ([HuddleState.live]) says
  * so, at most [LIVE_MS] old, and not more than [END_GRACE_MS] past their song's end; paused for [PAUSED_KEPT_MS] after
- * the pause; stopped, or past those, as their latest play. Those playing first, the song begun last first, then those
- * paused, then the others by their latest play, then those who never shared one, by name.
+ * the pause; stopped, or past those, as their latest play. Those playing first, the song begun last first, then everyone
+ * else, paused or not, by their latest play, the newest first (user 2026-11-23), then those who never shared one, by name.
  */
 fun friendsNow(state: HuddleState, now: Long): List<FriendNow> {
     val collator = Collator.getInstance()
@@ -162,9 +164,9 @@ fun friendsNow(state: HuddleState, now: Long): List<FriendNow> {
         val playing = live != null && live.state == NowState.PLAYING && now - live.at <= LIVE_MS &&
             (live.song.durationMs <= 0 || now <= live.at + live.song.durationMs - live.positionMs + END_GRACE_MS)
         val paused = live != null && live.state == NowState.PAUSED && now - live.at <= PAUSED_KEPT_MS
-        FriendNow(friend, if (live != null && (playing || paused)) FriendPlay(friend.id, live.at - live.positionMs, live.song, live.favourite) else latest[friend.id], playing, paused)
+        FriendNow(friend, if (live != null && (playing || paused)) FriendPlay(friend.id, live.at - live.positionMs, live.song, live.favourite) else latest[friend.id], playing, paused, live?.cover?.takeIf { playing || paused })
     }.sortedWith(
-        compareByDescending<FriendNow> { it.playing }.thenByDescending { it.paused }.thenByDescending { it.play?.at ?: Long.MIN_VALUE }.thenBy(collator) { it.friend.shownName },
+        compareByDescending<FriendNow> { it.playing }.thenByDescending { it.play?.at ?: Long.MIN_VALUE }.thenBy(collator) { it.friend.shownName },
     )
 }
 
@@ -416,9 +418,9 @@ private fun NewNameDialog(state: HuddleState, onDone: () -> Unit) {
  * Huddle's page (Mix 2 of the approved mockup): your name first of all, the first time ([NameGate]); then Listen
  * privately, Listening now (each friend playing as a big card, then Invite), Sent to you (what friends sent as postcards,
  * the newest first), the friends not playing, Past friends (once one left), and the invites waiting. Its "⋯" holds Paste
- * invite, Your name, Keep friends in backups and What leaves your phone. With no friend yet, an empty card invites, and
- * an example postcard shows what a song from a friend looks like. On the bar ([onBack] null) it is a root; from Tools it
- * has Back.
+ * invite, Your name, Backup passphrase and What leaves your phone. With no friend yet, an empty card invites, and an
+ * example postcard shows what a song from a friend looks like. On the bar ([onBack] null) it is a root; from Tools it has
+ * Back.
  */
 @Composable
 fun HuddlePage(onBack: (() -> Unit)?) {
@@ -464,7 +466,7 @@ fun HuddlePage(onBack: (() -> Unit)?) {
                                 open = false
                                 naming = true
                             })
-                            MenuRow(stringResource(R.string.huddle_backup), R.drawable.ic_lock, detail = stringResource(if (state.backupKey != null) R.string.huddle_backup_on else R.string.huddle_backup_off), onClick = {
+                            MenuRow(stringResource(R.string.huddle_passphrase_title), R.drawable.ic_lock, detail = stringResource(if (state.backupKey != null) R.string.huddle_backup_on else R.string.huddle_backup_off), onClick = {
                                 open = false
                                 passphrase = true
                             })
@@ -843,10 +845,19 @@ internal fun PassphraseField(value: String, onValue: (String) -> Unit, label: St
 
 /**
  * The restore summary's Huddle friends (plan Q3.3), under the sections: a check box, and while it is ticked the passphrase
- * they were locked with; [wrong] after one that did not open them. Without it the rest restores and Huddle starts over.
+ * they were [locked] with, if they were; [wrong] after they did not come back (that passphrase did not open them).
+ * Unticked, the rest restores and Huddle starts over.
  */
 @Composable
-internal fun HuddleRestoreRow(checked: Boolean, passphrase: String, wrong: Boolean, enabled: Boolean, onCheck: (Boolean) -> Unit, onPassphrase: (String) -> Unit) {
+internal fun HuddleRestoreRow(
+    checked: Boolean,
+    passphrase: String,
+    wrong: Boolean,
+    locked: Boolean,
+    enabled: Boolean,
+    onCheck: (Boolean) -> Unit,
+    onPassphrase: (String) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -856,9 +867,9 @@ internal fun HuddleRestoreRow(checked: Boolean, passphrase: String, wrong: Boole
             LyrifyCheckbox(checked)
             Text(stringResource(R.string.huddle_restore_row), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
         }
+        if (checked && locked) PassphraseField(passphrase, onPassphrase, stringResource(R.string.huddle_passphrase_field), isError = wrong)
         if (checked) {
-            PassphraseField(passphrase, onPassphrase, stringResource(R.string.huddle_passphrase_field), isError = wrong)
-            if (wrong) Text(stringResource(R.string.huddle_restore_wrong), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+            if (wrong) Text(stringResource(if (locked) R.string.huddle_restore_wrong else R.string.huddle_restore_failed), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
             Fact(R.drawable.ic_info, stringResource(R.string.huddle_restore_one_phone))
         }
     }

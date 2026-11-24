@@ -108,7 +108,11 @@ fun BookmarksPage(onBack: () -> Unit) {
                                     SongCover(SongArt(cover.path, cover.mediaStoreId), size = 48.dp)
                                     Column(Modifier.weight(1f)) {
                                         Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                        line?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            line?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)) }
+                                            // A song's length at the line's end; a book's is not one song's.
+                                            group.song?.let { SongLength(it.durationMs) }
+                                        }
                                     }
                                 }
                                 Column(Modifier.padding(start = 4.dp, end = 4.dp, bottom = 8.dp)) {

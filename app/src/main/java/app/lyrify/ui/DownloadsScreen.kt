@@ -443,7 +443,7 @@ private fun LazyListScope.downloadsList(ui: DownloadsUi, onOpen: (DownloadItem) 
     }
 }
 
-/** One download: its kind, title and where it is (a bar while it downloads); Cancel while it is under way. */
+/** One download: its kind, title, where it is and its length (a bar while it downloads); Cancel while it is under way. */
 @Composable
 private fun DownloadRow(item: DownloadItem, progress: DlProgress?, first: Boolean, onOpen: () -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
@@ -458,7 +458,10 @@ private fun DownloadRow(item: DownloadItem, progress: DlProgress?, first: Boolea
         onClick = onOpen,
         supporting = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(rowLine(context, item, progress), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(rowLine(context, item, progress), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    SongLength(item.durationSec * 1_000L, Modifier.padding(start = 8.dp))
+                }
                 if (item.state == DownloadState.Running) Bar(progress?.percent?.div(100f))
             }
         },
@@ -722,7 +725,7 @@ private fun QualitySheet(@StringRes title: Int, @StringRes sentence: Int, select
 
 /**
  * One choice of a sheet: its label, its line, and a check when it is the one set, else its [icon] (what a tap does); a
- * search's video has its thumbnail first ([leading]).
+ * search's video has its thumbnail first ([leading]) and its length at the end of its line ([lengthMs]).
  */
 @Composable
 private fun ChoiceLine(
@@ -731,6 +734,7 @@ private fun ChoiceLine(
     selected: Boolean,
     @DrawableRes icon: Int? = null,
     leading: (@Composable () -> Unit)? = null,
+    lengthMs: Long = 0,
     onClick: () -> Unit,
 ) {
     LyrifyCard(Modifier.fillMaxWidth(), color = if (selected) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainerLow, onClick = onClick) {
@@ -738,7 +742,10 @@ private fun ChoiceLine(
             leading?.invoke()
             Column(Modifier.weight(1f)) {
                 Text(label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (detail.isNotEmpty()) Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (detail.isNotBlank()) Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    SongLength(lengthMs)
+                }
             }
             if (selected) {
                 Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = LocalBrandColors.current.highlight, modifier = Modifier.size(20.dp))
@@ -1058,13 +1065,13 @@ private fun SearchFound(search: YouTubeSearch, onPick: (DlSearchResult) -> Unit)
     }
     line?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     found.orEmpty().forEach { result ->
-        val length = result.durationSec.takeIf { it > 0 }?.let { DateUtils.formatElapsedTime(it.toLong()) }
         ChoiceLine(
             result.title,
-            listOfNotNull(result.channel.ifBlank { null }, length).joinToString(" · "),
+            result.channel,
             selected = false,
             icon = R.drawable.ic_download,
             leading = { Thumbnail(result.thumbnail, 56.dp, R.drawable.ic_movie) },
+            lengthMs = result.durationSec * 1_000L,
         ) { onPick(result) }
     }
 }
@@ -1077,7 +1084,7 @@ private fun LinkHead(info: DlInfo?, url: String) {
         Column(Modifier.weight(1f)) {
             Text(info?.title?.ifBlank { null } ?: url, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
             info?.artist?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1) }
-            info?.durationSec?.takeIf { it > 0 }?.let { Text(DateUtils.formatElapsedTime(it.toLong()), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            info?.let { SongLength(it.durationSec * 1_000L) }
         }
     }
     Spacer(Modifier.height(4.dp))

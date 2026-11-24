@@ -14,6 +14,7 @@ import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,15 +54,18 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.VectorPath
 import androidx.compose.ui.graphics.vector.toPath
@@ -99,14 +103,19 @@ import coil3.compose.AsyncImage
 /** A friend's colour, the same on every screen and every start: from their id, KJB's own random one. */
 fun friendColor(id: String): Color = FriendColors[Math.floorMod(id.hashCode(), FriendColors.size)]
 
-/** How a face is ringed: playing now (a turning, glowing ring), not right now (a quiet one), or not at all. */
-enum class FaceRing { LIVE, IDLE, NONE }
+/**
+ * How a face is ringed: playing now (a turning, glowing ring), not right now (a quiet one), away (the quiet one, the face
+ * greyed through: the friends row's "disconnected" face, user 2026-11-23), or not at all.
+ */
+enum class FaceRing { LIVE, IDLE, AWAY, NONE }
 
 /**
- * A face: the first letter of [name], white on [color]. [ring] LIVE turns a ring of the friend's colour, gold and coral
- * round it with a soft breathing glow, IDLE draws a quiet ring and greys the face a little; [gap] is the ground it sits
- * on, kept as a thin ring between face and ring. [playing] adds the moving bars at its foot, [mail] a small wiggling
- * badge at its top (a card not opened yet). Decorative: the name and what they play are words beside it.
+ * A face: the first letter of [name], white on [color], or a [cover] (the song a friend plays now) cut round in its place.
+ * [ring] LIVE turns a ring of the friend's colour, gold and coral round it with a soft breathing glow, IDLE draws a quiet
+ * ring and greys the face a little, AWAY greys it through, as light as its colour so the letter reads as well; [gap] is
+ * the ground it sits on, kept as a thin ring between face and ring. [playing] adds the moving bars at its foot, [paused]
+ * a still pause mark there, [mail] a small wiggling badge at its top (a card not opened yet), all sized for the friends
+ * row's 56 dp faces. Decorative: the name and what they play are words beside it.
  */
 @Composable
 internal fun FriendFace(
@@ -117,16 +126,23 @@ internal fun FriendFace(
     ring: FaceRing = FaceRing.NONE,
     gap: Color = MaterialTheme.colorScheme.background,
     playing: Boolean = false,
+    paused: Boolean = false,
     mail: Boolean = false,
+    cover: ImageBitmap? = null,
 ) {
-    // Not right now: the colour a little greyed, toward the mean of its channels.
+    // Not right now: the colour a little greyed, toward the mean of its channels. Away: a grey of the colour's own
+    // luminance, so lilac keeps the colour's contrast on it.
     val mean = (color.red + color.green + color.blue) / 3
-    val ground = if (ring == FaceRing.IDLE) lerp(color, Color(mean, mean, mean), IDLE_GREY) else color
+    val ground = when (ring) {
+        FaceRing.IDLE -> lerp(color, Color(mean, mean, mean), IDLE_GREY)
+        FaceRing.AWAY -> color.luminance().let { Color(it, it, it, colorSpace = ColorSpaces.LinearSrgb).convert(ColorSpaces.Srgb) }
+        else -> color
+    }
     val letter = with(LocalDensity.current) { (size * INITIAL_SHARE).toSp() }
     Box(modifier.size(size).clearAndSetSemantics {}) {
         when (ring) {
             FaceRing.LIVE -> LiveRing(color)
-            FaceRing.IDLE -> Box(Modifier.matchParentSize().border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))
+            FaceRing.IDLE, FaceRing.AWAY -> Box(Modifier.matchParentSize().border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))
             FaceRing.NONE -> Unit
         }
         Box(
@@ -139,14 +155,18 @@ internal fun FriendFace(
                     drawCircle(Brush.radialGradient(listOf(lerp(ground, BrandLilac, 0.3f), ground), Offset(this.size.width * 0.32f, this.size.height * 0.26f), this.size.width * 0.64f))
                 },
         ) {
-            Text(
-                name.trim().takeIf(String::isNotEmpty)?.let { String(Character.toChars(it.codePointAt(0))).uppercase() }.orEmpty(),
-                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = letter, lineHeight = letter),
-                color = BrandLilac,
-                maxLines = 1,
-            )
+            if (cover != null) {
+                Image(cover, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize().clip(CircleShape))
+            } else {
+                Text(
+                    name.trim().takeIf(String::isNotEmpty)?.let { String(Character.toChars(it.codePointAt(0))).uppercase() }.orEmpty(),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = letter, lineHeight = letter),
+                    color = BrandLilac,
+                    maxLines = 1,
+                )
+            }
         }
-        if (playing) {
+        if (playing || paused) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
@@ -154,8 +174,10 @@ internal fun FriendFace(
                     .offset(3.dp, 3.dp)
                     .size(24.dp)
                     .drawBehind { drawCircle(gap, radius = this.size.minDimension / 2 + 2.dp.toPx()) }
-                    .background(lerp(color, BrandBlack, 0.18f), CircleShape),
-            ) { Equaliser(BrandLilac, Modifier.size(12.dp, 10.dp)) }
+                    .background(lerp(ground, BrandBlack, 0.18f), CircleShape),
+            ) {
+                if (playing) Equaliser(BrandLilac, Modifier.size(12.dp, 10.dp)) else Icon(painterResource(R.drawable.ic_pause_fill), contentDescription = null, tint = BrandLilac, modifier = Modifier.size(13.dp))
+            }
         }
         if (mail) MailBadge(gap, Modifier.align(Alignment.TopEnd).offset(6.dp, (-4).dp))
     }
@@ -438,7 +460,7 @@ internal fun HaveChip(match: Match?, modifier: Modifier = Modifier, some: Pair<I
 
 /**
  * A friend playing now, as a big card (Listening now): their song glowing behind, their face with its live ring, "Playing
- * now" with the bars, the song's cover ([song]: yours, else their colour's pattern), title and artist, then Play along
+ * now" with the bars, the song's cover ([song]: yours, else their colour's pattern), title, artist and length, then Play along
  * and Send. Paused, the face is still with a quiet ring, "Paused" without the bars, and Play it in place of Play along.
  * The card's ground is dark in either theme.
  */
@@ -453,9 +475,10 @@ internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlon
         DarkGround {
             Column(Modifier.padding(start = 14.dp, top = 12.dp, end = 8.dp, bottom = 14.dp)) {
                 val playing = stringResource(if (friend.paused) R.string.huddle_paused else R.string.huddle_playing_now)
+                val length = lengthWords(play.song.durationMs)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     FriendFace(name, color, 44.dp, ring = if (friend.paused) FaceRing.IDLE else FaceRing.LIVE, gap = HuddleCardGround)
-                    Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = listOf(name, playing, songBy(resources, play.song)).joinToString(", ") }) {
+                    Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = listOfNotNull(name, playing, songBy(resources, play.song), length.ifEmpty { null }).joinToString(", ") }) {
                         Text(name, style = CardName, color = BrandLilac, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             if (!friend.paused) Equaliser(BrandLilac.copy(alpha = 0.85f), Modifier.size(15.dp, 12.dp))
@@ -468,7 +491,10 @@ internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlon
                     FriendArt(song, color, 76.dp, RoundedCornerShape(18.dp))
                     Column(Modifier.weight(1f)) {
                         Text(play.song.title, style = CardTitle, color = BrandLilac, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        play.song.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = BrandLilac.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            play.song.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = BrandLilac.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)) }
+                            SongLength(play.song.durationMs, color = BrandLilac.copy(alpha = 0.85f))
+                        }
                     }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp, end = 6.dp)) {
@@ -488,10 +514,10 @@ internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlon
 
 /**
  * A card a friend sent, as a postcard (Sent to you): their note in big type, the song's cover as the stamp (yours, else
- * their colour's pattern), then [from]'s face and who sent it ([line]: "From Wren", "From you"), the song, whether you
- * have it ([have], or [some] of a list; a card you sent that never got there, [undelivered], says so there instead) and a
- * play button. Tilted a little, [tilt] degrees. A tap opens the card; the play button plays it (or opens it, when it is
- * not here).
+ * their colour's pattern), then [from]'s face and who sent it ([line]: "From Wren", "From you"), the song (and under it
+ * its length, [lengthMs], on a song's card), whether you have it ([have], or [some] of a list; a card you sent that
+ * never got there, [undelivered], says so there instead) and a play button. Tilted a little, [tilt] degrees. A tap
+ * opens the card; the play button plays it (or opens it, when it is not here).
  */
 @Composable
 internal fun Postcard(
@@ -508,6 +534,7 @@ internal fun Postcard(
     onOpen: () -> Unit,
     onPlay: () -> Unit,
     undelivered: Boolean = false,
+    lengthMs: Long = 0,
 ) {
     val paper = if (LocalDarkTheme.current) DarkPaper else LightPaper
     val colors = MaterialTheme.colorScheme
@@ -565,6 +592,7 @@ internal fun Postcard(
                     if (fresh) NewMark()
                 }
                 Text(title, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                SongLength(lengthMs)
                 if (undelivered) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 2.dp)) {
                         Icon(painterResource(R.drawable.ic_error), contentDescription = null, tint = colors.error, modifier = Modifier.size(14.dp))
@@ -613,6 +641,7 @@ internal fun KeptPostcard(kept: KeptCard, name: String, color: Color, matcher: S
         onOpen = onOpen,
         onPlay = onPlay,
         undelivered = (kept as? Sent)?.delivered == false,
+        lengthMs = if (card.kind == CardKind.SONG) card.songs.first().durationMs else 0,
     )
 }
 

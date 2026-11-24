@@ -187,12 +187,17 @@ private fun SongSheetHeader(song: Song, title: String, artists: List<String>, on
             ArtistLink(artists, onArtist) { go -> LinkText(song.artist ?: stringResource(R.string.check_no_artist), go) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LinkText(song.album ?: stringResource(R.string.lib_unknown_album), onAlbum, Modifier.weight(1f, fill = false))
-                Text(
-                    stringResource(R.string.lib_after_dot, songLength(song.durationMs)),
-                    style = MaterialTheme.typography.bodyMedium.tabular(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                )
+                // As the rows write it, said in words to TalkBack; nothing for a length unknown.
+                rowLength(song.durationMs)?.let { length ->
+                    val words = lengthWords(song.durationMs)
+                    Text(
+                        stringResource(R.string.lib_after_dot, length),
+                        style = MaterialTheme.typography.bodyMedium.tabular(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        modifier = Modifier.semantics { contentDescription = words },
+                    )
+                }
             }
         }
     }
@@ -404,7 +409,7 @@ internal fun SongInfoSheet(song: Song, ui: LibraryUi, onDismiss: () -> Unit) {
         song.albumArtist?.let { InfoRow(R.drawable.ic_person, R.string.lib_info_album_artist, it) }
         song.genre?.let { InfoRow(R.drawable.ic_category, R.string.lib_info_genre, it) }
         song.track?.let { InfoRow(R.drawable.ic_queue_music, R.string.lib_info_track, listOfNotNull(it.toString(), song.disc?.let { disc -> stringResource(R.string.lib_disc, disc) }).joinToString(" · ")) }
-        InfoRow(R.drawable.ic_schedule, R.string.lib_info_length, songLength(song.durationMs))
+        rowLength(song.durationMs)?.let { InfoRow(R.drawable.ic_schedule, R.string.lib_info_length, it, words = lengthWords(song.durationMs)) }
         InfoRow(R.drawable.ic_folder_open, R.string.lib_info_file, song.folder + song.fileName, middleEllipsis = true)
         InfoRow(R.drawable.ic_graphic_eq, R.string.lib_info_format, format)
         plays?.let {
@@ -416,9 +421,9 @@ internal fun SongInfoSheet(song: Song, ui: LibraryUi, onDismiss: () -> Unit) {
     }
 }
 
-/** One fact of Song info: its icon, what it is, and its value; one TalkBack stop. */
+/** One fact of Song info: its icon, what it is, and its value (said as [words] when given); one TalkBack stop. */
 @Composable
-private fun InfoRow(@DrawableRes icon: Int, @StringRes label: Int, value: String, middleEllipsis: Boolean = false) {
+private fun InfoRow(@DrawableRes icon: Int, @StringRes label: Int, value: String, middleEllipsis: Boolean = false, words: String? = null) {
     val colors = MaterialTheme.colorScheme
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -433,6 +438,7 @@ private fun InfoRow(@DrawableRes icon: Int, @StringRes label: Int, value: String
                 style = MaterialTheme.typography.bodyLarge,
                 maxLines = if (middleEllipsis) 1 else 2,
                 overflow = if (middleEllipsis) TextOverflow.MiddleEllipsis else TextOverflow.Ellipsis,
+                modifier = Modifier.semantics { words?.let { contentDescription = it } },
             )
         }
     }

@@ -51,6 +51,8 @@ class BackupScreensTest {
                 RestoreRow(Section.BOOKS, 2, null),
                 // Time in books: no count, which would be of listening sessions.
                 RestoreRow(Section.BOOK_PLAYS, null, null),
+                // Downloads: those saved and not saved; the one waiting never goes in.
+                RestoreRow(Section.DOWNLOADS, 2, null),
             ),
             restoreRows(BackupFixtures.contents()),
         )
@@ -74,6 +76,8 @@ class BackupScreensTest {
         assertEquals("Couldn't read this backup", strings()["backup_unreadable"])
         assertEquals("Lyrics choices", strings()["restore_section_lyrics"])
         assertTrue(strings()["restore_undo"]?.contains("Undo history") == true)
+        // Downloads' settings replace the phone's too; the downloads themselves are added.
+        assertTrue(strings()["restore_merge"]?.startsWith("Settings, Downloads' settings, Repeat and the equalizer replace yours. Everything else is added") == true)
         assertFalse(FILE.readText().contains('\u2014'))
         assertFalse(File("src/main/java/app/lyrify/ui/BackupScreens.kt").readText().contains('\u2014'))
     }
@@ -118,6 +122,34 @@ class BackupScreensTest {
         Section.entries.forEach { assertTrue(it.key, strings().containsKey("restore_section_${it.key}")) }
         assertEquals(Section.entries.size, Section.entries.map(::sectionLabel).distinct().size)
         assertEquals("Books", strings()["restore_section_books"])
+    }
+
+    @Test
+    fun `Huddle's friends restore with no passphrase when the backup holds them plain, and the passphrase row says what it locks`() {
+        val screens = File("src/main/java/app/lyrify/ui/BackupScreens.kt").readText()
+        val huddle = File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText()
+        // The passphrase field only for friends locked with one; a plain part restores as it is, and says so if it cannot.
+        // Whether it is locked is read with the backup, off the main thread: the part may be megabytes.
+        assertTrue(screens.contains("withContext(Dispatchers.Default) { read.contents.huddle?.let(HuddleBackup::locked) == true }"))
+        assertFalse(screens.contains("remember(contents) { contents.huddle?.let(HuddleBackup::locked)"))
+        assertTrue(screens.contains("locked = sheet.locked,"))
+        assertTrue(huddle.contains("if (checked && locked) PassphraseField("))
+        assertTrue(huddle.contains("if (wrong) Text(stringResource(if (locked) R.string.huddle_restore_wrong else R.string.huddle_restore_failed)"))
+        // Huddle is always in backups: the row is the passphrase's, and says what it locks.
+        assertTrue(huddle.contains("MenuRow(stringResource(R.string.huddle_passphrase_title), R.drawable.ic_lock, detail = stringResource(if (state.backupKey != null) R.string.huddle_backup_on else R.string.huddle_backup_off)"))
+        val texts = Regex("""<string name="([^"]+)">([^<]*)</string>""").findAll(File("src/main/res/values/strings_huddle.xml").readText())
+            .associate { it.groupValues[1] to it.groupValues[2].replace("\\'", "'") }
+        assertFalse(texts.containsKey("huddle_backup"))
+        assertEquals("On. Backups lock your friends and keys", texts["huddle_backup_on"])
+        // Plainly what it does: it locks them; without it, the file holds them readable.
+        assertEquals("Off. Anyone with your backup file can read your friends and keys", texts["huddle_backup_off"])
+        assertEquals(
+            "Locks your friends and their keys in your backups. Without one, anyone with the backup file can read them. You need it to bring them back on a new phone. KJB can't show it to you again.",
+            texts["huddle_passphrase_text"],
+        )
+        assertEquals("Your backups now lock your friends", texts["huddle_passphrase_saved"])
+        assertEquals("Couldn't bring back your Huddle friends. Try again, or untick Huddle friends.", texts["huddle_restore_failed"])
+        assertFalse(texts.values.any { it.contains('\u2014') })
     }
 
     private fun strings(): Map<String, String> =

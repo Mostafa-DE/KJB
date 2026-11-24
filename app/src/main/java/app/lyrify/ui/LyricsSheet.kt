@@ -128,9 +128,6 @@ fun RemoveLyricsDialog(removal: RemovalState) {
 @Composable
 fun artistOf(entry: LedgerEntry): String = entry.artist?.takeIf { TrackNames.cleanArtist(it) != null } ?: stringResource(R.string.check_no_artist)
 
-/** A length as "3:26". */
-fun songLength(ms: Long): String = DateUtils.formatElapsedTime(ms / MS_PER_SECOND)
-
 /**
  * A song's lyrics: the head, the status pill and its sentence, three facts, and the actions that fit pinned under them:
  * Make synced (plain lyrics) or Edit timing (synced lyrics), Remove lyrics, Pick lyrics, Retry now. [song] is the
@@ -203,7 +200,7 @@ fun LyricsSheet(entry: LedgerEntry?, song: Song?, onPickLyrics: () -> Unit, onDi
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                val length = songLength(song?.durationMs ?: entry?.durationMs ?: 0)
+                val length = clock(song?.durationMs ?: entry?.durationMs ?: 0)
                 Text(
                     (song?.album ?: entry?.album)?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.song_album_length, it, length) } ?: length,
                     style = MaterialTheme.typography.bodyMedium,
@@ -239,5 +236,3 @@ fun LyricsSheet(entry: LedgerEntry?, song: Song?, onPickLyrics: () -> Unit, onDi
 /** "14 hours ago", "in 4 weeks". */
 private fun relative(time: Long, now: Long): String =
     DateUtils.getRelativeTimeSpanString(time, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString()
-
-private const val MS_PER_SECOND: Long = 1_000

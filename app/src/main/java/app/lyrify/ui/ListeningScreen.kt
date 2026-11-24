@@ -381,7 +381,7 @@ private fun TopHead(title: String, count: Int) {
 internal fun TopRow(top: Top<*>, rank: Int, settings: Settings, onOpen: (Page) -> Unit, onSong: (SongRef) -> Unit) {
     val time = listenedText(top.heardMs)
     when (val item = top.item) {
-        is Song -> TopRowView(rank, displayTitle(item, settings.library), lineOf(item.artist, time), top.plays, SongArt(item.path), MaterialTheme.shapes.small, stringResource(R.string.stats_song_options)) {
+        is Song -> TopRowView(rank, displayTitle(item, settings.library), lineOf(item.artist, time), top.plays, SongArt(item.path), MaterialTheme.shapes.small, stringResource(R.string.stats_song_options), lengthMs = item.durationMs) {
             onSong(item.ref)
         }
         is Artist -> TopRowView(rank, item.name, time, top.plays, item.songs.firstOrNull()?.let { SongArt(it.path) }, CircleShape, stringResource(R.string.stats_open_artist)) {
@@ -398,15 +398,19 @@ internal fun TopRow(top: Top<*>, rank: Int, settings: Settings, onOpen: (Page) -
 
 /**
  * One TalkBack stop: "1. Name, 12 plays", or without a [rank] (Insights' nudges) "Name, 12 plays", or "Name, its line"
- * without [plays] either; the cover is decorative.
+ * without [plays] either; the cover is decorative. A song's row ends its line with the song's length ([lengthMs]), which
+ * TalkBack says last.
  */
 @Composable
-internal fun TopRowView(rank: Int?, title: String, line: String, plays: Int?, cover: Any?, shape: Shape, openLabel: String?, onClick: (() -> Unit)?) {
-    val description = if (rank != null) {
-        stringResource(R.string.stats_row, rank, title, playsNote(plays ?: 0))
-    } else {
-        stringResource(R.string.insights_row, title, plays?.let { playsNote(it) } ?: line)
-    }
+internal fun TopRowView(rank: Int?, title: String, line: String, plays: Int?, cover: Any?, shape: Shape, openLabel: String?, lengthMs: Long = 0, onClick: (() -> Unit)?) {
+    val description = listOfNotNull(
+        if (rank != null) {
+            stringResource(R.string.stats_row, rank, title, playsNote(plays ?: 0))
+        } else {
+            stringResource(R.string.insights_row, title, plays?.let { playsNote(it) } ?: line)
+        },
+        lengthWords(lengthMs).ifEmpty { null },
+    ).joinToString(", ")
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -423,7 +427,10 @@ internal fun TopRowView(rank: Int?, title: String, line: String, plays: Int?, co
         SongCover(cover, shape = shape)
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                SongLength(lengthMs, Modifier.padding(start = 8.dp))
+            }
         }
         if (plays != null) Text(formatCount(plays), style = MaterialTheme.typography.labelLarge.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
     }

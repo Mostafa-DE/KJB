@@ -323,10 +323,12 @@ private fun PlaysPage(friendId: String, onBack: () -> Unit) {
                         NavRow(
                             title = play.song.title,
                             sub = listOfNotNull(play.song.artist, time).joinToString(" · "),
+                            lengthMs = play.song.durationMs,
                             description = listOfNotNull(
                                 play.song.title,
                                 play.song.artist,
                                 time,
+                                lengthWords(play.song.durationMs).ifEmpty { null },
                                 stringResource(R.string.huddle_their_favourite, name).takeIf { play.favourite },
                                 when (match) {
                                     is Match.Maybe -> stringResource(R.string.huddle_maybe)
