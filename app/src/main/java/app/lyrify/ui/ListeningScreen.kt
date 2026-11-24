@@ -46,6 +46,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -398,8 +399,8 @@ internal fun TopRow(top: Top<*>, rank: Int, settings: Settings, onOpen: (Page) -
 }
 
 /**
- * One TalkBack stop: "1. Name, 12 plays"; the cover is decorative. A song's row ends its line with the song's length
- * ([lengthMs]), which TalkBack says last.
+ * One TalkBack stop: "1. Name, 12 plays", its content cleared (as NavRow's) so nothing is said twice; the cover is
+ * decorative. A song's row ends its line with the song's length ([lengthMs]), which TalkBack says last.
  */
 @Composable
 internal fun TopRowView(rank: Int, title: String, line: String, plays: Int, cover: Any?, shape: Shape, openLabel: String, lengthMs: Long = 0, onClick: () -> Unit) {
@@ -418,14 +419,14 @@ internal fun TopRowView(rank: Int, title: String, line: String, plays: Int, cove
             .padding(horizontal = 8.dp, vertical = 8.dp),
     ) {
         SongCover(cover, shape = shape)
-        Column(Modifier.weight(1f)) {
+        Column(Modifier.weight(1f).clearAndSetSemantics {}) {
             Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                 SongLength(lengthMs, Modifier.padding(start = 8.dp))
             }
         }
-        Text(formatCount(plays), style = MaterialTheme.typography.labelLarge.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
+        Text(formatCount(plays), style = MaterialTheme.typography.labelLarge.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp).clearAndSetSemantics {})
     }
 }
 

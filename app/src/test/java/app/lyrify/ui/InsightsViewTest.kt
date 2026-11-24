@@ -365,6 +365,16 @@ class InsightsViewTest {
         ends(tops, "first.top.item.artist?.let { Text(it, ", "SongLength(first.top.item.durationMs)")
         ends(tops, "Text(listOfNotNull(song.artist?.takeIf { it.isNotBlank() }, listenedText(row.top.heardMs)).joinToString(\" · \"), ", "SongLength(song.durationMs, Modifier.padding(start = 8.dp))")
         assertTrue(tops.contains("lengthWords(song.durationMs).ifEmpty { null }"))
+        // Grok review: a merging row's own words come first and its content is read after them, so a row with words of
+        // its own clears its content (as NavRow does) and says the length once. Top songs' rows and the top lists' rows.
+        val songs = tops.substringAfter("internal fun TopSongs(").substringBefore("\n}\n")
+        listOf(
+            "Text(place.toString(), style = RankStyle, color = colors.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.width(22.dp).clearAndSetSemantics {})",
+            "Column(Modifier.weight(1f).clearAndSetSemantics {})",
+            "Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(CountColumn).clearAndSetSemantics {})",
+        ).forEach { assertTrue(it, songs.contains(it)) }
+        val top = File(ui, "ListeningScreen.kt").readText().substringAfter("internal fun TopRowView(").substringBefore("\n}\n")
+        listOf("Column(Modifier.weight(1f).clearAndSetSemantics {})", "modifier = Modifier.padding(end = 8.dp).clearAndSetSemantics {})").forEach { assertTrue(it, top.contains(it)) }
         ends(tops, "Text(stringResource(R.string.insights_most_skipped_line, skipped.early, skipped.plays), ", "SongLength(skipped.song.durationMs, Modifier.padding(start = 8.dp))")
         val you = File(ui, "InsightsYou.kt").readText()
         // Back again's songs after their quiet days (below them when a narrow tile has no room for both), and the song a

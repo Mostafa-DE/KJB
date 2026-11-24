@@ -257,9 +257,10 @@ internal fun TopSongs(card: TopCard<Song>, settings: Settings, onOpen: (Page) ->
                         .semantics(mergeDescendants = true) { contentDescription = rowDescription }
                         .heightIn(min = 56.dp),
                 ) {
-                    Text(place.toString(), style = RankStyle, color = colors.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.width(22.dp))
+                    // One stop: the row's words only, its content cleared (as NavRow's), so nothing is said twice.
+                    Text(place.toString(), style = RankStyle, color = colors.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.width(22.dp).clearAndSetSemantics {})
                     SongCover(SongArt(song.path, song.ref.mediaStoreId), size = 44.dp, shape = RoundedCornerShape(10.dp))
-                    Column(Modifier.weight(1f)) {
+                    Column(Modifier.weight(1f).clearAndSetSemantics {}) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(title, style = RowTitle, color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             PlaceChange(place, row.before, card.compared)
@@ -269,7 +270,7 @@ internal fun TopSongs(card: TopCard<Song>, settings: Settings, onOpen: (Page) ->
                             SongLength(song.durationMs, Modifier.padding(start = 8.dp))
                         }
                     }
-                    Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(CountColumn)) {
+                    Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(CountColumn).clearAndSetSemantics {}) {
                         Text(formatCount(row.top.plays), style = CountStyle, color = colors.onSurface)
                         Text(pluralStringResource(R.plurals.insights_plays_word, row.top.plays), style = FigureLabel.copy(fontSize = 11.5.sp), color = colors.onSurfaceVariant)
                         val share = row.top.plays.toFloat() / first.top.plays.coerceAtLeast(1)
