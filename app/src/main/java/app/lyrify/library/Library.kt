@@ -15,6 +15,7 @@ import app.lyrify.settings.SortSongs
 import app.lyrify.stats.SongPlays
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
+import java.text.CollationKey
 import java.text.Collator
 import java.text.Normalizer
 
@@ -435,17 +436,58 @@ fun nameLetter(name: String): String {
 /**
  * The A to Z order of names, by their [nameLetter] headings so a heading never shows twice: "#" first, then Latin
  * letters, then other scripts' (Arabic after Z), each heading in [collator]'s order; under one heading by [collator]
- * from the first letter or digit, then by the whole name, so names alike past their punctuation never mix.
+ * from the first letter or digit ([compareNatural]), then by the whole name, so names alike past their punctuation never
+ * mix. Each name's keys ([NameKey]) are made on its first comparison and kept by this order, so a sort, which compares
+ * each name some 2 log n times, does no regex, accent or collation work inside a comparison (PW1). One order per sort,
+ * on one thread, as its [collator].
  */
-fun nameOrder(collator: Collator): Comparator<String> = Comparator { a, b ->
-    val letterA = nameLetter(a)
-    val letterB = nameLetter(b)
-    headingRank(letterA).compareTo(headingRank(letterB)).takeIf { it != 0 }
-        ?: collator.compare(letterA, letterB).takeIf { it != 0 }
-        ?: letterA.compareTo(letterB).takeIf { it != 0 }
-        ?: compareNatural(collator, fromFirstLetter(a), fromFirstLetter(b)).takeIf { it != 0 }
-        ?: collator.compare(a, b).takeIf { it != 0 }
-        ?: a.compareTo(b)
+fun nameOrder(collator: Collator): Comparator<String> {
+    val keys = HashMap<String, NameKey>()
+    return Comparator { a, b -> keys.getOrPut(a) { NameKey(a, collator) }.compareTo(keys.getOrPut(b) { NameKey(b, collator) }) }
+}
+
+/** [name]'s keys in [nameOrder], made once: its heading, its runs from the first letter or digit, its whole name's. */
+private class NameKey(private val name: String, collator: Collator) : Comparable<NameKey> {
+    private val letter = nameLetter(name)
+    private val rank = headingRank(letter)
+    private val letterKey = collator.getCollationKey(letter)
+    private val runs = runsOf(fromFirstLetter(name), collator)
+    private val nameKey = collator.getCollationKey(name)
+
+    override fun compareTo(other: NameKey): Int = rank.compareTo(other.rank).takeIf { it != 0 }
+        ?: letterKey.compareTo(other.letterKey).takeIf { it != 0 }
+        ?: letter.compareTo(other.letter).takeIf { it != 0 }
+        ?: compareRuns(runs, other.runs).takeIf { it != 0 }
+        ?: nameKey.compareTo(other.nameKey).takeIf { it != 0 }
+        ?: name.compareTo(other.name)
+}
+
+/** A run of [compareNatural]'s, of digits or of anything else, with its collation key. */
+private class Run(val text: String, val digits: Boolean, val key: CollationKey)
+
+/** [text]'s runs, as [compareNatural] walks them. */
+private fun runsOf(text: String, collator: Collator): List<Run> {
+    val runs = ArrayList<Run>()
+    var at = 0
+    while (at < text.length) {
+        val digits = Character.isDigit(text[at])
+        val end = runEnd(text, at, digits)
+        val run = text.substring(at, end)
+        runs += Run(run, digits, collator.getCollationKey(run))
+        at = end
+    }
+    return runs
+}
+
+/** [compareNatural]'s order of two names' runs: two runs of digits by their value ([compareNumbers]), else by their keys. */
+private fun compareRuns(a: List<Run>, b: List<Run>): Int {
+    for (k in 0 until minOf(a.size, b.size)) {
+        val x = a[k]
+        val y = b[k]
+        val order = if (x.digits && y.digits) compareNumbers(x.text, 0, x.text.length, y.text, 0, y.text.length) else x.key.compareTo(y.key)
+        if (order != 0) return order
+    }
+    return a.size.compareTo(b.size)
 }
 
 /** [collator]'s order with numbers by their value ([compareNatural]): "CD 2" before "CD 10". */
