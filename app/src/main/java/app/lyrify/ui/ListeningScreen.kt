@@ -398,20 +398,12 @@ internal fun TopRow(top: Top<*>, rank: Int, settings: Settings, onOpen: (Page) -
 }
 
 /**
- * One TalkBack stop: "1. Name, 12 plays", or without a [rank] (Insights' nudges) "Name, 12 plays", or "Name, its line"
- * without [plays] either; the cover is decorative. A song's row ends its line with the song's length ([lengthMs]), which
- * TalkBack says last.
+ * One TalkBack stop: "1. Name, 12 plays"; the cover is decorative. A song's row ends its line with the song's length
+ * ([lengthMs]), which TalkBack says last.
  */
 @Composable
-internal fun TopRowView(rank: Int?, title: String, line: String, plays: Int?, cover: Any?, shape: Shape, openLabel: String?, lengthMs: Long = 0, onClick: (() -> Unit)?) {
-    val description = listOfNotNull(
-        if (rank != null) {
-            stringResource(R.string.stats_row, rank, title, playsNote(plays ?: 0))
-        } else {
-            stringResource(R.string.insights_row, title, plays?.let { playsNote(it) } ?: line)
-        },
-        lengthWords(lengthMs).ifEmpty { null },
-    ).joinToString(", ")
+internal fun TopRowView(rank: Int, title: String, line: String, plays: Int, cover: Any?, shape: Shape, openLabel: String, lengthMs: Long = 0, onClick: () -> Unit) {
+    val description = listOfNotNull(stringResource(R.string.stats_row, rank, title, playsNote(plays)), lengthWords(lengthMs).ifEmpty { null }).joinToString(", ")
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -420,7 +412,7 @@ internal fun TopRowView(rank: Int?, title: String, line: String, plays: Int?, co
             // The press tints a pill inside the gutter, not a band across the screen.
             .padding(horizontal = 8.dp)
             .clip(RoundedCornerShape(16.dp))
-            .then(if (onClick != null) Modifier.clickable(onClickLabel = openLabel, onClick = onClick) else Modifier)
+            .clickable(onClickLabel = openLabel, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = description }
             .heightIn(min = 64.dp)
             .padding(horizontal = 8.dp, vertical = 8.dp),
@@ -433,7 +425,7 @@ internal fun TopRowView(rank: Int?, title: String, line: String, plays: Int?, co
                 SongLength(lengthMs, Modifier.padding(start = 8.dp))
             }
         }
-        if (plays != null) Text(formatCount(plays), style = MaterialTheme.typography.labelLarge.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
+        Text(formatCount(plays), style = MaterialTheme.typography.labelLarge.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 8.dp))
     }
 }
 

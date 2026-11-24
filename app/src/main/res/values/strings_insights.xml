@@ -22,8 +22,6 @@
     <string name="insights_top_genres">Top genres</string>
     <string name="insights_open_genre">Open genre</string>
     <string name="insights_open">Open Insights</string>
-    <!-- A row without a rank, for TalkBack: its name, then its line. -->
-    <string name="insights_row">%1$s, %2$s</string>
 
     <!-- "40%". -->
     <string name="insights_percent">%1$s%%</string>

@@ -314,6 +314,9 @@ class InsightsViewTest {
         listOf(forYou, File(ui, "InsightsTops.kt").readText()).forEach { assertTrue(Regex("""RoundButton\(\s*R\.drawable\.ic_play_arrow_fill""").containsMatchIn(it)) }
         // The cards name a period with the words the top list already uses.
         assertTrue(File(ui, "InsightsCards.kt").readText().contains("else -> stringResource(period.kind.named)"))
+        // Insights' nudge rows are gone, so a top row always has its place, its plays and its tap: no branch for none.
+        assertTrue(File(ui, "ListeningScreen.kt").readText().contains("internal fun TopRowView(rank: Int, title: String, line: String, plays: Int, cover: Any?, shape: Shape, openLabel: String, lengthMs: Long = 0, onClick: () -> Unit)"))
+        assertFalse(File("src/main/res/values/strings_insights.xml").readText().contains("name=\"insights_row\""))
     }
 
     @Test
