@@ -126,7 +126,7 @@ data class QueueBook(
      * A tap on [songs]`[start]` in a list from [source]: inside the current queue when it came from that place and the
      * place still shows the list it was made from ([Queue.madeFrom]), and it is not saved (songs added with Play next
      * stay; a song of the list taken out of the queue goes back in at its place). Else a new queue from the list as shown,
-     * starting at the tapped song. The old one is kept in Recent, where a queue from the same place replaces it (one
+     * starting at the tapped song (an album's wraps round from it, [made]). The old one is kept in Recent, where a queue from the same place replaces it (one
      * recent queue per place), or in Saved at its place: a saved queue is kept for later, so a tap never moves it.
      */
     fun play(songs: List<SongRef>, start: Int, source: QueueSource, now: Long): Switched {
@@ -485,11 +485,18 @@ data class QueueBook(
         return book.switchTo(queue.id, fresh = true, now)
     }
 
-    /** A new queue of [songs] (each song once, the first of its copies kept), current at [startPath]'s song. */
+    /**
+     * A new queue of [songs] (each song once, the first of its copies kept), current at [startPath]'s song. An album
+     * starts at that song instead: the album's songs after it, then round to those before it (user 2026-11-24).
+     */
     private fun made(source: QueueSource, songs: List<SongRef>, startPath: String?, now: Long, shuffle: Random?): Pair<QueueBook, Queue> {
         val unique = songs.distinctBy { it.path }
         val ordered = unique.mapIndexed { i, song -> QueueItem(nextUid + i, song, sourceIndex = i) }
-        val items = if (shuffle != null) ordered.shuffled(shuffle) else ordered
+        val items = when {
+            shuffle != null -> ordered.shuffled(shuffle)
+            source.kind == SourceKind.ALBUM && startPath != null -> ordered.indexOfFirst { it.song.path == startPath }.coerceAtLeast(0).let { ordered.drop(it) + ordered.take(it) }
+            else -> ordered
+        }
         val queue = Queue(
             id = "q$nextId",
             source = source,
@@ -629,13 +636,14 @@ fun queueNames(queues: List<Queue>, made: (Queue) -> String): Map<String, String
 /**
  * Whether the song at [index] of [queue] continues an album in track order: the queue came from an album, Shuffle is
  * off, the song came from the album's list, and so did the one before it, as its predecessor there (an album's first
- * song counts). A Play next song, a song added at the end, or one moved out of place breaks it. The one rule behind
- * volume levelling's Auto mode (album gain) and "Keep albums gapless" (no crossfade inside an album).
+ * song counts, and so does its first song right after its last, as an album tapped at a song wraps round). A Play next
+ * song, a song added at the end, or one moved out of place breaks it. The one rule behind volume levelling's Auto mode
+ * (album gain) and "Keep albums gapless" (no crossfade inside an album).
  */
 fun albumInOrder(queue: Queue, index: Int): Boolean {
     if (queue.source.kind != SourceKind.ALBUM || queue.shuffled) return false
     val item = queue.items.getOrNull(index) ?: return false
     val place = item.sourceIndex ?: return false
     val before = queue.items.getOrNull(index - 1) ?: return true
-    return before.sourceIndex == place - 1
+    return before.sourceIndex == place - 1 || (place == 0 && queue.listSize != null && before.sourceIndex == queue.listSize - 1)
 }

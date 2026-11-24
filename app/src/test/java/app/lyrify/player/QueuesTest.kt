@@ -18,6 +18,7 @@ class QueuesTest {
     private val album = (1..6).map { song("Harbour Glass $it") }
     private val folder = (1..4).map { song("Rips $it") }
     private val albumSource = QueueSource(SourceKind.ALBUM, "album:harbour", "Harbour Glass")
+    private val playlistSource = QueueSource(SourceKind.PLAYLIST, "playlist:harbour", "Harbour Glass")
     private val folderSource = QueueSource(SourceKind.FOLDER, "folder:Music/Rips", "Rips")
     private val picked = QueueSource(SourceKind.PICKED, "picked", "")
 
@@ -25,14 +26,15 @@ class QueuesTest {
 
     private fun currentName(book: QueueBook) = book.current!!.current!!.song.path.substringAfterLast('/').removeSuffix(".mp3")
 
-    private fun playing(start: Int = 0): QueueBook = QueueBook().play(album, start, albumSource, now = 1).book
+    /** The album's songs as a playlist, playing at song [start] (an album's own queue starts there, wrapped round). */
+    private fun playing(start: Int = 0): QueueBook = QueueBook().play(album, start, playlistSource, now = 1).book
 
     // Tapping a song
 
     @Test
     fun `a tap in the list the queue came from jumps inside it, and Play next songs stay`() {
         val book = playing(0).playNext(listOf(folder[0]), picked, now = 2)!!.book
-        val tapped = book.play(album, 3, albumSource, now = 3)
+        val tapped = book.play(album, 3, playlistSource, now = 3)
         assertEquals(book.currentId, tapped.book.currentId)
         assertEquals("Harbour Glass 4", currentName(tapped.book))
         assertTrue("Rips 1" in paths(tapped.book.current))
@@ -61,13 +63,59 @@ class QueuesTest {
         val kept = book.recent.single()
         book = book.keep(kept).resume(kept, now = 3).book.playNext(listOf(folder[1]), picked, now = 4)!!.book.place(2, 75_000)
         val before = book.queue(kept)!!
-        val tapped = book.play(album, 4, albumSource, now = 5)
+        val tapped = book.play(album, 4, playlistSource, now = 5)
         assertNotEquals(kept, tapped.book.currentId)
         assertEquals("Harbour Glass 5", currentName(tapped.book))
         assertFalse(tapped.toRecent)
         assertEquals(before.copy(updatedAt = 5), tapped.book.queue(kept))
         assertEquals(listOf(kept), tapped.book.saved)
         assertFalse(kept in tapped.book.recent)
+    }
+
+    // Tapping a song of an album (user 2026-11-24)
+
+    @Test
+    fun `a tap on an album's song starts its queue there, the album's songs after it next, then the songs before it`() {
+        val queue = QueueBook().play(album, 2, albumSource, now = 1).book.current!!
+        assertEquals(listOf("Harbour Glass 3", "Harbour Glass 4", "Harbour Glass 5", "Harbour Glass 6", "Harbour Glass 1", "Harbour Glass 2"), paths(queue))
+        assertEquals(0, queue.index)
+        // Each song keeps its place in the album's list, and the queue stays the album's, in order: the play log's source.
+        assertEquals(listOf(2, 3, 4, 5, 0, 1), queue.items.map { it.sourceIndex })
+        assertEquals(albumSource, queue.source)
+        assertFalse(queue.shuffled)
+        assertEquals(6, queue.listSize)
+    }
+
+    @Test
+    fun `an album tapped at its first song plays in track order, at its last song wraps round, and a one-song album plays its song`() {
+        val first = QueueBook().play(album, 0, albumSource, now = 1).book.current!!
+        assertEquals((1..6).map { "Harbour Glass $it" }, paths(first))
+        assertEquals(0, first.index)
+        val last = QueueBook().play(album, 5, albumSource, now = 1).book.current!!
+        assertEquals(listOf("Harbour Glass 6", "Harbour Glass 1", "Harbour Glass 2", "Harbour Glass 3", "Harbour Glass 4", "Harbour Glass 5"), paths(last))
+        assertEquals(0, last.index)
+        val one = QueueBook().play(listOf(song("Lone Pier")), 0, albumSource, now = 1).book.current!!
+        assertEquals(listOf("Lone Pier"), paths(one))
+        assertEquals(0, one.index)
+    }
+
+    @Test
+    fun `a tap on any other list keeps the list's order and plays from the tapped song`() {
+        SourceKind.entries.filter { it != SourceKind.ALBUM }.forEach { kind ->
+            val queue = QueueBook().play(folder, 2, QueueSource(kind, "list", "Rips"), now = 1).book.current!!
+            assertEquals("$kind", listOf("Rips 1", "Rips 2", "Rips 3", "Rips 4"), paths(queue))
+            assertEquals("$kind", 2, queue.index)
+        }
+    }
+
+    @Test
+    fun `an album's Shuffle shuffles as any list's does, and Shuffle off on a tapped album brings its wrapped order back`() {
+        val shuffled = QueueBook().shuffle(album, albumSource, Random(3), now = 1).book.current!!
+        assertEquals(paths(QueueBook().shuffle(album, folderSource, Random(3), now = 1).book.current), paths(shuffled))
+        assertEquals(0, shuffled.index)
+        val round = QueueBook().play(album, 2, albumSource, now = 1).book.toggleShuffle(Random(1)).toggleShuffle(Random(1)).current!!
+        assertEquals(listOf("Harbour Glass 3", "Harbour Glass 4", "Harbour Glass 5", "Harbour Glass 6", "Harbour Glass 1", "Harbour Glass 2"), paths(round))
+        assertEquals(0, round.index)
     }
 
     // One recent queue per place
@@ -180,16 +228,16 @@ class QueuesTest {
 
     @Test
     fun `a queue stored before the list's length was kept still jumps after its last song is taken out, and learns the length`() {
-        val made = QueueBook().play(album, 0, albumSource, now = 1).book
+        val made = QueueBook().play(album, 0, playlistSource, now = 1).book
         var book = made.copy(queues = made.queues.map { it.copy(listSize = null) })
         val id = book.currentId!!
         book = book.remove(id, uidOf(book, album[5]))!!.book
-        val tapped = book.play(album, 2, albumSource, now = 2).book
+        val tapped = book.play(album, 2, playlistSource, now = 2).book
         assertEquals(id, tapped.currentId)
         assertEquals("Harbour Glass 3", currentName(tapped))
         assertEquals(6, tapped.current!!.listSize)
         // The length known, a song added to the list (the library changed) makes it another list.
-        assertNotEquals(id, tapped.play(album + song("Harbour Glass 7"), 0, albumSource, now = 3).book.currentId)
+        assertNotEquals(id, tapped.play(album + song("Harbour Glass 7"), 0, playlistSource, now = 3).book.currentId)
     }
 
     @Test
@@ -367,7 +415,7 @@ class QueuesTest {
         assertFalse(other.toRecent)
         assertFalse(back.toRecent)
         assertEquals(listOf(musicId), back.book.recent)
-        assertEquals(listOf(albumSource.key, folderSource.key), back.book.queues.map { it.source.key })
+        assertEquals(listOf(playlistSource.key, folderSource.key), back.book.queues.map { it.source.key })
         // Resume of a recent queue from a book leaves no book behind either.
         val resumed = back.book.play(parts, 0, lanternRoad, now = 5).book.resume(musicId, now = 6).book
         assertEquals(listOf(SourceKind.FOLDER), resumed.recent.map { resumed.queue(it)!!.source.kind })
@@ -459,7 +507,7 @@ class QueuesTest {
 
     @Test
     fun `the queue playing is listed first and only there, the others under it with the last left first`() {
-        val first = playing(0)
+        val first = QueueBook().play(album, 0, albumSource, now = 1).book
         val albumId = first.currentId!!
         val second = first.play(folder, 0, folderSource, now = 2).book
         val ripsId = second.currentId!!
@@ -589,7 +637,7 @@ class QueuesTest {
     @Test
     fun `Shuffle also brings a Play next song the queue jumped past right after the song playing`() {
         // Rips 1 waits after the first song; a tap further down the list plays Harbour Glass 4 and leaves it waiting.
-        val book = playing(0).playNext(listOf(folder[0]), picked, now = 2)!!.book.play(album, 3, albumSource, now = 3).book
+        val book = playing(0).playNext(listOf(folder[0]), picked, now = 2)!!.book.play(album, 3, playlistSource, now = 3).book
         assertEquals("Harbour Glass 4", currentName(book))
         assertEquals(listOf("Harbour Glass 1", "Rips 1"), paths(book.current).take(2))
         assertTrue(book.current!!.items[1].playNext)
@@ -675,7 +723,7 @@ class QueuesTest {
     fun `songs moved to the trash leave every queue, Recent and Saved too, and a queue left without songs goes`() {
         var book = QueueBook().play(listOf(folder[3]), 0, picked, now = 1).book
         val lone = book.currentId!!
-        book = book.play(album, 2, albumSource, now = 2).book.place(2, 40_000)
+        book = book.play(album, 2, playlistSource, now = 2).book.place(2, 40_000)
         val albumId = book.currentId!!
         book = book.play(folder, 1, folderSource, now = 3).book.place(1, 12_000)
         val folderId = book.currentId!!
@@ -786,7 +834,7 @@ class QueuesTest {
 
     @Test
     fun `an album plays in track order until shuffle, a Play next song or another list breaks it`() {
-        val book = playing(0)
+        val book = QueueBook().play(album, 0, albumSource, now = 1).book
         val queue = book.current!!
         assertTrue((0 until 6).all { albumInOrder(queue, it) })
         assertFalse(albumInOrder(book.toggleShuffle(Random(2)).current!!, 1))
@@ -804,6 +852,17 @@ class QueuesTest {
         val fromFolder = QueueBook().play(folder, 0, folderSource, now = 1).book.current!!
         assertFalse(albumInOrder(fromFolder, 1))
         assertFalse(albumInOrder(queue, 6))
+    }
+
+    @Test
+    fun `an album tapped at a song plays in track order throughout, its first song right after its last`() {
+        val items = listOf(2, 3, 4, 5, 0, 1).mapIndexed { i, place -> QueueItem(i + 1L, album[place], sourceIndex = place) }
+        val wrapped = Queue("q1", albumSource, items, listSize = 6)
+        assertTrue((0 until 6).all { albumInOrder(wrapped, it) })
+        // Only the album's first song counts after its last; not another song, nor after a Play next song.
+        assertFalse(albumInOrder(wrapped.copy(items = items.filter { it.sourceIndex != 0 }), 4))
+        assertFalse(albumInOrder(wrapped.copy(items = listOf(QueueItem(9, folder[0]), items[4])), 1))
+        assertFalse(albumInOrder(wrapped.copy(items = listOf(QueueItem(9, folder[0]), items[4]), listSize = null), 1))
     }
 
     // Suggestions in the queue (v4)

@@ -45,8 +45,8 @@ class WidgetTest {
     }
     private val library = Library.of(songs, Settings())
     private val refs = songs.map { it.ref }
-    private val album = QueueSource(SourceKind.ALBUM, "album:harbour", "Harbour Glass")
-    private val playingSecond = QueueBook().play(refs, 1, album, now = 1).book
+    private val playlist = QueueSource(SourceKind.PLAYLIST, "playlist:harbour", "Harbour Glass")
+    private val playingSecond = QueueBook().play(refs, 1, playlist, now = 1).book
     private val settings = LibrarySettings()
 
     /** A 4-cell widget on a common phone, in dp: no button left out. */
@@ -107,7 +107,7 @@ class WidgetTest {
         val named = widgetState(playingSecond, library, playing = false, favourites = emptyList(), settings.copy(showFileNames = true)) as WidgetState.Loaded
         assertEquals("02 Paper Lantern 2.flac", named.title)
         val gone = SongRef("/storage/emulated/0/Music/Gone/Lost Signal.mp3")
-        val missing = QueueBook().play(listOf(gone), 0, album, now = 1).book
+        val missing = QueueBook().play(listOf(gone), 0, playlist, now = 1).book
         assertEquals(
             WidgetState.Loaded(gone, "Lost Signal.mp3", artist = null, cover = null, playing = false, favourite = false, album = null, queue = missing.currentId, backSeconds = 30, forwardSeconds = 10),
             widgetState(missing, library, playing = false, favourites = emptyList(), settings),
