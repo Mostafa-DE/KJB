@@ -190,6 +190,37 @@ class BookStartTest {
     }
 
     @Test
+    fun `a part taken out of the book's own queue and started again goes back in at its place in that queue`() {
+        val playing = QueueBook().play(parts.map { it.ref }, 0, bookSource(folderBook), now = 1).book
+        val id = playing.currentId!!
+        val without = playing.remove(id, playing.current!!.items[2].uid)!!.book
+        // A tap on it in its folder: the same queue, the part back after the ones before it, from its start.
+        val tapped = without.started { it.play(parts.map { song -> song.ref }, 2, folder, now = 10) }
+        assertEquals(id, tapped.currentId)
+        assertEquals(parts.map { it.path }, tapped.current!!.items.map { it.song.path })
+        assertEquals(2, tapped.current!!.index)
+        assertEquals(0L, tapped.current!!.positionMs)
+        // Its bookmark: the same, at the spot.
+        val marked = without.toBookmark(parts[2].path, 30_000, library, now = 11)!!.book
+        assertEquals(id, marked.currentId)
+        assertEquals(parts.map { it.path }, marked.current!!.items.map { it.song.path })
+        assertEquals(2, marked.current!!.index)
+        assertEquals(30_000L, marked.current!!.positionMs)
+    }
+
+    @Test
+    fun `a part put back goes after the book's parts before it, one moved with Play next too`() {
+        val playing = QueueBook().play(parts.map { it.ref }, 0, bookSource(folderBook), now = 1).book
+        val id = playing.currentId!!
+        // The second part moved with Play next (it keeps no place in the list), the third taken out.
+        val moved = playing.playNext(listOf(parts[1].ref), QueueSource(SourceKind.PICKED, "picked", ""), now = 2)!!.book
+        val edited = moved.remove(id, moved.current!!.items[2].uid)!!.book
+        val marked = edited.toBookmark(parts[2].path, 30_000, library, now = 11)!!.book
+        assertEquals(parts.map { it.path }, marked.current!!.items.map { it.song.path })
+        assertEquals(2, marked.current!!.index)
+    }
+
+    @Test
     fun `a bookmark in a book's file plays the book's own queue from that spot, from music or inside the book, never for music`() {
         // From music: the folder book's third part, 2 min in, in the book's own queue, not at the book's place.
         val fromMusic = musicPlaying.toBookmark(parts[2].path, 120_000, library, now = 10)!!.book.current!!

@@ -32,7 +32,7 @@ import kotlin.random.Random
 class QueueBridgeTest {
     private val songs: List<Song> = (1..8).map { song("Music/Harbour Glass/0$it Paper Lantern $it.mp3", album = "Harbour Glass", track = it, durationMs = 180_000L + it) }
     private val refs = songs.map { it.ref }
-    private val albumSource = QueueSource(SourceKind.ALBUM, "album:harbour", "Harbour Glass")
+    private val playlistSource = QueueSource(SourceKind.PLAYLIST, "playlist:harbour", "Harbour Glass")
     private val folderSource = QueueSource(SourceKind.FOLDER, "folder:Music", "Music")
     private val picked = QueueSource(SourceKind.PICKED, "picked", "")
     private val missing = mutableSetOf<String>()
@@ -191,7 +191,7 @@ class QueueBridgeTest {
 
     @Test
     fun `the first sync loads the queue at its current song and position`() {
-        val book = QueueBook().play(refs, 2, albumSource, now = 1).book.place(2, 42_000)
+        val book = QueueBook().play(refs, 2, playlistSource, now = 1).book.place(2, 42_000)
         bridge.sync(book, find)
         assertEquals(listOf("load"), port.calls)
         assertEquals(uidsOf(book), port.loaded)
@@ -203,7 +203,7 @@ class QueueBridgeTest {
     fun `songs not on the phone are left out, and a missing current song starts the next one from its start`() {
         missing += songs[2].path
         missing += songs[5].path
-        val book = QueueBook().play(refs, 2, albumSource, now = 1).book.place(2, 42_000)
+        val book = QueueBook().play(refs, 2, playlistSource, now = 1).book.place(2, 42_000)
         val projected = projection(book.current, find)
         assertEquals(6, projected.size)
         assertEquals(songs[3].path, projected[startOf(book.current!!, projected)].song.path)
@@ -217,7 +217,7 @@ class QueueBridgeTest {
 
     @Test
     fun `queue edits reach the player without touching the song playing`() {
-        var book = QueueBook().play(refs.take(5), 1, albumSource, now = 1).book
+        var book = QueueBook().play(refs.take(5), 1, playlistSource, now = 1).book
         bridge.sync(book, find)
         port.positionMs = 50_000
         val playing = port.current
@@ -242,11 +242,11 @@ class QueueBridgeTest {
     /** CR2: before CR1 an empty edit list made no engine calls; a batch of none would drop the crossfade's song waiting. */
     @Test
     fun `a change that leaves the player's songs as they are - a rename, a tap inside the queue - hands the player no batch`() {
-        var book = QueueBook().play(refs, 0, albumSource, now = 1).book
+        var book = QueueBook().play(refs, 0, playlistSource, now = 1).book
         bridge.sync(book, find)
         book = book.rename(book.currentId!!, "Evening Set")
         bridge.sync(book, find)
-        book = book.play(refs, 5, albumSource, now = 2).book
+        book = book.jump(book.currentId!!, 5, now = 2).book
         bridge.sync(book, find)
         assertEquals(emptyList<Int>(), port.batches)
         assertEquals(listOf("load", "seek"), port.calls)
@@ -254,10 +254,10 @@ class QueueBridgeTest {
 
     @Test
     fun `a tap inside the queue moves the player there, from the start`() {
-        var book = QueueBook().play(refs, 0, albumSource, now = 1).book
+        var book = QueueBook().play(refs, 0, playlistSource, now = 1).book
         bridge.sync(book, find)
         port.positionMs = 9_000
-        book = book.play(refs, 5, albumSource, now = 2).book
+        book = book.jump(book.currentId!!, 5, now = 2).book
         bridge.sync(book, find)
         assertEquals(book.current!!.items[5].uid, port.current)
         assertEquals(0L, port.positionMs)
@@ -271,7 +271,7 @@ class QueueBridgeTest {
 
     @Test
     fun `removing the song playing goes on with the next one from its start`() {
-        var book = QueueBook().play(refs.take(4), 1, albumSource, now = 1).book
+        var book = QueueBook().play(refs.take(4), 1, playlistSource, now = 1).book
         bridge.sync(book, find)
         port.positionMs = 20_000
         book = book.remove(book.currentId!!, book.current!!.current!!.uid)!!.book
@@ -283,7 +283,7 @@ class QueueBridgeTest {
 
     @Test
     fun `the song playing moved to the trash with none after it stops the player before it moves, once`() {
-        var book = QueueBook().play(refs.take(3), 2, albumSource, now = 1).book
+        var book = QueueBook().play(refs.take(3), 2, playlistSource, now = 1).book
         bridge.sync(book, find)
         port.positionMs = 20_000
         book = book.forget(setOf(refs[2].path))
@@ -306,7 +306,7 @@ class QueueBridgeTest {
      */
     @Test
     fun `the song playing taken out never goes from under the player, which moves to the queue's song first`() {
-        var book = QueueBook().play(refs.take(6), 1, albumSource, now = 1).book
+        var book = QueueBook().play(refs.take(6), 1, playlistSource, now = 1).book
         bridge.sync(book, find)
         port.positionMs = 20_000
         // Remove from queue.
@@ -331,7 +331,7 @@ class QueueBridgeTest {
     @Test
     fun `the song playing taken out with none after it stops the player at the queue's song, never as if it had played to its end`() {
         // Remove from queue: the song before it waits, paused.
-        var book = QueueBook().play(refs.take(4), 3, albumSource, now = 1).book
+        var book = QueueBook().play(refs.take(4), 3, playlistSource, now = 1).book
         bridge.sync(book, find)
         port.positionMs = 20_000
         book = book.remove(book.currentId!!, book.current!!.current!!.uid)!!.book
@@ -366,7 +366,7 @@ class QueueBridgeTest {
     fun `with nothing after the song playing that leaves, Repeat one stops the player too and Repeat all goes round`() {
         // Repeat one: no next song, as the player's Next reads it.
         repeat = Repeat.ONE
-        var book = QueueBook().play(refs.take(6), 5, albumSource, now = 1).book
+        var book = QueueBook().play(refs.take(6), 5, playlistSource, now = 1).book
         bridge.sync(book, find)
         book = book.forget(setOf(refs[5].path))
         bridge.sync(book, find)
@@ -380,7 +380,7 @@ class QueueBridgeTest {
 
         // Repeat all goes on with the first song, playing.
         repeat = Repeat.ALL
-        book = QueueBook().play(refs.take(6), 5, albumSource, now = 3).book
+        book = QueueBook().play(refs.take(6), 5, playlistSource, now = 3).book
         val round = FakePort()
         val bridge = QueueBridge(round, { repeat }) { round.calls += "stop" }
         bridge.sync(book, find)
@@ -396,7 +396,7 @@ class QueueBridgeTest {
     fun `the song playing taken out for a song the player does not hold yet loads the queue there, never taking the song playing`() {
         // The second song is not on the phone: the player holds the others.
         missing += songs[1].path
-        var book = QueueBook().play(refs.take(4), 0, albumSource, now = 1).book
+        var book = QueueBook().play(refs.take(4), 0, playlistSource, now = 1).book
         bridge.sync(book, find)
         port.positionMs = 20_000
         // Its file is back as the song playing is taken out, so the queue goes on with it.
@@ -415,7 +415,7 @@ class QueueBridgeTest {
     fun `the song playing taken out just after it ended keeps the song the player went on to playing`() {
         val threads = ThreadedPort()
         val bridge = QueueBridge(threads) { threads.playing = null }
-        var book = QueueBook().play(refs.take(4), 1, albumSource, now = 1).book
+        var book = QueueBook().play(refs.take(4), 1, playlistSource, now = 1).book
         bridge.sync(book, find)
         val next = threads.loaded[2]
         // The song ends on the playback thread; the main thread still sees it playing as Remove from queue comes.
@@ -430,7 +430,7 @@ class QueueBridgeTest {
 
     @Test
     fun `switching queues loads the other one at its place, and nothing playing empties the player`() {
-        var book = QueueBook().play(refs.take(3), 0, albumSource, now = 1).book
+        var book = QueueBook().play(refs.take(3), 0, playlistSource, now = 1).book
         bridge.sync(book, find)
         book = book.play(refs.drop(3), 0, folderSource, now = 2).book.place(1, 3_000)
         bridge.sync(book, find)
@@ -517,7 +517,7 @@ class QueueBridgeTest {
     /** 3.1: Shuffle moves the song playing to the top; the player keeps playing it, never loading or seeking. */
     @Test
     fun `Shuffle with a song playing far into a long queue moves it first, and it goes on from where it is`() {
-        var book = QueueBook().play(shelf.map { it.ref }, 25, albumSource, now = 1).book
+        var book = QueueBook().play(shelf.map { it.ref }, 25, playlistSource, now = 1).book
         bridge.sync(book, findOnShelf)
         port.positionMs = 95_000
         val playing = port.current
@@ -535,7 +535,7 @@ class QueueBridgeTest {
     fun `a Shuffle whose edits come just after the song playing ended keeps the song the player went on to playing`() {
         val threads = ThreadedPort()
         val bridge = QueueBridge(threads)
-        var book = QueueBook().play(shelf.map { it.ref }, 9, albumSource, now = 1).book
+        var book = QueueBook().play(shelf.map { it.ref }, 9, playlistSource, now = 1).book
         bridge.sync(book, findOnShelf)
         val next = threads.loaded[10]
         // Song 10 ends on the playback thread as the edits come in; the main thread still sees it playing.
@@ -764,7 +764,7 @@ class QueueBridgeTest {
         val elsewhere = songs[2].copy(ref = SongRef("Music/Moved/03 Paper Lantern 3.mp3", songs[2].ref.mediaStoreId))
         var moved = false
         val findMoved: (SongRef) -> Song? = { ref -> if (moved && ref.path in setOf(songs[2].path, elsewhere.path)) elsewhere else find(ref) }
-        val book = QueueBook().play(refs, 0, albumSource, now = 1).book
+        val book = QueueBook().play(refs, 0, playlistSource, now = 1).book
         bridge.sync(book, findMoved)
         val uids = port.loaded
         port.calls.clear()
@@ -783,7 +783,7 @@ class QueueBridgeTest {
     fun `a song whose cover Covers & tags changed is handed to the player again in place, the song playing going on`() {
         val versions = mutableMapOf<String, Int>()
         val bridge = QueueBridge(port, coverVersion = { versions[it] ?: 0 })
-        var book = QueueBook().play(refs, 2, albumSource, now = 1).book.place(2, 42_000)
+        var book = QueueBook().play(refs, 2, playlistSource, now = 1).book.place(2, 42_000)
         bridge.sync(book, find)
         val uids = port.loaded
         port.calls.clear()
@@ -822,7 +822,7 @@ class QueueBridgeTest {
     fun `covers changed all over a long queue are handed again in one edit, never one per song`() {
         val versions = mutableMapOf<String, Int>()
         val bridge = QueueBridge(port, coverVersion = { versions[it] ?: 0 })
-        val book = QueueBook().play(shelf.map { it.ref }, 10, albumSource, now = 1).book
+        val book = QueueBook().play(shelf.map { it.ref }, 10, playlistSource, now = 1).book
         bridge.sync(book, findOnShelf)
         port.calls.clear()
 

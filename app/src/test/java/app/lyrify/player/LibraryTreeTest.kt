@@ -216,14 +216,16 @@ class LibraryTreeTest {
     }
 
     @Test
-    fun `a song picked in the car inside the album the app is playing goes on in the same queue`() {
+    fun `a song picked in the car inside the album the app is playing starts the album again from it, as a tap in the app does`() {
         val appSource = QueueSource(SourceKind.ALBUM, albumKey(harbour[0])!!, "Harbour Glass")
         val book = QueueBook().play(harbour.map { it.ref }, 0, appSource, now = 1).book
         val tracks = children(children(LibraryTree.ALBUMS).single { it.title == "Harbour Glass" }.id, data(book))
         val play = LibraryTree.play(tracks[2].id, data(book)) as TreePlay.FromList
         val after = book.play(play.songs, play.start, play.source, now = 2).book
-        assertEquals(book.currentId, after.currentId)
-        assertEquals(emptyList<String>(), after.recent)
+        // A new queue, wrapped round from the song (user 2026-11-24): the one before goes to Recent.
+        assertEquals(listOf(book.currentId), after.recent)
+        assertEquals(2, after.queues.size)
+        assertEquals((harbour.drop(2) + harbour.take(2)).map { it.ref }, after.current!!.items.map { it.song })
         assertEquals(harbour[2].ref, after.current!!.current!!.song)
     }
 

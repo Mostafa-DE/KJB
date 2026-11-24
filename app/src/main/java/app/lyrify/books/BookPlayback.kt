@@ -15,6 +15,7 @@ import app.lyrify.player.PlayerGraph
 import app.lyrify.player.PlayerPort
 import app.lyrify.player.Queue
 import app.lyrify.player.QueueBook
+import app.lyrify.player.QueueItem
 import app.lyrify.player.QueueSource
 import app.lyrify.player.ServicePart
 import app.lyrify.player.SkipAmounts
@@ -89,9 +90,25 @@ fun QueueBook.playBook(start: BookStart, now: Long): Switched {
     return playBookAt(start, now)
 }
 
-/** [start]'s book plays from [BookStart.place] exactly: its own queue too, when that plays already, goes there. */
+/**
+ * [start]'s book plays from [BookStart.place] exactly: its own queue too, when that plays already, goes there
+ * ([QueueBook.jump]), a part taken out of it put back first, after the last of the book's parts before it (by path:
+ * one moved with Play next keeps no list place); else a new queue of its parts ([QueueBook.play]).
+ */
 private fun QueueBook.playBookAt(start: BookStart, now: Long): Switched {
-    val played = play(start.book.parts.map { it.ref }, start.place.partIndex, bookSource(start.book), now)
+    val source = bookSource(start.book)
+    val part = start.place.partIndex
+    val own = current?.takeIf { it.from(source) }
+    val at = own?.items?.indexOfFirst { it.song.path == start.book.parts[part].path } ?: -1
+    val played = when {
+        own == null -> play(start.book.parts.map { it.ref }, part, source, now)
+        at >= 0 -> jump(own.id, at, now)
+        else -> {
+            val before = start.book.parts.take(part).mapTo(HashSet()) { it.path }
+            val back = own.items.indexOfLast { it.song.path in before } + 1
+            putBack(own.id, QueueItem(nextUid, start.book.parts[part].ref, sourceIndex = part), back).copy(nextUid = nextUid + 1).jump(own.id, back, now)
+        }
+    }
     val index = played.book.current?.index ?: return played
     return played.copy(book = played.book.place(index, start.place.positionMs))
 }
