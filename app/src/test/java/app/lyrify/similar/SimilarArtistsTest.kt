@@ -669,6 +669,26 @@ class SimilarArtistsTest {
         assertEquals(listOf(Neighbour(ROWAN, "Rowan Vale", 900), Neighbour(GLASS, "Glass Harbour", 120)), ListenBrainzJson.neighbours(body.encodeToByteArray()))
     }
 
+    /**
+     * KJB's start (PW1): WorkManager starts on its first use, off the main thread (this schedule's, or the AI's check on
+     * a phone the AI runs on), not on the main thread before KJB's first line; and a start keeps the schedule that is
+     * there, writing nothing. WorkManager does not run in these JVM tests, so its set-up is read where it is written.
+     */
+    @Test
+    fun `a start keeps the schedule that is there, and WorkManager starts off the main thread, not before KJB's first line`() {
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+        val code = { path: String -> File(path).readLines().filterNot { it.trim().startsWith("*") || it.trim().startsWith("//") } }
+        val follow = code("src/main/java/app/lyrify/similar/SimilarWork.kt")
+        val enqueues = follow.filter { "enqueueUniquePeriodicWork(" in it }
+
+        assertTrue(Regex("""android:name="androidx\.work\.WorkManagerInitializer"\s+android:value="androidx\.startup"\s+tools:node="remove"""").containsMatchIn(manifest))
+        assertTrue(code("src/main/java/app/lyrify/Lyrify.kt").any { "class LyrifyApplication : Application(), Configuration.Provider" in it })
+        assertEquals(1, enqueues.size)
+        assertTrue(enqueues.single(), "ExistingPeriodicWorkPolicy.KEEP" in enqueues.single())
+        assertTrue(follow.any { "scope.launch {" in it })
+        assertTrue(code("src/main/java/app/lyrify/overnight/AiWorker.kt").any { "withContext(Dispatchers.IO) { WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK).first() }" in it })
+    }
+
     private data class Hit(val id: String, val name: String, val score: Int)
 
     private fun artistsJson(vararg hits: Hit): String =

@@ -292,7 +292,9 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
     Box(Modifier.fillMaxSize().background(LockInk).semantics { paneTitle = title }) {
         if (ui == null) return@Box
         val path = ui.item.song.path
-        AsyncImage(model = SongArt(path), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(52.dp).alpha(LOCK_COVER_ALPHA))
+        // The player's backdrop's small cover, in memory once for both: blurred this much, a full-screen one would only
+        // cost decoding and memory (PW1).
+        AsyncImage(model = remember(path, context) { backdropRequest(context, SongArt(path)) }, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(52.dp).alpha(LOCK_COVER_ALPHA))
         Box(Modifier.fillMaxSize().background(LockInk.copy(alpha = LOCK_SCRIM_ALPHA)))
         LockPage(
             onClose = onClose,

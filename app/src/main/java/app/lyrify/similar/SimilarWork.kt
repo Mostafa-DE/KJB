@@ -65,7 +65,9 @@ class SimilarWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
         /**
          * Follows "Find similar artists online" for the life of the process, from KJB's start: on, the run is scheduled
-         * (UPDATE keeps a schedule already there and its timing); off, it is cancelled, a run going on included.
+         * (KEEP leaves a schedule already there as it is, its timing too, so a start writes nothing to WorkManager's
+         * database and asks JobScheduler for nothing; PW1); off, it is cancelled, a run going on included. A release that
+         * changes the request must schedule it once with UPDATE.
          */
         fun follow(context: Context, scope: CoroutineScope) {
             val app = context.applicationContext
@@ -77,7 +79,7 @@ class SimilarWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).setRequiresBatteryNotLow(true).build())
                             .setInitialDelay(FIRST_RUN_HOURS, TimeUnit.HOURS)
                             .build()
-                        work.enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.UPDATE, request)
+                        work.enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.KEEP, request)
                     } else {
                         work.cancelUniqueWork(WORK)
                     }

@@ -111,7 +111,7 @@ class PlayerCloseDeviceTest {
                             AnimatedVisibility(!open, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp), enter = EnterTransition.None, exit = ExitTransition.None) {
                                 val bar = remember(this) { Container(this@SharedTransitionLayout, this, bar = true, barTop) }
                                 CompositionLocalProvider(LocalContainer provides bar) {
-                                    NowBar(NowBarShows.Own(OwnNow(TITLE, "The Lamplighters", cover = null, playing = false, progress = 0.25f)), LedgerState(), other = null, onOpen = { open = true }, onPlayPause = {})
+                                    NowBar(NowBarShows.Own(OwnNow(TITLE, "The Lamplighters", cover = null, playing = false)), LedgerState(), other = null, progress = { 0.25f }, onOpen = { open = true }, onPlayPause = {})
                                 }
                             }
                             // The player's end, as the shell's views draw it: the layer under it lights up, the card clears and

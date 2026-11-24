@@ -6,9 +6,15 @@ import app.lyrify.settings.SortAlbums
 import app.lyrify.settings.SortArtists
 import app.lyrify.settings.SortSongs
 import app.lyrify.stats.SongPlays
+import app.lyrify.ui.listSection
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.text.CollationKey
 import java.text.Collator
+import java.time.ZoneOffset
+import kotlin.math.sign
+import kotlin.random.Random
 
 /**
  * The sort keys of every song list, the Albums and the Artists tabs (features 2026-11-15, item 5): each in its first
@@ -186,5 +192,151 @@ class LibrarySortTest {
         assertEquals(listOf("Mira Solen", "Kit Calloway", "Odo Brannick"), names(SortArtists.LAST_PLAYED))
         assertEquals(listOf("Mira Solen", "Odo Brannick", "Kit Calloway"), names(SortArtists.MOST_SONGS, reversed = true))
         assertEquals(listOf("Odo Brannick", "Mira Solen", "Kit Calloway"), names(SortArtists.NAME, reversed = true))
+    }
+
+    // Each name's keys made once (PW1): the same order as before, without the work inside each comparison
+
+    @Test
+    fun `a name sort asks the collator for no comparison, and for fewer keys than it makes comparisons`() {
+        val names = titles(7_000, Random(42))
+        val collator = CountingCollator()
+        val order = nameOrder(collator)
+        var comparisons = 0
+
+        names.sortedWith { a, b -> comparisons++; order.compare(a, b) }
+
+        assertEquals("collations inside comparisons", 0, collator.compares)
+        assertTrue("${collator.keys} keys for $comparisons comparisons of ${names.size} names", collator.keys < comparisons)
+    }
+
+    @Test
+    fun `every pair of a varied library's names goes in the order it went in before PW1`() {
+        val random = Random(7)
+        val names = titles(3_000, random) + ODD_NAMES
+        val order = nameOrder(Collator.getInstance())
+        val before = nameOrderBeforePw1(Collator.getInstance())
+
+        assertEquals(names.sortedWith(before), names.sortedWith(order))
+        assertEquals(names.sortedWith(before.reversed()), names.sortedWith(order.reversed()))
+        repeat(20_000) {
+            val a = names[random.nextInt(names.size)]
+            val b = names[random.nextInt(names.size)]
+            assertEquals("$a against $b", before.compare(a, b).sign, order.compare(a, b).sign)
+        }
+    }
+
+    @Test
+    fun `songs by title and file name, albums and artists keep their order over a varied library`() {
+        val random = Random(11)
+        val names = titles(1_500, random)
+        val songs = names.mapIndexed { i, name ->
+            song("Music/${names[(i * 7) % names.size]}/${name.replace('/', ' ')} $i.mp3", title = name, artist = names[(i * 3) % names.size], album = names[(i * 5) % names.size])
+        }
+        val before = nameOrderBeforePw1(Collator.getInstance())
+        val library = Library.of(songs, Settings())
+
+        assertEquals(songs.sortedWith(compareBy(before) { it.title }), sortSongs(songs, SortSongs.TITLE, settings))
+        assertEquals(songs.sortedWith(compareBy(before) { it.fileName }), sortSongs(songs, SortSongs.FILE_NAME, settings))
+        assertEquals(library.albums.sortedWith(compareBy(before) { it.title }).map { it.key }, library.albums.map { it.key })
+        assertEquals(library.artists.sortedWith(compareBy(before) { it.name }).map { it.name }, library.artists.map { it.name })
+    }
+
+    /**
+     * 7,000 made-up titles (pf1's SortBench): the name sort as it was before PW1 against the sort now, the A to Z Songs
+     * tab and its headings, and the library's grouping. Each time goes to the test's output (pw1-report.md has the
+     * numbers); the bound is loose, to catch a step gone quadratic, not to time a phone.
+     */
+    @Test
+    fun `7,000 titles sort in the same order, each step well under a few seconds on the laptop`() {
+        val names = titles(7_000, Random(42))
+        val songs = names.mapIndexed { i, name -> song("Music/Album ${i / 12}/$i.mp3", title = name, artist = names[(i * 3) % names.size], album = "Album ${i / 12}", track = i % 12 + 1) }
+        repeat(3) { names.sortedWith(nameOrderBeforePw1(Collator.getInstance())); sortSongs(songs, SortSongs.TITLE, settings) }
+        val times = LinkedHashMap<String, Long>()
+        fun median(name: String, work: () -> Unit) {
+            val runs = List(5) {
+                val start = System.nanoTime()
+                work()
+                System.nanoTime() - start
+            }
+            times[name] = runs.sorted()[2] / 1_000_000
+        }
+        val shuffled = names.shuffled(Random(1))
+        median("nameOrder before PW1") { shuffled.sortedWith(nameOrderBeforePw1(Collator.getInstance())) }
+        median("nameOrder") { shuffled.sortedWith(nameOrder(Collator.getInstance())) }
+        median("Songs by title") { sortSongs(songs.shuffled(Random(2)), SortSongs.TITLE, settings) }
+        val sorted = sortSongs(songs, SortSongs.TITLE, settings)
+        median("Songs headings") { sorted.forEach { listSection(it, SortSongs.TITLE, settings, 0L, ZoneOffset.UTC) } }
+        median("Library.of") { Library.of(songs, Settings()) }
+        System.out.println("pw1 name sort (ms, laptop JVM, median of 5): $times")
+
+        assertEquals(shuffled.sortedWith(nameOrderBeforePw1(Collator.getInstance())), shuffled.sortedWith(nameOrder(Collator.getInstance())))
+        assertTrue("too slow: $times", times.values.all { it < 5_000 })
+    }
+
+    /** The phone's collator, counting what a sort asks of it: comparisons of two names, and keys of one. */
+    private class CountingCollator(private val real: Collator = Collator.getInstance()) : Collator() {
+        var compares = 0
+        var keys = 0
+
+        override fun compare(source: String?, target: String?): Int {
+            compares++
+            return real.compare(source, target)
+        }
+
+        override fun getCollationKey(source: String?): CollationKey? {
+            keys++
+            return real.getCollationKey(source)
+        }
+
+        override fun hashCode(): Int = real.hashCode()
+    }
+
+    private companion object {
+        /** Names at the edges: blank, only symbols, accents, other scripts, digits of other scripts, leading zeros, case. */
+        val ODD_NAMES = listOf(
+            "", " ", "!!!", "...", "#1", "#", "(Live)", "'Round Midnight", "\"Quoted\"", "- Dash", "Écho", "echo", "Echo", "ECHO",
+            "Ébène 2", "Ebene 10", "Ölüdeniz", "Zebra", "Ångström", "ß", "1", "01", "001", "1a", "10", "2", "02 Side", "2 Side",
+            "٣ أغاني", "3 Songs", "١٠ ليال", "أمل", "إيمان", "ا", "باب", "Привет", "Ёлка", "日本", "한국", "Ⅻ Roman", "½ Half", "² Square",
+            "Track 2", "Track 02", "Track 10", "Track 2b", "Track 2 b", "track 2", "CD1", "CD 1", "CD 01", "😀 Smile", "Smile 😀", "a1b2c3", "a1b2c3d",
+        )
+
+        /** pf1's SortBench titles: Latin and Arabic words, leading punctuation, numbers, "(Live)". */
+        fun titles(count: Int, random: Random): List<String> {
+            val words = listOf("love", "night", "the", "road", "fire", "heart", "dream", "rain", "city", "light", "home", "blue", "song", "echo", "river", "summer", "time", "wild", "gold", "stone", "Éclat", "über")
+            val arabic = listOf("حب", "ليل", "قلب", "حلم", "مطر", "بيت", "نور", "بحر", "وطن", "عيون")
+            val lead = listOf("", "", "", "", "(", "'", "\"", "...", "#", "- ", "01 ", "2 ")
+            return List(count) {
+                val inArabic = random.nextInt(5) == 0
+                val title = StringBuilder(lead[random.nextInt(lead.size)])
+                repeat(1 + random.nextInt(4)) { w ->
+                    if (w > 0) title.append(' ')
+                    val word = if (inArabic) arabic[random.nextInt(arabic.size)] else words[random.nextInt(words.size)]
+                    title.append(if (w == 0 && !inArabic) word.replaceFirstChar(Char::uppercaseChar) else word)
+                }
+                if (random.nextInt(6) == 0) title.append(' ').append(1 + random.nextInt(20))
+                if (random.nextInt(8) == 0) title.append(" (Live)")
+                title.toString()
+            }
+        }
+
+        /** [nameOrder] as it was before PW1, every comparison working out both names' headings, strip and collation. */
+        fun nameOrderBeforePw1(collator: Collator): Comparator<String> = Comparator { a, b ->
+            val letterA = nameLetter(a)
+            val letterB = nameLetter(b)
+            headingRank(letterA).compareTo(headingRank(letterB)).takeIf { it != 0 }
+                ?: collator.compare(letterA, letterB).takeIf { it != 0 }
+                ?: letterA.compareTo(letterB).takeIf { it != 0 }
+                ?: compareNatural(collator, fromFirstLetter(a), fromFirstLetter(b)).takeIf { it != 0 }
+                ?: collator.compare(a, b).takeIf { it != 0 }
+                ?: a.compareTo(b)
+        }
+
+        fun headingRank(letter: String): Int = when {
+            letter == "#" -> 0
+            Character.UnicodeScript.of(letter.codePointAt(0)) == Character.UnicodeScript.LATIN -> 1
+            else -> 2
+        }
+
+        fun fromFirstLetter(name: String): String = name.replace(Regex("""^[^\p{L}\p{N}]+"""), "")
     }
 }

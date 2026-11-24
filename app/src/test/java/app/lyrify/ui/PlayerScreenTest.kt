@@ -261,16 +261,21 @@ class PlayerScreenTest {
     // The Now bar's own song
 
     @Test
-    fun `the Now bar shows KJB's own song, as the library names it, with its progress`() {
+    fun `the Now bar shows KJB's own song, as the library names it, and its ring how far it is`() {
         val lantern = song("Music/Harbour Glass/01 Paper Lantern.mp3", title = "Paper Lantern", artist = "Kit Calloway", durationMs = 200_000)
         val book = QueueBook().play(listOf(lantern.ref), 0, QueueSource(SourceKind.ALBUM, "album:x", "Harbour Glass"), now = 1).book
         val queue = book.current!!
         val ui = PlayerUi(book, queue, queue.current!!, lantern, playing = true, positionMs = 50_000, at = 1_000, speed = 1f, durationMs = 200_000, repeat = Repeat.OFF, library = null)
-        // Its path too, so the song's row in the lists shows it playing.
-        assertEquals(OwnNow("Paper Lantern", "Kit Calloway", SongArt(lantern.path), playing = true, progress = 0.255f, path = lantern.path), ownNow(ui, LibrarySettings(), now = 2_000))
-        assertEquals("01 Paper Lantern.mp3", ownNow(ui, LibrarySettings(showFileNames = true), now = 2_000)!!.title)
-        assertEquals("01 Paper Lantern.mp3", ownNow(ui.copy(song = null), LibrarySettings(), now = 2_000)!!.title)
-        assertNull(ownNow(null, LibrarySettings(), now = 2_000))
+        // Its path too, so the song's row in the lists shows it playing; no position, so the song is one value as it plays
+        // and the shell that holds it is not recomposed by the clock (PW1). The ring reads the position as it draws.
+        assertEquals(OwnNow("Paper Lantern", "Kit Calloway", SongArt(lantern.path), playing = true, path = lantern.path), ownNow(ui, LibrarySettings()))
+        assertEquals(0.255f, ringShare(ui.positionAt(2_000), ui.durationMs), 0.0001f)
+        assertEquals("01 Paper Lantern.mp3", ownNow(ui, LibrarySettings(showFileNames = true))!!.title)
+        assertEquals("01 Paper Lantern.mp3", ownNow(ui.copy(song = null), LibrarySettings())!!.title)
+        assertNull(ownNow(null, LibrarySettings()))
+        // By the library's MediaStore id, so the bar's cover is read with one MediaStore call, no lookup by path (PW3).
+        val known = lantern.copy(ref = SongRef(lantern.path, 12L))
+        assertEquals(SongArt(lantern.path, 12L), ownNow(ui.copy(song = known), LibrarySettings())!!.cover)
     }
 
     /**
@@ -291,8 +296,8 @@ class PlayerScreenTest {
         assertEquals(tagged, ui.named)
         assertEquals("Paper Harbour", shownTitle(ui, LibrarySettings()))
         assertEquals(
-            OwnNow("Paper Harbour", "Mira Solen", SongArt(path), playing = false, progress = 0f, path = path, album = "Glass Harbour Sessions"),
-            ownNow(ui, LibrarySettings(), now = 0),
+            OwnNow("Paper Harbour", "Mira Solen", SongArt(path), playing = false, path = path, album = "Glass Harbour Sessions"),
+            ownNow(ui, LibrarySettings()),
         )
         // Show file names: its file's name, as any song's.
         assertEquals("Paper Harbour (demo).mp3", shownTitle(ui, LibrarySettings(showFileNames = true)))
