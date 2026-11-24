@@ -257,7 +257,8 @@ class ListeningLogBackupTest {
         val damaged = """{"plays":[{"path":"${lantern.path}","startedAt":$T0,"heardMs":150000,"counted":true,"startedBy":"picked","source":"album",""" +
             """"output":"jetpack","playlistId":"Harbour Glass"},""" +
             """{"path":"${bell.path}","startedAt":${T0 + 1},"heardMs":90000,"counted":true,"startedBy":"auto","source":"playlist","output":"car","playlistId":7},""" +
-            """{"path":"${water.path}","startedAt":${T0 + 2},"heardMs":90000,"counted":true,"output":"wired","playlistId":"p1"}]}"""
+            """{"path":"${water.path}","startedAt":${T0 + 2},"heardMs":90000,"counted":true,"output":"wired","playlistId":"p1"},""" +
+            """{"path":"${water.path}","startedAt":${T0 + 3},"heardMs":90000,"counted":true,"startedBy":"picked","source":"playlist","playlistId":"p1#q4"}]}"""
 
         assertEquals(
             listOf(
@@ -265,6 +266,8 @@ class ListeningLogBackupTest {
                 PlayStart(StartedBy.AUTO, SourceKind.PLAYLIST, shuffled = false, songKey = null, output = OutputKind.CAR),
                 // Without how it began, nothing of it.
                 null,
+                // A saved queue made from a playlist has its own key: no playlist's.
+                PlayStart(StartedBy.PICKED, SourceKind.PLAYLIST, shuffled = false, songKey = null),
             ),
             SectionJson.plays(damaged)?.plays?.map { it.start },
         )

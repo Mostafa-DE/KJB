@@ -8,6 +8,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.sqlite.transaction
 import app.lyrify.audio.OutputKind
 import app.lyrify.library.SongRef
+import app.lyrify.player.QueuesJson
 import app.lyrify.player.SourceKind
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -129,8 +130,7 @@ fun loggedPlayOf(row: PlayRow): LoggedPlay? {
 /**
  * How a play began as `plays.db` or a backup keeps it, read leniently: none without how ([by]); a code this version
  * does not know is [StartedBy.UNKNOWN], a kind of list or an output it does not know none, Shuffle unknown off; a
- * playlist's id only for a play from a playlist (never another list's key, which can hold a name or a path), a blank
- * one none.
+ * playlist's id only as [playlistIdOf] gives it.
  */
 @Suppress("LongParameterList")
 fun playStartOf(by: String?, source: String?, shuffled: Boolean?, songKey: String?, output: String? = null, playlistId: String? = null): PlayStart? = by?.let {
@@ -141,9 +141,18 @@ fun playStartOf(by: String?, source: String?, shuffled: Boolean?, songKey: Strin
         shuffled ?: false,
         songKey,
         enumOf<OutputKind>(output),
-        playlistId?.takeIf { id -> kind == SourceKind.PLAYLIST && id.isNotBlank() },
+        playlistIdOf(kind, playlistId),
     )
 }
+
+/**
+ * The playlist a play's queue came from, by the [key] of its source of [kind]: a playlist's own id only. Never another
+ * list's key (an album's or a folder's holds names or paths), nor a saved queue's made from a playlist (New queue in Add
+ * to: a key of its own, [QueuesJson.OWN_KEY], as its songs are its own), nor a blank one. The player keeps it with each
+ * play, and `plays.db` and backups are read through it.
+ */
+fun playlistIdOf(kind: SourceKind?, key: String?): String? =
+    key?.takeIf { kind == SourceKind.PLAYLIST && it.isNotBlank() && !QueuesJson.OWN_KEY.containsMatchIn(it) }
 
 /** How a play ended as kept, read leniently: none without how or where; a code unknown here is [PlayEnd.UNKNOWN], a place below 0 the start. */
 fun playEndedOf(how: String?, atMs: Long?): PlayEnded? =

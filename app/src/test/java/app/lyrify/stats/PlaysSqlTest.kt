@@ -311,6 +311,8 @@ class PlaysSqlTest {
         // After a restart it goes on as the play kept, the phone on its speaker now and the player in another queue.
         store.put(LoggedPlay(salt, T0, 200_000, counted = true, start = PlayStart(StartedBy.UNKNOWN, SourceKind.SEARCH, shuffled = true, songKey = null, output = OutputKind.SPEAKER)))
         store.put(LoggedPlay(ember, T0 + 1_000, 90_000, counted = true, start = fromPlaylist))
+        // Written again with another output and another playlist (a resume after a restart): the first ones stay.
+        store.put(LoggedPlay(ember, T0 + 1_000, 120_000, counted = true, start = fromPlaylist.copy(output = OutputKind.WIRED, playlistId = "0b9e-made-up-other")))
 
         assertEquals(listOf(fromPlaylist.copy(output = OutputKind.SPEAKER), fromPlaylist), store.all().map { it.start })
         assertEquals(store.all(), store.since(T0))
@@ -326,6 +328,7 @@ class PlaysSqlTest {
         store.update(insert, salt.path, T0, 5_000, 0, "picked", "album", 0, "jetpack", "Harbour Glass")
         store.update(insert, ember.path, T0 + 1, 5_000, 0, "auto", "playlist", 1, "wired", " ")
         store.update(insert, alder.path, T0 + 2, 5_000, 0, "next", "playlist", 0, "car", fromPlaylist.playlistId)
+        store.update(insert, alder.path, T0 + 3, 5_000, 0, "picked", "playlist", 0, "speaker", fromPlaylist.playlistId + "#q12")
 
         assertEquals(
             listOf(
@@ -333,9 +336,27 @@ class PlaysSqlTest {
                 PlayStart(StartedBy.PICKED, SourceKind.ALBUM, shuffled = false, songKey = null),
                 PlayStart(StartedBy.AUTO, SourceKind.PLAYLIST, shuffled = true, songKey = null, output = OutputKind.WIRED),
                 PlayStart(StartedBy.NEXT, SourceKind.PLAYLIST, shuffled = false, songKey = null, output = OutputKind.CAR, playlistId = fromPlaylist.playlistId),
+                // A saved queue made from a playlist (New queue in Add to): its own key, so no playlist's.
+                PlayStart(StartedBy.PICKED, SourceKind.PLAYLIST, shuffled = false, songKey = null, output = OutputKind.SPEAKER),
             ),
             store.all().map { it.start },
         )
+    }
+
+    @Test
+    fun `a play keeps a playlist's own id only, never a saved queue's made from it, another list's key or a blank one`() {
+        val id = fromPlaylist.playlistId
+        assertEquals(id, playlistIdOf(SourceKind.PLAYLIST, id))
+        // New queue in Add to keeps the list's kind and gives the queue a key of its own (QueueBook.newQueue): its songs
+        // are its own (more can be added from anywhere), so its plays name no playlist; saved again, the same.
+        assertEquals(null, playlistIdOf(SourceKind.PLAYLIST, "$id#q3"))
+        assertEquals(null, playlistIdOf(SourceKind.PLAYLIST, "$id#q3#q7"))
+        // An album's or a folder's key holds names or paths; a blank one or none is no id.
+        assertEquals(null, playlistIdOf(SourceKind.ALBUM, """["Kit Calloway","Harbour Glass"]"""))
+        assertEquals(null, playlistIdOf(SourceKind.FOLDER, "Music/Rips"))
+        assertEquals(null, playlistIdOf(SourceKind.PLAYLIST, " "))
+        assertEquals(null, playlistIdOf(null, id))
+        assertEquals(null, playlistIdOf(SourceKind.PLAYLIST, null))
     }
 
     // The interaction log (version 5)

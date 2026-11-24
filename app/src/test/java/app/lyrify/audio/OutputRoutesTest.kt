@@ -359,7 +359,7 @@ class OutputRoutesTest {
         // connected (Android Auto, a car's media centre: auto/CarBrowse.kt's access) is the car. Never a device's name.
         val service = File("src/main/java/app/lyrify/player/PlaybackService.kt").readText()
         assertTrue(service.contains("output = if (browse.inCar) OutputKind.CAR else readOutput(getSystemService(AudioManager::class.java)).kind,"))
-        assertTrue(service.contains("playlistId = queue.source.key.takeIf { queue.source.kind == SourceKind.PLAYLIST },"))
+        assertTrue(service.contains("playlistId = playlistIdOf(queue.source.kind, queue.source.key),"))
         val car = File("src/main/java/app/lyrify/auto/CarBrowse.kt").readText()
         assertTrue(car.contains("val inCar: Boolean get() = Access.CAR in connected.values"))
         // A car's own Bluetooth cannot be told from earbuds without asking for nearby devices: it stays Bluetooth.

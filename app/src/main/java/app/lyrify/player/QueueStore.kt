@@ -238,7 +238,8 @@ object QueuesJson {
         else -> key
     }
 
-    private val OWN_KEY = Regex("""#q\d+$""")
+    /** A new queue's own key from Add to, made from a list's ([QueueBook.newQueue]): the list's key and #q<n>. */
+    internal val OWN_KEY = Regex("""#q\d+$""")
     private val OLD_SONGS_KEY = Regex("""^songs:[A-Z_]+(-reversed)?:[A-Z_]+$""")
     private val OLD_SEARCH_KEY = Regex("""^search:""")
     private val OLD_PICKED_KEY = Regex("""^picked:\d+$""")

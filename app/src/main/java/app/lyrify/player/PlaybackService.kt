@@ -64,6 +64,7 @@ import app.lyrify.settings.Settings
 import app.lyrify.stats.PlayEnd
 import app.lyrify.stats.PlayEvents
 import app.lyrify.stats.PlayStart
+import app.lyrify.stats.playlistIdOf
 import app.lyrify.stats.songKey
 import app.lyrify.suggestions.SuggestionsPart
 import app.lyrify.tags.CoverVersions
@@ -388,7 +389,7 @@ class PlaybackService : MediaLibraryService() {
                 start = PlayStart(
                     by, queue.source.kind, queue.shuffled, song?.let(::songKey),
                     output = if (browse.inCar) OutputKind.CAR else readOutput(getSystemService(AudioManager::class.java)).kind,
-                    playlistId = queue.source.key.takeIf { queue.source.kind == SourceKind.PLAYLIST },
+                    playlistId = playlistIdOf(queue.source.kind, queue.source.key),
                 ),
             )
         }
