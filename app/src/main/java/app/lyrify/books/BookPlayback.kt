@@ -15,6 +15,7 @@ import app.lyrify.player.PlayerGraph
 import app.lyrify.player.PlayerPort
 import app.lyrify.player.Queue
 import app.lyrify.player.QueueBook
+import app.lyrify.player.QueueItem
 import app.lyrify.player.QueueSource
 import app.lyrify.player.ServicePart
 import app.lyrify.player.SkipAmounts
@@ -90,15 +91,23 @@ fun QueueBook.playBook(start: BookStart, now: Long): Switched {
 }
 
 /**
- * [start]'s book plays from [BookStart.place] exactly: its own queue too, when that plays already and holds the part,
- * goes there ([QueueBook.jump]); else a new queue of its parts ([QueueBook.play]).
+ * [start]'s book plays from [BookStart.place] exactly: its own queue too, when that plays already, goes there
+ * ([QueueBook.jump]), a part taken out of it put back first, after the parts before it; else a new queue of its parts
+ * ([QueueBook.play]). A book's queue never shuffles, so its order is the parts' own.
  */
 private fun QueueBook.playBookAt(start: BookStart, now: Long): Switched {
     val source = bookSource(start.book)
-    val path = start.book.parts[start.place.partIndex].path
+    val part = start.place.partIndex
     val own = current?.takeIf { it.from(source) }
-    val at = own?.items?.indexOfFirst { it.song.path == path } ?: -1
-    val played = if (own != null && at >= 0) jump(own.id, at, now) else play(start.book.parts.map { it.ref }, start.place.partIndex, source, now)
+    val at = own?.items?.indexOfFirst { it.song.path == start.book.parts[part].path } ?: -1
+    val played = when {
+        own == null -> play(start.book.parts.map { it.ref }, part, source, now)
+        at >= 0 -> jump(own.id, at, now)
+        else -> {
+            val back = own.items.indexOfLast { (it.sourceIndex ?: -1) in 0 until part } + 1
+            putBack(own.id, QueueItem(nextUid, start.book.parts[part].ref, sourceIndex = part), back).copy(nextUid = nextUid + 1).jump(own.id, back, now)
+        }
+    }
     val index = played.book.current?.index ?: return played
     return played.copy(book = played.book.place(index, start.place.positionMs))
 }
