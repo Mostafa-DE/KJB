@@ -6,6 +6,7 @@ import android.database.DatabaseErrorHandler
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.sqlite.transaction
+import app.lyrify.audio.OutputKind
 import app.lyrify.library.SongRef
 import app.lyrify.player.SourceKind
 import kotlinx.coroutines.CoroutineDispatcher
@@ -118,7 +119,7 @@ fun loggedPlayOf(row: PlayRow): LoggedPlay? {
     val play = storedPlayOf(row.text("path"), row.number("started_at"), row.number("media_id"), row.number("heard_ms"), row.number("counted"), null, null, null, row.number("clock_ms"))?.play
         ?: return null
     return play.copy(
-        start = playStartOf(row.text("started_by"), row.text("source"), row.number("shuffled")?.let { it != 0L }, row.text("song_key")),
+        start = playStartOf(row.text("started_by"), row.text("source"), row.number("shuffled")?.let { it != 0L }, row.text("song_key"), row.text("output"), row.text("playlist_id")),
         zoneOffsetMinutes = zoneOffsetOf(row.number("zone_offset_min")),
         end = playEndedOf(row.text("ended_how"), row.number("ended_at_ms")),
         imported = (row.number("imported") ?: 0) != 0L,
@@ -127,10 +128,22 @@ fun loggedPlayOf(row: PlayRow): LoggedPlay? {
 
 /**
  * How a play began as `plays.db` or a backup keeps it, read leniently: none without how ([by]); a code this version
- * does not know is [StartedBy.UNKNOWN], a kind of list it does not know none, Shuffle unknown off.
+ * does not know is [StartedBy.UNKNOWN], a kind of list or an output it does not know none, Shuffle unknown off; a
+ * playlist's id only for a play from a playlist (never another list's key, which can hold a name or a path), a blank
+ * one none.
  */
-fun playStartOf(by: String?, source: String?, shuffled: Boolean?, songKey: String?): PlayStart? =
-    by?.let { PlayStart(enumOf<StartedBy>(it) ?: StartedBy.UNKNOWN, enumOf<SourceKind>(source), shuffled ?: false, songKey) }
+@Suppress("LongParameterList")
+fun playStartOf(by: String?, source: String?, shuffled: Boolean?, songKey: String?, output: String? = null, playlistId: String? = null): PlayStart? = by?.let {
+    val kind = enumOf<SourceKind>(source)
+    PlayStart(
+        enumOf<StartedBy>(it) ?: StartedBy.UNKNOWN,
+        kind,
+        shuffled ?: false,
+        songKey,
+        enumOf<OutputKind>(output),
+        playlistId?.takeIf { id -> kind == SourceKind.PLAYLIST && id.isNotBlank() },
+    )
+}
 
 /** How a play ended as kept, read leniently: none without how or where; a code unknown here is [PlayEnd.UNKNOWN], a place below 0 the start. */
 fun playEndedOf(how: String?, atMs: Long?): PlayEnded? =
@@ -178,6 +191,9 @@ object PlaysSchema {
      * Version 6: Huddle's history (huddle/HuddleStore.kt, HuddleLog): every card between the user and their friends, both
      * ways, one row per message id with the card as Huddle's JSON, and friends' plays, one row each. Never in the plays
      * section of a backup: only in Huddle's, sealed with its passphrase.
+     * Version 7: where each play was heard ([PlayStart.output], a kind of output by its code, never a device) and the
+     * playlist it came from ([PlayStart.playlistId]), for Insights' Where you listen and Top playlists (KJB v4); the
+     * plays from before keep NULL there.
      */
     val STEPS: List<List<String>> = listOf(
         listOf(
@@ -215,6 +231,7 @@ object PlaysSchema {
             "CREATE INDEX IF NOT EXISTS friend_plays_by_friend ON friend_plays (friend, at)",
             "CREATE INDEX IF NOT EXISTS friend_plays_by_time ON friend_plays (at)",
         ),
+        listOf("ALTER TABLE plays ADD COLUMN output TEXT", "ALTER TABLE plays ADD COLUMN playlist_id TEXT"),
     )
 
     val VERSION: Int = STEPS.size
@@ -258,6 +275,8 @@ object PlaysSchema {
         play.end?.atMs,
         flag(play.imported),
         play.clockMs,
+        play.start?.output?.let(::codeOf),
+        play.start?.playlistId,
     )
 
     private fun flag(on: Boolean): Long = if (on) 1L else 0L
@@ -265,27 +284,29 @@ object PlaysSchema {
     /**
      * The same play again keeps the most heard, its count once counted, its id hint unless a new one is given, how it
      * began and its time zone as first written (a play that goes on after a restart began as it began; a part the first
-     * write lacked, such as the song's key before the library was read, filled in by a later one), how it ended as last
+     * write lacked, such as the song's key before the library was read, filled in by a later one; where it was heard and
+     * its playlist too), how it ended as last
      * written, its import mark once marked, and the most real minutes written (none until a write has them: NULL is no
      * value to SQLite's max()). Its values: [putArgs].
      */
     const val PUT: String = "INSERT INTO plays (path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
-        "ended_how, ended_at_ms, imported, clock_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ended_how, ended_at_ms, imported, clock_ms, output, playlist_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
         "ON CONFLICT (path, started_at) DO UPDATE SET media_id = coalesce(excluded.media_id, media_id), " +
         "heard_ms = max(heard_ms, excluded.heard_ms), counted = max(counted, excluded.counted), " +
         "started_by = coalesce(started_by, excluded.started_by), source = coalesce(source, excluded.source), " +
         "shuffled = coalesce(shuffled, excluded.shuffled), zone_offset_min = coalesce(zone_offset_min, excluded.zone_offset_min), " +
         "song_key = coalesce(song_key, excluded.song_key), ended_how = coalesce(excluded.ended_how, ended_how), " +
         "ended_at_ms = coalesce(excluded.ended_at_ms, ended_at_ms), imported = max(imported, excluded.imported), " +
-        "clock_ms = coalesce(max(clock_ms, excluded.clock_ms), clock_ms, excluded.clock_ms)"
+        "clock_ms = coalesce(max(clock_ms, excluded.clock_ms), clock_ms, excluded.clock_ms), " +
+        "output = coalesce(output, excluded.output), playlist_id = coalesce(playlist_id, excluded.playlist_id)"
 
     /** Every play, the short ones too, the oldest first, with all it keeps (a backup; [loggedPlayOf] reads them). */
     const val ALL: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
-        "ended_how, ended_at_ms, imported, clock_ms FROM plays ORDER BY started_at, path"
+        "ended_how, ended_at_ms, imported, clock_ms, output, playlist_id FROM plays ORDER BY started_at, path"
 
     /** [ALL] from a start on (inclusive), by plays_by_start: suggestions read only the plays since they last read. */
     const val SINCE: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
-        "ended_how, ended_at_ms, imported, clock_ms FROM plays WHERE started_at >= CAST(? AS INTEGER) ORDER BY started_at, path"
+        "ended_how, ended_at_ms, imported, clock_ms, output, playlist_id FROM plays WHERE started_at >= CAST(? AS INTEGER) ORDER BY started_at, path"
 
     const val KEEP_OPEN: String = "INSERT OR REPLACE INTO open_plays (path, started_at, duration_ms, position_ms, spans) VALUES (?, ?, ?, ?, ?)"
 

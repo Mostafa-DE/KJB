@@ -1,5 +1,6 @@
 package app.lyrify.stats
 
+import app.lyrify.audio.OutputKind
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.lyrics.TrackNames
@@ -106,9 +107,19 @@ enum class StartedBy {
 
 /**
  * What the player knew as a play began: how ([by]), the kind of list its queue came from ([source]; null without a
- * queue), whether that queue was shuffled, and the song's [songKey].
+ * queue), whether that queue was shuffled, and the song's [songKey]. Since KJB v4 (Insights' Where you listen and Top
+ * playlists) also the kind of [output] the sound came out of (the car while one is connected), never a device's name or
+ * address, and the playlist's id when the queue came from one ([playlistId]; never another list's key, which can hold a
+ * name or a path); none for a play from before.
  */
-data class PlayStart(val by: StartedBy, val source: SourceKind?, val shuffled: Boolean, val songKey: String?)
+data class PlayStart(
+    val by: StartedBy,
+    val source: SourceKind?,
+    val shuffled: Boolean,
+    val songKey: String?,
+    val output: OutputKind? = null,
+    val playlistId: String? = null,
+)
 
 /** [value]'s name as `plays.db` and backups keep it: lower case. */
 fun codeOf(value: Enum<*>): String = value.name.lowercase(Locale.ROOT)
