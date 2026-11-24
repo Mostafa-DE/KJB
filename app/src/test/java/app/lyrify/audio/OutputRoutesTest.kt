@@ -353,6 +353,21 @@ class OutputRoutesTest {
     }
 
     @Test
+    fun `each play keeps where it was heard as it starts, the car while one is connected, and only a playlist's id`() {
+        // Insights' Where you listen (IN3): the kind of output music plays on as the song starts, read from the phone's
+        // routing (Android 13 on) or the devices connected; Android Auto's sound goes through its own link, so a car
+        // connected (Android Auto, a car's media centre: auto/CarBrowse.kt's access) is the car. Never a device's name.
+        val service = File("src/main/java/app/lyrify/player/PlaybackService.kt").readText()
+        assertTrue(service.contains("output = if (browse.inCar) OutputKind.CAR else readOutput(getSystemService(AudioManager::class.java)).kind,"))
+        assertTrue(service.contains("playlistId = playlistIdOf(queue.source.kind, queue.source.key),"))
+        val car = File("src/main/java/app/lyrify/auto/CarBrowse.kt").readText()
+        assertTrue(car.contains("val inCar: Boolean get() = Access.CAR in connected.values"))
+        // A car's own Bluetooth cannot be told from earbuds without asking for nearby devices: it stays Bluetooth.
+        assertEquals(OutputKind.BLUETOOTH, outputKey(OutputDevice(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, "Made-up Car"))?.kind)
+        assertEquals(OutputKind.CAR, outputKey(OutputDevice(AudioDeviceInfo.TYPE_BUS, null))?.kind)
+    }
+
+    @Test
     fun `the equalizer's code never reads a device's address`() {
         val sources = File("src/main/java/app/lyrify/audio").listFiles().orEmpty().toList() + File("src/main/java/app/lyrify/ui/AudioScreens.kt")
         assertTrue(sources.size > 3)
