@@ -345,7 +345,7 @@ class PlayerConnection(
      * chapter [index] plays from its start, its part put back first when it was taken out of the queue ([toChapter]).
      */
     fun toChapter(book: BookNow, index: Int) {
-        core.switch { it.toChapter(book, index, core.now()) }
+        core.switch { it.toChapter(book, index, library(), core.now()) }
         send { it.play() }
     }
 

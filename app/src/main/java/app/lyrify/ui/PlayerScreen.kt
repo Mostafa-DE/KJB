@@ -288,7 +288,7 @@ fun incoming(ui: PlayerUi, way: SkipWay, positionMs: Long, book: BookNow? = null
         val fresh = bookNowAt(book, positionMs)
         val chapter = (if (way == SkipWay.NEXT) nextChapter(fresh) else previousChapter(fresh)) ?: return null
         // Only a look at the part the step plays: the time is not kept.
-        return ui.book.toChapter(fresh, chapter, now = 0).book.current?.current?.takeIf { it.uid != ui.queue.current?.uid }
+        return ui.book.toChapter(fresh, chapter, ui.library, now = 0).book.current?.current?.takeIf { it.uid != ui.queue.current?.uid }
     }
     val items = ui.queue.items
     val at = when (way) {

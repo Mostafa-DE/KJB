@@ -91,14 +91,13 @@ fun QueueBook.playBook(start: BookStart, now: Long): Switched {
 }
 
 /**
- * [start]'s book plays from [BookStart.place] exactly: its own queue too, when that plays already, goes there
+ * [start]'s book plays from [BookStart.place] exactly: its own queue too, when that plays already ([own]), goes there
  * ([QueueBook.jump]), a part taken out of it put back first, after the last of the book's parts before it (by path:
  * one moved with Play next keeps no list place); else a new queue of its parts ([QueueBook.play]).
  */
-private fun QueueBook.playBookAt(start: BookStart, now: Long): Switched {
+private fun QueueBook.playBookAt(start: BookStart, now: Long, own: Queue? = current?.takeIf { it.from(bookSource(start.book)) }): Switched {
     val source = bookSource(start.book)
     val part = start.place.partIndex
-    val own = current?.takeIf { it.from(source) }
     val at = own?.items?.indexOfFirst { it.song.path == start.book.parts[part].path } ?: -1
     val played = when {
         own == null -> play(start.book.parts.map { it.ref }, part, source, now)
@@ -126,9 +125,11 @@ fun QueueBook.toBookmark(path: String, positionMs: Long, library: Library?, now:
 /**
  * Chapter [index] of the book playing ([book]) from its start ([chapterPlace]), for the player's chapter Next and
  * Previous, a chapter's tap and the cover's swipe: the book's own queue goes there ([playBookAt]), its part put back
- * first when it was taken out of the queue, so no chapter is ever out of reach (BC1).
+ * first when it was taken out of the queue, so no chapter is ever out of reach (BC1). That queue is the one the player
+ * plays as the book, found by its key in [library] as [playingBook] does: also one saved under the book's id before PF10.
  */
-fun QueueBook.toChapter(book: BookNow, index: Int, now: Long): Switched = playBookAt(BookStart(book.book, chapterPlace(book, index)), now)
+fun QueueBook.toChapter(book: BookNow, index: Int, library: Library?, now: Long): Switched =
+    playBookAt(BookStart(book.book, chapterPlace(book, index)), now, own = current?.takeIf { inBook(it) && library?.book(it.source.key)?.id == book.book.id })
 
 /**
  * [switched], what a list's tap or a queue's song, Resume or Play from start made of this book of queues; or, when the song

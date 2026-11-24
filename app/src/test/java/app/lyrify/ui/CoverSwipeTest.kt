@@ -4,6 +4,7 @@ import app.lyrify.books.BookState
 import app.lyrify.books.Chapter
 import app.lyrify.books.bookNow
 import app.lyrify.books.bookSource
+import app.lyrify.books.oldFolderBookId
 import app.lyrify.books.toChapter
 import app.lyrify.library.Library
 import app.lyrify.library.SongRef
@@ -35,9 +36,9 @@ class CoverSwipeTest {
         index = index,
     )
 
-    /** The player on [queue], one of [queues] (by default the only one). */
-    private fun ui(queue: Queue, repeat: Repeat = Repeat.OFF, queues: QueueBook = QueueBook(listOf(queue), queue.id)) =
-        PlayerUi(queues, queue, queue.current!!, song = null, playing = false, positionMs = 0, at = 0, speed = 1f, durationMs = 0, repeat = repeat, library = null)
+    /** The player on [queue], one of [queues] (by default the only one), with [library] read (a book's needs it). */
+    private fun ui(queue: Queue, repeat: Repeat = Repeat.OFF, queues: QueueBook = QueueBook(listOf(queue), queue.id), library: Library? = null) =
+        PlayerUi(queues, queue, queue.current!!, song = null, playing = false, positionMs = 0, at = 0, speed = 1f, durationMs = 0, repeat = repeat, library = library)
 
     @Test
     fun `the gesture locks to an axis only past 12 dp, sideways or down, never up`() {
@@ -126,28 +127,30 @@ class CoverSwipeTest {
     @Test
     fun `in a book the cover brings in the part the chapter buttons go to, never round to the first`() {
         val parts = (1..3).map { song("Audiobooks/Folder Book/$it.mp3", album = "Folder Book", durationMs = 600_000) }
-        val book = Library.of(parts, Settings()).books.single()
+        val library = Library.of(parts, Settings())
+        val book = library.books.single()
         val queue = Queue("b", bookSource(book), parts.mapIndexed { i, part -> QueueItem(uid = i.toLong(), song = part.ref) }, index = 1)
         // Where the chapter was last looked at does not matter: the swipe reads the place at its end.
         val now = bookNow(book, 1, 0, BookState())
-        assertEquals(2L, incoming(ui(queue), SkipWay.NEXT, positionMs = 60_000, book = now)?.uid)
-        assertEquals(0L, incoming(ui(queue), SkipWay.PREVIOUS, positionMs = 3_000, book = now)?.uid)
+        assertEquals(2L, incoming(ui(queue, library = library), SkipWay.NEXT, positionMs = 60_000, book = now)?.uid)
+        assertEquals(0L, incoming(ui(queue, library = library), SkipWay.PREVIOUS, positionMs = 3_000, book = now)?.uid)
         // Past 3 s Previous starts the part over, as the button does: nothing slides in.
-        assertNull(incoming(ui(queue), SkipWay.PREVIOUS, positionMs = 3_001, book = now))
+        assertNull(incoming(ui(queue, library = library), SkipWay.PREVIOUS, positionMs = 3_001, book = now))
         // The last part's Next goes nowhere, and the first part's Previous neither, whatever Repeat says.
-        assertNull(incoming(ui(queue.copy(index = 2), Repeat.ALL), SkipWay.NEXT, positionMs = 0, book = bookNow(book, 2, 0, BookState())))
-        assertNull(incoming(ui(queue.copy(index = 0), Repeat.ALL), SkipWay.PREVIOUS, positionMs = 0, book = bookNow(book, 0, 0, BookState())))
+        assertNull(incoming(ui(queue.copy(index = 2), Repeat.ALL, library = library), SkipWay.NEXT, positionMs = 0, book = bookNow(book, 2, 0, BookState())))
+        assertNull(incoming(ui(queue.copy(index = 0), Repeat.ALL, library = library), SkipWay.PREVIOUS, positionMs = 0, book = bookNow(book, 0, 0, BookState())))
     }
 
     @Test
     fun `in a one-file book no other cover comes, its chapters are inside the file`() {
         val orchard = song("Audiobooks/Quiet Orchard.m4b", durationMs = 900_000)
-        val book = Library.of(listOf(orchard), Settings()).books.single()
+        val library = Library.of(listOf(orchard), Settings())
+        val book = library.books.single()
         val chapters = BookState().withChapters(book, "stamp", listOf(Chapter(0, 300_000, "One"), Chapter(300_000, 600_000, "Two"), Chapter(600_000, 900_000, "Three")))
         val queue = Queue("o", bookSource(book), listOf(QueueItem(uid = 9, song = orchard.ref)))
         val now = bookNow(book, 0, 400_000, chapters)
-        assertNull(incoming(ui(queue), SkipWay.NEXT, positionMs = 400_000, book = now))
-        assertNull(incoming(ui(queue, Repeat.ALL), SkipWay.PREVIOUS, positionMs = 301_000, book = now))
+        assertNull(incoming(ui(queue, library = library), SkipWay.NEXT, positionMs = 400_000, book = now))
+        assertNull(incoming(ui(queue, Repeat.ALL, library = library), SkipWay.PREVIOUS, positionMs = 301_000, book = now))
         // Nothing slides in, yet the swipe still runs its chapter step (BookCoverDeviceTest swipes it on a phone).
         assertEquals(Settled.SKIP, settledSwipe(startedOn = 9, playingNow = 9, coming = null))
     }
@@ -155,21 +158,25 @@ class CoverSwipeTest {
     @Test
     fun `in a book the cover brings in a part taken out of the queue, the very one the chapter step puts back (BC1)`() {
         val parts = (1..3).map { song("Audiobooks/Folder Book/$it.mp3", album = "Folder Book", durationMs = 600_000) }
-        val book = Library.of(parts, Settings()).books.single()
-        val playing = QueueBook().play(parts.map { it.ref }, 1, bookSource(book), now = 1).book
-        // Both parts around the one playing taken out of the book's queue.
-        val alone = listOf(0, 2).fold(playing) { queues, gone -> queues.remove(queues.currentId!!, queues.current!!.items.first { it.song.path == parts[gone].path }.uid)!!.book }
-        val player = ui(alone.current!!, queues = alone)
-        val now = bookNow(book, 1, 0, BookState())
-        val next = incoming(player, SkipWay.NEXT, positionMs = 60_000, book = now)
-        assertEquals(parts[2].path, next?.song?.path)
-        // The item Next chapter plays, so the cover that slid in lands on it.
-        assertEquals(alone.toChapter(now, 2, now = 10).book.current?.current?.uid, next?.uid)
-        val previous = incoming(player, SkipWay.PREVIOUS, positionMs = 2_000, book = now)
-        assertEquals(parts[0].path, previous?.song?.path)
-        assertEquals(alone.toChapter(now, 0, now = 10).book.current?.current?.uid, previous?.uid)
-        // Past 3 s Previous starts the part over: nothing slides in, nothing is put back.
-        assertNull(incoming(player, SkipWay.PREVIOUS, positionMs = 3_001, book = now))
+        val library = Library.of(parts, Settings())
+        val book = library.books.single()
+        // The book's queue, and one saved under its id before PF10, which the player plays as the book too.
+        listOf(bookSource(book), QueueSource(SourceKind.BOOK, oldFolderBookId(book.id)!!, book.title)).forEach { source ->
+            val playing = QueueBook().play(parts.map { it.ref }, 1, source, now = 1).book
+            // Both parts around the one playing taken out of the book's queue.
+            val alone = listOf(0, 2).fold(playing) { queues, gone -> queues.remove(queues.currentId!!, queues.current!!.items.first { it.song.path == parts[gone].path }.uid)!!.book }
+            val player = ui(alone.current!!, queues = alone, library = library)
+            val now = bookNow(book, 1, 0, BookState())
+            val next = incoming(player, SkipWay.NEXT, positionMs = 60_000, book = now)
+            assertEquals(parts[2].path, next?.song?.path)
+            // The item Next chapter plays, so the cover that slid in lands on it.
+            assertEquals(alone.toChapter(now, 2, library, now = 10).book.current?.current?.uid, next?.uid)
+            val previous = incoming(player, SkipWay.PREVIOUS, positionMs = 2_000, book = now)
+            assertEquals(parts[0].path, previous?.song?.path)
+            assertEquals(alone.toChapter(now, 0, library, now = 10).book.current?.current?.uid, previous?.uid)
+            // Past 3 s Previous starts the part over: nothing slides in, nothing is put back.
+            assertNull(incoming(player, SkipWay.PREVIOUS, positionMs = 3_001, book = now))
+        }
     }
 
     @Test
