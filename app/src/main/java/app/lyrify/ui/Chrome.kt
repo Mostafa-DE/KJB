@@ -105,6 +105,7 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -507,7 +508,8 @@ fun DotBadge(modifier: Modifier = Modifier) {
 
 /**
  * KJB's top bar: the title in Bricolage, its navigation and actions as glass circles. The page's colour at rest, opaque
- * ([TopBand]); once content is [under] it, a glass band and a hairline fade in. No colour flip.
+ * ([TopBand]); once content is [under] it, a glass band and a hairline fade in. No colour flip. Its line: maybe Back,
+ * the title (one heading, in the title style), and the actions at the end.
  */
 @Composable
 fun LyrifyTopBar(
@@ -519,62 +521,79 @@ fun LyrifyTopBar(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     TopBand(under, backdrop, modifier) {
-        Box(Modifier.statusBarsPadding()) { TopBarRow(title, navigation, actions) }
-    }
-}
-
-/** A top bar's line: maybe Back, the title (one heading, in the title style), and the actions at the end. */
-@Composable
-private fun TopBarRow(title: @Composable () -> Unit, navigation: (@Composable () -> Unit)?, actions: @Composable RowScope.() -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.heightIn(min = BAR_HEIGHT).padding(start = if (navigation != null) 8.dp else 20.dp, end = 12.dp),
-    ) {
-        navigation?.let {
-            it()
-            Spacer(Modifier.width(4.dp))
+        Box(Modifier.statusBarsPadding()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.heightIn(min = BAR_HEIGHT).padding(start = if (navigation != null) 8.dp else 20.dp, end = 12.dp),
+            ) {
+                navigation?.let {
+                    it()
+                    Spacer(Modifier.width(4.dp))
+                }
+                Box(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
+                    ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, content = actions)
+            }
         }
-        Box(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
-            ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, content = actions)
     }
 }
 
 /**
  * The header of the main pages, the bar's roots (Library, Playlists, Search, Tools and what else the bar holds): the KJB
- * logo at the start, then the page's title in the title style and right after it Huddle ([HuddleButton]: in reach from
- * every one but Huddle's own, user 2026-11-23), the page's own actions at the end (user decision 2026-11-11). The logo
- * is decorative, so TalkBack reads one heading, the title alone, then Huddle. [below]: more of the band under the line,
- * as Search's field. Inner pages keep [LyrifyTopBar] with Back and their own title.
+ * logo at the start, then the page's title in the title style, the page's own actions (user decision 2026-11-11), and at
+ * the very end Huddle ([HuddleButton]: in reach from every one but Huddle's own, user 2026-11-23; a pill at the end, user
+ * 2026-11-24). One line measured as the list header's: Huddle shows its word only while the title still fits whole
+ * beside it ([huddleWord]), else its glyph alone, and the title takes what is left. The logo is decorative, so TalkBack
+ * reads one heading, the title alone, then the page's buttons, then Huddle. [below]: more of the band under the line, as
+ * Search's field. Inner pages keep [LyrifyTopBar] with Back and their own title.
  */
 @Composable
 fun MainTopBar(tab: DockTab, under: Boolean, backdrop: GlassBackdrop?, actions: @Composable RowScope.() -> Unit = {}, below: (@Composable () -> Unit)? = null) {
     val title = stringResource(headerPage(tab))
     TopBand(under, backdrop) {
         Column(Modifier.statusBarsPadding()) {
-            TopBarRow(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+            SubcomposeLayout(Modifier.heightIn(min = BAR_HEIGHT).padding(start = 20.dp, end = 12.dp)) { constraints ->
+                val loose = constraints.copy(minWidth = 0, minHeight = 0)
+                val titlePart = subcompose("title") {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) { heading() }) {
                         HeaderLogo()
                         Spacer(Modifier.width(12.dp))
-                        // The title gives way first, so Huddle stays right after its words whatever buttons the page has.
-                        Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                        // Opened as Tools' Huddle row opens it (so on its name step until one is picked); Back comes back here.
-                        if (tab != DockTab.HUDDLE) {
-                            val nav = LocalNavigator.current
-                            Spacer(Modifier.width(4.dp))
-                            HuddleButton { nav.open(Page.Huddle, keepOrigin = true) }
-                        }
+                        Text(title, style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                },
-                navigation = null,
-                actions = actions,
-            )
+                }
+                val own = subcompose("actions") { Row(verticalAlignment = Alignment.CenterVertically, content = actions) }.map { it.measure(loose) }
+                val huddles = if (tab == DockTab.HUDDLE) null else listOf(true, false).associateWith { word ->
+                    subcompose("huddle $word") {
+                        // Opened as Tools' Huddle row opens it (so on its name step until one is picked); Back comes back here.
+                        val nav = LocalNavigator.current
+                        HuddleButton(word) { nav.open(Page.Huddle, keepOrigin = true) }
+                    }.map { it.measure(loose) }
+                }
+                val buttons = own.sumOf { it.width }
+                val word = huddles != null && huddleWord(constraints.maxWidth, titlePart.sumOf { it.maxIntrinsicWidth(constraints.maxHeight) }, buttons, huddles.getValue(true).sumOf { it.width })
+                val huddle = huddles?.getValue(word).orEmpty()
+                val end = buttons + huddle.sumOf { it.width }
+                // The title shortens (ending in "...") only once Huddle is down to its glyph and the line is still too short.
+                val shownTitle = titlePart.map { it.measure(loose.copy(maxWidth = (constraints.maxWidth - end).coerceAtLeast(0))) }
+                val height = maxOf((shownTitle + own + huddle).maxOf { it.height }, constraints.minHeight)
+                layout(constraints.maxWidth, height) {
+                    shownTitle.forEach { it.placeRelative(0, (height - it.height) / 2) }
+                    own.forEach { it.placeRelative(constraints.maxWidth - end, (height - it.height) / 2) }
+                    huddle.forEach { it.placeRelative(constraints.maxWidth - it.width, (height - it.height) / 2) }
+                }
+            }
             below?.invoke()
         }
     }
 }
+
+/**
+ * Whether the main pages' header shows Huddle with its word, from what is measured, never from the font scale alone:
+ * only while the [title] whole (the logo, its gap and the words), the page's own [buttons] and Huddle with its word
+ * ([huddle]) all fit [maxWidth], so the title keeps priority over the word (user 2026-11-24). Else the glyph alone.
+ */
+fun huddleWord(maxWidth: Int, title: Int, buttons: Int, huddle: Int): Boolean = title + buttons + huddle <= maxWidth
 
 /** The name a dock destination's header shows after the logo: the dock's own word for it. */
 fun headerPage(tab: DockTab): Int = tab.label
@@ -633,22 +652,6 @@ fun ChromeIconButton(
     iconSize: Dp = 22.dp,
     tint: Color = LocalContentColor.current,
 ) {
-    ChromeIconButton(contentDescription, onClick, modifier, enabled, glass, size) {
-        Icon(painterResource(icon), contentDescription = null, tint = if (enabled) tint else tint.copy(alpha = DISABLED_ALPHA), modifier = Modifier.size(iconSize))
-    }
-}
-
-/** [ChromeIconButton] with its own drawing in the circle ([content]) in place of an icon: the headers' Huddle. */
-@Composable
-fun ChromeIconButton(
-    contentDescription: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    glass: Boolean = true,
-    size: Dp = 40.dp,
-    content: @Composable BoxScope.() -> Unit,
-) {
     val chrome = LocalChromeColors.current
     val source = remember { MutableInteractionSource() }
     Box(
@@ -664,8 +667,9 @@ fun ChromeIconButton(
                 .size(size)
                 .indication(source, PressIndication(CircleShape, 0.9f))
                 .then(if (glass) Modifier.background(chrome.glassSolid, CircleShape).border(1.dp, chrome.glassEdge, CircleShape) else Modifier),
-            content = content,
-        )
+        ) {
+            Icon(painterResource(icon), contentDescription = null, tint = if (enabled) tint else tint.copy(alpha = DISABLED_ALPHA), modifier = Modifier.size(iconSize))
+        }
     }
 }
 

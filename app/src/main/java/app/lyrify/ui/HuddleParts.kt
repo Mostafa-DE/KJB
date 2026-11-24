@@ -272,84 +272,97 @@ internal fun Equaliser(color: Color, modifier: Modifier = Modifier, count: Int =
 }
 
 /**
- * Huddle in the headers, the glyph the user picked (2026-11-23): two friends huddled round a note ([R.drawable.ic_huddle])
- * in Search and Tools' glass circle, the note cut out of them. While a friend plays now the note gives way to three coral
- * bars ([Equaliser]) and a coral ring pulses out round the circle; several playing, their count ([CountBadge]); before a
- * name is picked, a small ink plus. With Remove animations, and on a root that is not showing, the bars rest and the
- * ring sits still round the circle. It reads the shell's one state ([LocalDockBar]), as the bar's dot does; its whole
- * look is here, so another can take its place without touching the pages.
+ * Huddle at the end of the headers (user 2026-11-24): the sort chip's tonal pill ([LyrifyChip], as Library's "Title"),
+ * with the glyph the user picked (2026-11-23), two friends huddled round a note ([R.drawable.ic_huddle]), the note cut
+ * out of them, and the word Huddle; with [word] false, on a line too narrow for it ([huddleWord]), the glyph alone.
+ * While a friend plays now the note gives way to three coral bars ([Equaliser]) and a coral ring pulses out round the
+ * pill; several playing, their count ([CountBadge]); before a name is picked, a small ink plus. With Remove animations,
+ * and on a root that is not showing, the bars rest and the ring sits still round the pill. It reads the shell's one
+ * state ([LocalDockBar]), as the bar's dot does; its whole look is here, so another can take its place without touching
+ * the pages.
  */
 @Composable
-internal fun HuddleButton(onClick: () -> Unit) {
+internal fun HuddleButton(word: Boolean, onClick: () -> Unit) {
     val live = LocalDockBar.current.huddleLive?.value ?: HuddleLive()
     val reduced = LocalReducedMotion.current
     val brand = LocalBrandColors.current
     val chrome = LocalChromeColors.current
-    // What the glyph's note and bars and the badges are cut out of: the glass circle's colour, as CountBadge's ring.
-    val ground = MaterialTheme.colorScheme.surfaceContainer
+    val colors = MaterialTheme.colorScheme
+    // What the glyph's note and bars and the plus are cut out of: the pill's colour, a chip's at rest.
+    val ground = colors.surfaceContainerHigh
     // The note gives way to the bars, and the ring comes, on one spring; at once with Remove animations.
     val lit by animateFloatAsState(if (live.playing.isNotEmpty()) 1f else 0f, motion(Motion.indicator, reduced), label = "huddle live")
+    // The ring's clock, only while a friend plays (or the ring fades).
+    val pulse = if (lit > 0f && huddleMoves()) rememberInfiniteTransition(label = "huddle ring").animateFloat(0f, 1f, infiniteRepeatable(tween(RING_PULSE_MS, easing = Motion.Pulse)), label = "pulse") else null
     // The count a leaving badge keeps showing.
     val count = remember { Kept(2) }
     if (live.playing.size > 1) count.value = live.playing.size
     val glyph = ImageVector.vectorResource(R.drawable.ic_huddle)
     val (friends, note) = remember(glyph) { listOf("friends", "note").map { name -> glyph.root.filterIsInstance<VectorPath>().first { it.name == name }.pathData.toPath() } }
+    val name = dockItemName(
+        stringResource(R.string.huddle_title),
+        if (!live.joined) stringResource(R.string.huddle_header_not_joined) else null,
+        when (live.playing.size) {
+            0 -> null
+            1 -> stringResource(R.string.huddle_header_playing, live.playing.single())
+            else -> pluralStringResource(R.plurals.huddle_header_playing_count, live.playing.size, live.playing.size)
+        },
+    )
     Box {
-        // The ring, under the circle, and its clock only while a friend plays (or the ring fades).
-        if (lit > 0f) {
-            val pulse = if (huddleMoves()) rememberInfiniteTransition(label = "huddle ring").animateFloat(0f, 1f, infiniteRepeatable(tween(RING_PULSE_MS, easing = Motion.Pulse)), label = "pulse") else null
-            Canvas(Modifier.matchParentSize()) {
-                val width = 1.5.dp.toPx()
-                drawCircle(
-                    brand.highlight,
-                    (RING.toPx() - width) / 2 * (pulse?.value?.let { 0.92f + 0.44f * it } ?: 1f),
-                    alpha = lit.coerceIn(0f, 1f) * (pulse?.value?.let { 0.8f * (1f - it) } ?: 0.6f),
-                    style = Stroke(width),
-                )
-            }
-        }
-        ChromeIconButton(
-            dockItemName(
-                stringResource(R.string.huddle_title),
-                if (!live.joined) stringResource(R.string.huddle_header_not_joined) else null,
-                when (live.playing.size) {
-                    0 -> null
-                    1 -> stringResource(R.string.huddle_header_playing, live.playing.single())
-                    else -> pluralStringResource(R.plurals.huddle_header_playing_count, live.playing.size, live.playing.size)
-                },
-            ),
-            onClick,
-        ) {
-            val ink = LocalContentColor.current
-            val unit = GLYPH / glyph.viewportWidth
-            Box(Modifier.size(GLYPH)) {
-                Canvas(Modifier.matchParentSize()) {
-                    scale(size.width / glyph.viewportWidth, pivot = Offset.Zero) {
-                        drawPath(friends, ink)
-                        val shown = 1f - lit.coerceIn(0f, 1f)
-                        if (shown > 0f) {
-                            scale(0.3f + 0.7f * shown, pivot = note.getBounds().bottomCenter) {
-                                drawPath(note, ground, shown, Stroke(GLYPH_CUT, join = StrokeJoin.Round))
-                                drawPath(note, ink, shown)
+        LyrifyChip(
+            selected = false,
+            onClick = onClick,
+            role = Role.Button,
+            modifier = Modifier.semantics { contentDescription = name },
+            leading = {
+                // The sort chip's icon ink.
+                val ink = colors.onSurfaceVariant
+                val unit = GLYPH / glyph.viewportWidth
+                Box(Modifier.size(GLYPH)) {
+                    Canvas(Modifier.matchParentSize()) {
+                        scale(size.width / glyph.viewportWidth, pivot = Offset.Zero) {
+                            drawPath(friends, ink)
+                            val shown = 1f - lit.coerceIn(0f, 1f)
+                            if (shown > 0f) {
+                                scale(0.3f + 0.7f * shown, pivot = note.getBounds().bottomCenter) {
+                                    drawPath(note, ground, shown, Stroke(GLYPH_CUT, join = StrokeJoin.Round))
+                                    drawPath(note, ink, shown)
+                                }
                             }
                         }
                     }
+                    if (lit > 0f) {
+                        Equaliser(
+                            brand.highlight,
+                            Modifier
+                                .offset(unit * GLYPH_BARS.left, unit * GLYPH_BARS.top)
+                                .size(unit * GLYPH_BARS.width, unit * GLYPH_BARS.height)
+                                .graphicsLayer {
+                                    scaleY = lit
+                                    transformOrigin = TransformOrigin(0.5f, 1f)
+                                },
+                            count = 3,
+                            gap = ground,
+                        )
+                    }
                 }
-                if (lit > 0f) {
-                    Equaliser(
-                        brand.highlight,
-                        Modifier
-                            .offset(unit * GLYPH_BARS.left, unit * GLYPH_BARS.top)
-                            .size(unit * GLYPH_BARS.width, unit * GLYPH_BARS.height)
-                            .graphicsLayer {
-                                scaleY = lit
-                                transformOrigin = TransformOrigin(0.5f, 1f)
-                            },
-                        count = 3,
-                        gap = ground,
-                    )
-                }
-            }
+            },
+            // The ring round the pill, under it, by its outer edge: still, RING_GAP out; moving, from the pill's edge out to
+            // RING_REACH.
+            capsule = if (lit > 0f) Modifier.drawBehind {
+                val width = 1.5.dp.toPx()
+                val out = (pulse?.value?.let { RING_REACH * it } ?: RING_GAP).toPx() - width / 2
+                drawRoundRect(
+                    brand.highlight,
+                    Offset(-out, -out),
+                    Size(size.width + out * 2, size.height + out * 2),
+                    CornerRadius(size.height / 2 + out),
+                    alpha = lit.coerceIn(0f, 1f) * (pulse?.value?.let { 0.8f * (1f - it) } ?: 0.6f),
+                    style = Stroke(width),
+                )
+            } else Modifier,
+        ) {
+            if (word) Text(stringResource(R.string.huddle_title), maxLines = 1, modifier = Modifier.clearAndSetSemantics {})
         }
         AnimatedVisibility(!live.joined, Modifier.align(Alignment.TopEnd).offset(x = 2.dp, y = (-1).dp), enter = badgeIn(reduced), exit = badgeOut(reduced)) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.clearAndSetSemantics {}.background(ground, CircleShape).padding(2.dp).background(chrome.action, CircleShape).size(18.dp)) {
@@ -756,7 +769,7 @@ private val EQ_STILL = floatArrayOf(0.45f, 1f, 0.7f, 0.35f)
 /** The ring kept round each bar with a gap: as wide as the headers' glyph keeps its note clear of the friends. */
 private val EQ_GAP = 0.65.dp
 
-/** The headers' Huddle glyph's size in its circle, as an icon's. */
+/** The headers' Huddle glyph's size in its pill: the header's icons' size, not a chip's 18 dp, so its note and bars read. */
 private val GLYPH = 22.dp
 
 /** How far the note's cut reaches round it, on the glyph's 24 grid: 0.7 each side (the mockup's 1.4 knock-out stroke). */
@@ -766,10 +779,12 @@ private const val GLYPH_CUT = 1.4f
 private val GLYPH_BARS = Rect(8.9f, 7f, 15.15f, 21.2f)
 
 /**
- * The live ring round the glass circle: still, this size at 60%; moving, it pulses from 92% to 136% of it, fading from
- * 80%, every [RING_PULSE_MS] on [Motion.Pulse] (the mockup's).
+ * The live ring round the headers' Huddle pill, by its outer edge: still, [RING_GAP] out at 60%; moving, it pulses from
+ * the pill's edge out to [RING_REACH], fading from 80%, every [RING_PULSE_MS] on [Motion.Pulse] (the mockup's). The
+ * reach it had round the glass circle, whose ring went from 92% to 136% of 44 dp.
  */
-private val RING = 44.dp
+private val RING_GAP = 2.dp
+private val RING_REACH = 10.dp
 private const val RING_PULSE_MS = 2_200
 
 private val CardName = display(17, 22, weight = 650)
