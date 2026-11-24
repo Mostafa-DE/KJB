@@ -793,12 +793,14 @@ private const val MOSAIC = 4
 @Composable
 fun PlaylistTile(playlist: Playlist, size: Dp = 48.dp) = MosaicTile(playlist.songs, size)
 
-/** A list's tile: a 2x2 mosaic of [songs]' covers ([mosaicCovers]), one cover, or the playlist icon when there is none. */
+/**
+ * A list's tile: a 2x2 mosaic of [songs]' covers ([mosaicCovers]), one cover, or the playlist icon when there is none; its
+ * [corner] the prototype's, 14 dp at 48 dp (.mosaic) and 28 dp on a page's hero (.mosaic.big), unless a smaller tile says.
+ */
 @Composable
-fun MosaicTile(songs: List<SongRef>, size: Dp = 48.dp) {
+fun MosaicTile(songs: List<SongRef>, size: Dp = 48.dp, corner: Dp = if (size > 64.dp) 28.dp else 14.dp) {
     val covers = remember(songs) { mosaicCovers(songs) }
-    // The prototype's corners: 14 dp at 48 dp (.mosaic), 28 dp on a page's hero (.mosaic.big).
-    val shape = RoundedCornerShape(if (size > 64.dp) 28.dp else 14.dp)
+    val shape = RoundedCornerShape(corner)
     when (covers.size) {
         0 -> Tile(R.drawable.ic_queue_music, size = size)
         1 -> covers.single().let { SongCover(SongArt(it.path, it.mediaStoreId), size = size, shape = shape) }

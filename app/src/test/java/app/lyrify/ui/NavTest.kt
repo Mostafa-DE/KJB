@@ -162,6 +162,9 @@ class NavTest {
         val own = NavState.start(DockTab.INSIGHTS).open(Page.TopList(TopKind.GENRES), docked = bar).open(album, docked = bar)
         assertEquals(DockTab.INSIGHTS, own.tab)
         assertEquals(listOf(Page.TopList(TopKind.GENRES), album), own.pages)
+        // Leave songs out of Insights (IN3), from Insights' menu: on Insights' tab, wherever Insights was.
+        assertEquals(listOf(Page.Listening, Page.InsightsLeftOut), NavState.start(DockTab.TOOLS).open(Page.Listening).open(Page.InsightsLeftOut).pages)
+        assertEquals(DockTab.INSIGHTS, NavState.start(DockTab.INSIGHTS).open(Page.InsightsLeftOut, docked = bar).tab)
         val story = NavState.start(DockTab.LIBRARY).show(FullScreen.Story(month = "2026-10"))
         assertEquals(listOf(FullScreen.Story(month = "2026-10")), story.views)
         assertEquals(story, NavState.decode(story.encode()))
@@ -784,7 +787,7 @@ class NavTest {
         val every = listOf(
             Page.Songs(SongGroup.NO_LYRICS, LyricsStatus.NOT_FOUND), Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists, Page.Folder("Music/Rips"), Page.Genre("Folk"),
             Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum,
-            Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.TopList(TopKind.GENRES), Page.Tones, Page.Bookmarks, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
+            Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.TopList(TopKind.GENRES), Page.InsightsLeftOut, Page.Tones, Page.Bookmarks, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
             Page.Licences, Page.Licence("Media3"), Page.Settings(), Page.Settings(SettingsSection.LYRICS),
             Page.ForYou, Page.MoreLike(SeedKind.ALBUM, "Harbour Glass"), Page.NeverSuggest, Page.SuggestionsHealth,
         ).fold(NavState.start(DockTab.LIBRARY)) { state, page -> state.copy(stacks = state.stacks + (DockTab.LIBRARY to state.stacks[DockTab.LIBRARY].orEmpty() + StackEntry(page))) }

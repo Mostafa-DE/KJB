@@ -81,7 +81,9 @@ import app.lyrify.stats.FriendsCard
 import app.lyrify.stats.ListeningPeriod
 import app.lyrify.stats.LyricsCard
 import app.lyrify.stats.Moment
+import app.lyrify.stats.OutputsCard
 import app.lyrify.stats.PagePeriod
+import app.lyrify.stats.PlaylistsCard
 import app.lyrify.stats.SearchesCard
 import app.lyrify.stats.Top
 import java.time.LocalDateTime
@@ -91,9 +93,9 @@ import kotlin.math.abs
 import kotlinx.coroutines.flow.first
 
 // Insights' cards about you (the approved mockup, handoff/insights/preview-insights-v1.html): new to you and back
-// again, you and your friends, read along with new favourites, your searches, books and podcasts, your library, your
-// listening type, milestones and badges; and the monthly recap's card on Library's start tab. The other cards are in
-// InsightsCards.kt.
+// again, you and your friends, read along with new favourites, your searches, where you listen with top playlists,
+// books and podcasts, your library, your listening type, milestones and badges; and the monthly recap's card on
+// Library's start tab. The other cards are in InsightsCards.kt.
 
 // New to you
 
@@ -547,6 +549,89 @@ internal fun YourSearches(searches: SearchesCard) {
     }
 }
 
+// Where you listen, top playlists
+
+/**
+ * Two tiles side by side (one above the other with large text), as Read along and New favourites: Where you listen, the
+ * plays by the output they were heard on, the most first, each with its share and a bar growing in as the top lists'
+ * race does; and Top playlists, the three played most with their covers and plays, each opening its playlist. Either
+ * shows alone while the other has too few plays: both fill in from the plays kept since KJB v4.
+ */
+@Composable
+internal fun WhereAndPlaylists(outputs: OutputsCard?, playlists: PlaylistsCard?, onOpen: (Page) -> Unit) {
+    if (LocalDensity.current.fontScale <= STACK_FONT_SCALE) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(horizontal = ScreenPadding).height(androidx.compose.foundation.layout.IntrinsicSize.Max)) {
+            outputs?.let { WhereYouListen(it, Modifier.weight(1f)) }
+            playlists?.let { TopPlaylists(it, onOpen, Modifier.weight(1f)) }
+        }
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(horizontal = ScreenPadding)) {
+            outputs?.let { WhereYouListen(it, Modifier.fillMaxWidth()) }
+            playlists?.let { TopPlaylists(it, onOpen, Modifier.fillMaxWidth()) }
+        }
+    }
+}
+
+/** Where you listen: a row for each output heard on (the phone's speaker, wired headphones, Bluetooth, the car), its share and its bar. */
+@Composable
+private fun WhereYouListen(outputs: OutputsCard, modifier: Modifier) {
+    val colors = MaterialTheme.colorScheme
+    val insights = if (LocalDarkTheme.current) DarkInsights else LightInsights
+    val clock = LocalArrivalClock.current
+    val all = (outputs.speaker + outputs.headphones + outputs.bluetooth + outputs.car).toLong()
+    val rows = listOf(
+        Triple(R.drawable.ic_smartphone, R.string.eq_output_speaker, outputs.speaker),
+        Triple(R.drawable.ic_headset_mic, R.string.eq_output_wired, outputs.headphones),
+        Triple(R.drawable.ic_bluetooth, R.string.eq_output_bluetooth, outputs.bluetooth),
+        Triple(R.drawable.ic_directions_car, R.string.eq_output_car, outputs.car),
+    ).filter { it.third > 0 }.sortedByDescending { it.third }
+    BentoTile(R.drawable.ic_headphones, stringResource(R.string.insights_where_title), modifier) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 6.dp)) {
+            rows.forEachIndexed { k, (icon, name, plays) ->
+                // One stop for TalkBack: the output and its share; the bar is drawn only.
+                Column(Modifier.semantics(mergeDescendants = true) {}) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Icon(painterResource(icon), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                        Text(stringResource(name), style = body(12.5f, 18, 500), color = colors.onSurface, modifier = Modifier.weight(1f))
+                        Text(stringResource(R.string.insights_percent, formatCount(percentOf(plays.toLong(), all))), style = display(14, 18, weight = 700).tabular(), color = colors.onSurface)
+                    }
+                    Canvas(Modifier.padding(start = 26.dp, top = 2.dp).fillMaxWidth().height(6.dp)) {
+                        val grown = phase(clock.ms(), GROW_DELAY_MS + k * GROW_STEP_MS, GROW_MS, Motion.Rise)
+                        drawRoundRect(insights.series[0], size = Size(size.width * plays / all * grown, size.height), cornerRadius = CornerRadius(3.dp.toPx()))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Top playlists: the [PLAYLISTS_SHOWN] played most, each its mosaic, name and plays, opening the playlist. */
+@Composable
+private fun TopPlaylists(playlists: PlaylistsCard, onOpen: (Page) -> Unit, modifier: Modifier) {
+    val colors = MaterialTheme.colorScheme
+    BentoTile(R.drawable.ic_queue_music, stringResource(R.string.insights_playlists_title), modifier) {
+        Column(Modifier.padding(top = 2.dp)) {
+            playlists.rows.take(PLAYLISTS_SHOWN).forEach { top ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClickLabel = stringResource(R.string.stats_open_playlist)) { onOpen(Page.Playlist(top.item.id)) }
+                        .heightIn(min = 48.dp),
+                ) {
+                    MosaicTile(top.item.songs, size = 34.dp, corner = 9.dp)
+                    Column(Modifier.weight(1f)) {
+                        Text(top.item.name, style = body(13.5f, 17, 600), color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(playsNote(top.plays), style = body(12f, 15, 500).tabular(), color = colors.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
 private val PillLabel = body(12f, 16, 650)
 
 private const val FACES = 6
@@ -565,6 +650,9 @@ private const val BEAT_MS = 1_600
 
 /** From this font scale the bento's tiles stand one above the other. */
 private const val STACK_FONT_SCALE = 1.3f
+
+/** Top playlists shows this many, as the mockup. */
+private const val PLAYLISTS_SHOWN = 3
 
 // Moments
 

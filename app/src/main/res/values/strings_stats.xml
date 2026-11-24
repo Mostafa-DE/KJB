@@ -32,6 +32,7 @@
     <string name="stats_row_line">%1$s · %2$s</string>
     <string name="stats_open_artist">Open artist</string>
     <string name="stats_open_album">Open album</string>
+    <string name="stats_open_playlist">Open playlist</string>
     <string name="stats_song_options">Song options</string>
 
     <!-- Song info and Recently played. -->

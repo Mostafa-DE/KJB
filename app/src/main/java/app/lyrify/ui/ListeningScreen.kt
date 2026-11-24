@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -87,13 +88,13 @@ import java.time.ZoneId
 import java.util.Date
 
 // Insights, grown out of Your listening (S1; KJB 3.2; redone in v4 after the approved mockup): its page, the "View all"
-// of its top lists, and what the library's screens show of plays (L1 places them): the rows' notes and Song info's plays
-// lines. Its cards are in InsightsCards.kt and InsightsYou.kt, its story and pictures in InsightsStory.kt.
+// of its top lists, Leave songs out of Insights, and what the library's screens show of plays (L1 places them): the
+// rows' notes and Song info's plays lines. Its cards are in InsightsCards.kt and InsightsYou.kt, its story and pictures in InsightsStory.kt.
 
 /** The period Insights and its top lists show: Month at first, then the one last picked while the app runs. */
 private var shownPeriod by mutableStateOf(ListeningPeriod.MONTH)
 
-/** Insights ([root]: on its own bottom bar item, without a back arrow), or the "View all" of a top list. */
+/** Insights ([root]: on its own bottom bar item, without a back arrow), the "View all" of a top list, or the songs left out. */
 @Composable
 fun ListeningPage(page: Page.ListeningPages, root: Boolean = false) {
     val nav = LocalNavigator.current
@@ -101,6 +102,7 @@ fun ListeningPage(page: Page.ListeningPages, root: Boolean = false) {
     when (page) {
         Page.Listening -> InsightsPage(back.takeUnless { root }, nav::open)
         is Page.TopList -> TopListPage(page.kind, back, nav::open)
+        Page.InsightsLeftOut -> LeftOutPage(back)
     }
 }
 
@@ -143,6 +145,10 @@ private fun InsightsPage(onBack: (() -> Unit)?, onOpen: (Page) -> Unit) {
                             picture = Picture.SUMMARY
                         })
                     }
+                    MenuRow(stringResource(R.string.insights_leave_out), R.drawable.ic_visibility_off, {
+                        menu = false
+                        onOpen(Page.InsightsLeftOut)
+                    }, detail = stringResource(R.string.insights_leave_out_line))
                     MenuRow(stringResource(R.string.insights_how_title), R.drawable.ic_info, {
                         menu = false
                         counting = true
@@ -166,7 +172,7 @@ private fun InsightsPage(onBack: (() -> Unit)?, onOpen: (Page) -> Unit) {
 }
 
 /** A card of the Insights page, in the page's order ([insightsCardsOf]). */
-enum class InsightsCardKind { STORIES, TIME, EMPTY, FOR_YOU, DAYS, CLOCK, ARTISTS, SONGS, ALBUMS, TASTE, HOW, MOMENTS, FOUND, FRIENDS, LYRICS, SEARCHES, SPOKEN, LIBRARY, TRAITS, MILESTONES, PRIVATE }
+enum class InsightsCardKind { STORIES, TIME, EMPTY, FOR_YOU, DAYS, CLOCK, ARTISTS, SONGS, ALBUMS, TASTE, HOW, MOMENTS, FOUND, FRIENDS, LYRICS, SEARCHES, OUTPUTS, SPOKEN, LIBRARY, TRAITS, MILESTONES, PRIVATE }
 
 /**
  * The cards [cards] shows, in the page's order (the approved mockup's), each only with enough behind it: no empty boxes.
@@ -188,6 +194,7 @@ fun insightsCardsOf(cards: InsightsCards): List<InsightsCardKind> = buildList {
     if (cards.friends?.matches.orEmpty().isNotEmpty()) add(InsightsCardKind.FRIENDS)
     if (cards.lyrics != null || cards.favourites != null) add(InsightsCardKind.LYRICS)
     if (cards.searches != null) add(InsightsCardKind.SEARCHES)
+    if (cards.outputs != null || cards.playlists != null) add(InsightsCardKind.OUTPUTS)
     if (cards.spoken != null) add(InsightsCardKind.SPOKEN)
     if (cards.library != null) add(InsightsCardKind.LIBRARY)
     if (cards.traits.isNotEmpty()) add(InsightsCardKind.TRAITS)
@@ -199,8 +206,8 @@ fun insightsCardsOf(cards: InsightsCards): List<InsightsCardKind> = buildList {
  * The page's cards in the mockup's order, each only when its period has enough of it, each arriving as it scrolls in
  * ([Arriving]): the stories row, your time, For you, every day you listened, your day on a record, the top artists,
  * songs and albums, your taste, how you listen, moments, new to you, you and your friends, read along with new
- * favourites and your searches, books and podcasts, your library, your listening type, milestones and badges, and where
- * it all comes from. With nothing heard in the period, the empty state in place of the time.
+ * favourites and your searches, where you listen with top playlists, books and podcasts, your library, your listening
+ * type, milestones and badges, and where it all comes from. With nothing heard in the period, the empty state in place of the time.
  */
 @Suppress("LongParameterList")
 private fun LazyListScope.insightsCards(
@@ -244,6 +251,7 @@ private fun LazyListScope.insightsCards(
                         InsightsCardKind.FRIENDS -> cards.friends?.let { YouAndFriends(it, settings) }
                         InsightsCardKind.LYRICS -> ReadAlongAndHearts(cards.lyrics, cards.favourites, period, settings)
                         InsightsCardKind.SEARCHES -> cards.searches?.let { YourSearches(it) }
+                        InsightsCardKind.OUTPUTS -> WhereAndPlaylists(cards.outputs, cards.playlists, onOpen)
                         InsightsCardKind.SPOKEN -> cards.spoken?.let { BooksAndPodcasts(it) }
                         InsightsCardKind.LIBRARY -> cards.library?.let { YourLibrary(it, period, settings, onOpen) }
                         InsightsCardKind.TRAITS -> ListeningType(cards.traits)
@@ -329,6 +337,56 @@ private fun TopListPage(kind: TopKind, onBack: () -> Unit, onOpen: (Page) -> Uni
         }
     }
     SongSheetsHost(sheets)
+}
+
+/**
+ * Leave songs out of Insights (the page's menu): every song played, the most played first, each with its plays and a
+ * switch; one switched on leaves every card and story, and still plays and counts for Most played, Recently played and
+ * Suggestions. A song is found again by the library after a move, so its switch stays on; the rows stay where they are.
+ */
+@Composable
+private fun LeftOutPage(onBack: () -> Unit) {
+    val ui = rememberLibraryUi() ?: return
+    val context = LocalContext.current
+    val change = rememberSettingsChange()
+    val leftOut = ui.settings.library.leftOutOfInsights
+    val played by produceState<List<SongPlays>?>(null) { value = StatsGraph.stats(context).mostPlayed(Int.MAX_VALUE) }
+    val songs = remember(ui.library, played) { ui.library?.let { library -> played?.mapNotNull { plays -> library.song(plays.song.path)?.let { it to plays.count } } } }
+    val left = remember(ui.library, leftOut) { leftOut.mapTo(HashSet()) { ui.library?.resolver?.find(it)?.path ?: it.path } }
+    ListeningFrame(stringResource(R.string.insights_leave_out), onBack) { padding ->
+        val reduced = LocalReducedMotion.current
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp)) {
+            item(key = "sentence", contentType = "sentence") {
+                Text(
+                    stringResource(R.string.insights_leave_out_sentence),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = rowMotion(reduced).padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 4.dp, bottom = 12.dp),
+                )
+            }
+            if (songs?.isEmpty() == true) {
+                item(key = "empty", contentType = "empty") {
+                    EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.insights_leave_out_empty_title), rowMotion(reduced), text = stringResource(R.string.insights_leave_out_empty))
+                }
+            }
+            items(songs.orEmpty(), key = { "song ${it.first.path}" }, contentType = { "row" }) { (song, plays) ->
+                HiddenRow(
+                    song,
+                    ui.title(song),
+                    rowMotion(reduced),
+                    line = song.artist?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.stats_row_line, it, playsNote(plays)) } ?: playsNote(plays),
+                    switch = song.path in left,
+                ) {
+                    val out = song.path !in left
+                    // Once, by its path now: an entry kept under the path it had before a move goes too.
+                    change { now ->
+                        val others = now.library.leftOutOfInsights.filterNot { (ui.library?.resolver?.find(it)?.path ?: it.path) == song.path }
+                        now.copy(library = now.library.copy(leftOutOfInsights = if (out) others + song.ref else others))
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**

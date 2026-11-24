@@ -206,7 +206,8 @@ fun HiddenSongsPage() {
 
 /**
  * A hidden song: its cover, title and [line] (its artist) ended by its length, and Unhide, which TalkBack hears with the
- * song's title. Songs held out of suggestions show the same way, with their own [action] (Allow again) and its [words].
+ * song's title. Songs held out of suggestions show the same way, with their own [action] (Allow again) and its [words];
+ * songs left out of Insights with a [switch] in the button's place, the row one stop that switches it ([onClick]).
  */
 @Composable
 internal fun HiddenRow(
@@ -216,13 +217,18 @@ internal fun HiddenRow(
     line: String? = song.artist,
     action: String = stringResource(R.string.lib_unhide),
     words: String = stringResource(R.string.lib_unhide_song, title),
-    onUnhide: () -> Unit,
+    switch: Boolean? = null,
+    onClick: () -> Unit,
 ) {
     val unhide = words
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
-        modifier = modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = ScreenPadding, vertical = 8.dp),
+        modifier = modifier
+            .then(if (switch != null) Modifier.toggleable(switch, role = Role.Switch) { onClick() } else Modifier)
+            .fillMaxWidth()
+            .heightIn(min = 64.dp)
+            .padding(horizontal = ScreenPadding, vertical = 8.dp),
     ) {
         SongCover(SongArt(song.path, song.ref.mediaStoreId))
         Column(Modifier.weight(1f)) {
@@ -232,8 +238,12 @@ internal fun HiddenRow(
                 SongLength(song.durationMs)
             }
         }
-        Box(Modifier.semantics { contentDescription = unhide }) {
-            LyrifyButton(action, onClick = onUnhide, kind = ButtonKind.GHOST, compact = true, modifier = Modifier.clearAndSetSemantics { })
+        if (switch != null) {
+            LyrifySwitch(switch)
+        } else {
+            Box(Modifier.semantics { contentDescription = unhide }) {
+                LyrifyButton(action, onClick = onClick, kind = ButtonKind.GHOST, compact = true, modifier = Modifier.clearAndSetSemantics { })
+            }
         }
     }
 }
