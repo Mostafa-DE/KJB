@@ -141,7 +141,8 @@ private fun bySong(totals: List<SongPlays>, library: Library, shownOnly: Boolean
 
 /**
  * Plays per song from [store], joined with the [library] of the moment: Most played, Recently played and Song info
- * ([PlaysQuery]), and Insights with the book log ([books]) and the [favourites]. Sorting and joining run on [compute].
+ * ([PlaysQuery]), and Insights with the book log ([books]), the [favourites] and without the songs left out of Insights
+ * ([leftOut], which the lists still count). Sorting and joining run on [compute].
  * Most played and Recently played over a period's chip read Insights' copy of the log (below), so they count as Insights
  * do; over all time the log's own totals, as they always did.
  *
@@ -157,6 +158,7 @@ class PlayStats(
     private val books: PlayLogStore? = null,
     private val favourites: suspend () -> List<SongRef> = { emptyList() },
     private val sources: suspend (from: Long?) -> PageSources = { PageSources() },
+    private val leftOut: suspend () -> List<SongRef> = { emptyList() },
 ) : PlaysQuery {
     /** The library's songs played most since [since] ([totals]), under their paths now; ties as in [listeningOf]. */
     override suspend fun mostPlayed(limit: Int, since: Long?): List<SongPlays> {
@@ -230,8 +232,8 @@ class PlayStats(
         page(ListeningPeriod.MONTH, monthPeriod(month, calendar.zone), monthPeriod(month.minusMonths(1), calendar.zone), now, calendar)
 
     /**
-     * The page of [bounds] against [before], kept until a play in it or before it is written, the library or Favourites
-     * change, or [PAGE_FRESH_MS] go by (Huddle, searches, lyrics, bookmarks and books change without a play, and "up to
+     * The page of [bounds] against [before], kept until a play in it or before it is written, the library, Favourites or
+     * the songs left out of Insights change, or [PAGE_FRESH_MS] go by (Huddle, searches, lyrics, bookmarks and books change without a play, and "up to
      * now" moves); a page going on, also until the day turns, so it is never a month's story once the month is over.
      */
     private suspend fun page(kind: ListeningPeriod, bounds: Period?, before: Period?, now: Long, calendar: PhoneCalendar): InsightsPage {
@@ -239,7 +241,8 @@ class PlayStats(
         val logs = withContext(compute) { logs() }
         val library = library()
         val favourites = favourites()
-        val stamp = library to favourites
+        val leftOut = leftOut()
+        val stamp = Triple(library, favourites, leftOut)
         val key = PageKey(kind, bounds, before, calendar)
         held.withLock {
             if (pagesFor != stamp) {
@@ -252,7 +255,7 @@ class PlayStats(
         }
         val page = withContext(compute) {
             val read = sources(bounds?.from).copy(interactions = store.interactions(bounds?.from, bounds?.until).orEmpty())
-            insightsPageOf((logs ?: InsightsData(emptyList())).copy(favourites = favourites), read, kind, bounds, before, now, calendar, library)
+            insightsPageOf((logs ?: InsightsData(emptyList())).copy(favourites = favourites, leftOut = leftOut), read, kind, bounds, before, now, calendar, library)
         }
         // A log that could not be read gives nothing (the book log, no books), worked out again next time; nor is a page kept
         // when another read took in a play meanwhile (the copy of the logs it was worked out from is no longer the one kept).
@@ -263,10 +266,11 @@ class PlayStats(
     /** A page by what it shows: the same period in the same calendar is the same page. */
     private data class PageKey(val kind: ListeningPeriod, val bounds: Period?, val before: Period?, val calendar: PhoneCalendar)
 
-    /** The months with a recap ([recapMonths]), the latest first. */
+    /** The months with a recap ([recapMonths]), the latest first, without the songs left out of Insights. */
     suspend fun recaps(now: Long, zone: ZoneId): List<YearMonth> {
         val plays = logs()?.plays.orEmpty()
-        return withContext(compute) { recapMonths(plays, now, zone, library()) }
+        val library = library()
+        return withContext(compute) { recapMonths(leftIn(plays, leftOut(), library), now, zone, library) }
     }
 
     /**
@@ -377,9 +381,9 @@ class PlayStats(
     private val worked = HashMap<Pair<Period, Period?>, Insights>()
     private var overFor: Pair<Library?, List<SongRef>>? = null
 
-    /** The Insights pages worked out, each with when; for the library and Favourites they were worked out with. */
+    /** The Insights pages worked out, each with when; for the library, Favourites and the songs left out they were worked out with. */
     private val pages = HashMap<PageKey, Pair<Long, InsightsPage>>()
-    private var pagesFor: Pair<Library?, List<SongRef>>? = null
+    private var pagesFor: Triple<Library?, List<SongRef>, List<SongRef>>? = null
 
     /** The earliest start among the plays written since Insights last read each log: [NONE] for none, [EVERY] for a restore or an import. */
     private val musicSince = AtomicLong(NONE)

@@ -26,8 +26,8 @@ import java.time.ZoneOffset
 /**
  * What Insights are worked out from, all time: the [plays] heard here, the oldest first, the book log's ([books]), each
  * song's totals with an import's plays ([everPlayed]: what was ever played, here or in the app imported from), and the
- * [favourites]; for the Insights page also the quick skips the log keeps apart ([skips], [LoggedPlay.isShort]) and an
- * import's plays ([imports]).
+ * [favourites]; for the Insights page also the quick skips the log keeps apart ([skips], [LoggedPlay.isShort]), an
+ * import's plays ([imports]) and the songs left out of Insights ([leftOut], [leftIn]).
  */
 data class InsightsData(
     val plays: List<LoggedPlay>,
@@ -36,7 +36,21 @@ data class InsightsData(
     val favourites: List<SongRef> = emptyList(),
     val skips: List<LoggedPlay> = emptyList(),
     val imports: List<LoggedPlay> = emptyList(),
+    val leftOut: List<SongRef> = emptyList(),
 )
+
+/**
+ * [plays] without those of the songs left out of Insights ([leftOut]: "Leave songs out of Insights", in the page's menu),
+ * each song found as the library finds it, a file moved or renamed since too (by its path alone without a library). They
+ * still count for Most played, Recently played and Suggestions, which never read through here.
+ */
+internal fun leftIn(plays: List<LoggedPlay>, leftOut: List<SongRef>, library: Library?): List<LoggedPlay> {
+    if (leftOut.isEmpty()) return plays
+    fun pathOf(song: SongRef): String = library?.resolver?.find(song)?.path ?: song.path
+    val out = leftOut.mapTo(HashSet(), ::pathOf)
+    val kept = HashMap<String, Boolean>()
+    return plays.filter { play -> kept.getOrPut(play.song.path) { pathOf(play.song) !in out } }
+}
 
 /** A period's totals: the time heard and the plays that counted (both ledgers), and the songs, artists and albums played (music). */
 data class Totals(val heardMs: Long, val plays: Int, val songs: Int, val artists: Int, val albums: Int)

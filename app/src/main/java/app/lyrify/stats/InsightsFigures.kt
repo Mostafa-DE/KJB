@@ -1,7 +1,9 @@
 package app.lyrify.stats
 
+import app.lyrify.audio.OutputKind
 import app.lyrify.library.Album
 import app.lyrify.library.Library
+import app.lyrify.library.Playlist
 import app.lyrify.library.Song
 import app.lyrify.library.albumKey
 import app.lyrify.library.search.fold
@@ -144,6 +146,8 @@ internal class PageWork(
             lyrics = lyricsOf(),
             favourites = favouritesOf(library),
             searches = searchesOf(),
+            outputs = outputsOf(),
+            playlists = playlistsOf(),
             spoken = spokenOf(library),
             library = if (period.going) libraryOf(library) else null,
             traits = traitsOf(found, clock),
@@ -194,6 +198,30 @@ internal class PageWork(
             albums = targets.count { it == TargetKind.ALBUM },
             others = targets.count { it == TargetKind.FOLDER || it == TargetKind.PLAYLIST },
         )
+    }
+
+    /**
+     * Where you listen: the plays that counted (never a book's) by the kind of output they were heard on, from
+     * [MIN_TOP_PLAYS] plays that keep it (KJB v4 on: the plays from before have none); wired and USB are headphones, any
+     * other kind (a dock, a screen) none of the four.
+     */
+    private fun outputsOf(): OutputsCard? {
+        val outputs = heard.filter { it.counted && kinds.of(it) != Kind.BOOK }.mapNotNull { it.start?.output }.groupingBy { it }.eachCount()
+        return OutputsCard(outputs[OutputKind.SPEAKER] ?: 0, (outputs[OutputKind.WIRED] ?: 0) + (outputs[OutputKind.USB] ?: 0), outputs[OutputKind.BLUETOOTH] ?: 0, outputs[OutputKind.CAR] ?: 0)
+            .takeIf { it.speaker + it.headphones + it.bluetooth + it.car >= MIN_TOP_PLAYS }
+    }
+
+    /**
+     * Top playlists: the music that counted by the playlist it came from (KJB v4 on), each playlist the user has now,
+     * the most played first; from [MIN_TOP_PLAYS] such plays of [MIN_TOP_OTHERS] playlists, as the top lists show.
+     */
+    private fun playlistsOf(): PlaylistsCard? {
+        val byId = sources.playlists.associateBy { it.id }
+        val rows = music.filter { it.counted }.mapNotNull { play -> play.start?.playlistId?.let(byId::get)?.let { it to play } }
+            .groupBy({ it.first }, { it.second })
+            .map { (playlist, plays) -> Top(playlist, plays.size, plays.sumOf { it.realMs }, plays.maxOf { it.startedAt }) }
+            .sortedWith(topOrder<Playlist>().thenBy { it.item.name }.thenBy { it.item.id })
+        return PlaylistsCard(rows).takeIf { rows.size >= MIN_TOP_OTHERS && rows.sumOf { it.plays } >= MIN_TOP_PLAYS }
     }
 
     /**

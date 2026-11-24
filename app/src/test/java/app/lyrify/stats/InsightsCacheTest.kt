@@ -233,6 +233,22 @@ class InsightsCacheTest {
     }
 
     @Test
+    fun `a page is worked out again at once when a song is left out of Insights or let back in`() = runBlocking {
+        var leftOut = emptyList<SongRef>()
+        val stats = PlayStats(FakePlayLog(history), { library }, Dispatchers.Unconfined, leftOut = { leftOut })
+        val first = stats.page(ListeningPeriod.MONTH, now, calendar)
+        assertSame(first, stats.page(ListeningPeriod.MONTH, now, calendar))
+
+        leftOut = listOf(songs[1].ref)
+        val without = stats.page(ListeningPeriod.MONTH, now, calendar)
+        assertEquals(runBlocking { PlayStats(FakePlayLog(history), { library }, Dispatchers.Unconfined, leftOut = { leftOut }).page(ListeningPeriod.MONTH, now, calendar) }, without)
+        assertTrue(checkNotNull(without.cards.time).totals.plays < checkNotNull(first.cards.time).totals.plays)
+
+        leftOut = emptyList()
+        assertEquals(first, stats.page(ListeningPeriod.MONTH, now, calendar))
+    }
+
+    @Test
     fun `a month's story is worked out once, and again when a play in it or before it is written`() = runBlocking {
         val log = FakePlayLog(history)
         val stats = stats(log)
