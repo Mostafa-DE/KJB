@@ -281,7 +281,7 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
                     Box(rowMotion(reduced)) { Banner(R.drawable.ic_system_update, stringResource(R.string.dl_search_update), stringResource(R.string.dl_addon_update), installer::start) }
                 }
             }
-            downloadsList(ui, onOpen = { opened = it }, onCancel = { Downloads.cancel(context, it.key) })
+            downloadsList(ui, onOpen = { opened = it }, onCancel = { key, rest -> Downloads.cancel(context, key, rest) })
         }
     }
     // Where the add-on is set up, once it is ready: Not now (or the sheet put away) is kept, and the row in Settings keeps
@@ -416,8 +416,12 @@ private fun AddonCard(addon: AddonState?, install: InstallState, onGet: () -> Un
     }
 }
 
-/** The downloads: Now (under way, waiting, not saved) and Done, newest first; or a line saying how to start. */
-private fun LazyListScope.downloadsList(ui: DownloadsUi, onOpen: (DownloadItem) -> Unit, onCancel: (DownloadItem) -> Unit) {
+/**
+ * The downloads: Now (under way, waiting, not saved) and Done, newest first; or a line saying how to start. In Now, a
+ * playlist's songs come under its own row: how many were saved and could not be, a bar, and its Cancel ([onCancel] with
+ * rest) while songs are still to come.
+ */
+private fun LazyListScope.downloadsList(ui: DownloadsUi, onOpen: (DownloadItem) -> Unit, onCancel: (key: String, rest: Boolean) -> Unit) {
     if (!ui.loaded) return
     val (done, now) = ui.items.partition { it.state is DownloadState.Done }
     if (ui.items.isEmpty()) {
@@ -436,8 +440,31 @@ private fun LazyListScope.downloadsList(ui: DownloadsUi, onOpen: (DownloadItem) 
             SectionTitle(stringResource(title), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 8.dp))
         }
         item(key = "group $title", contentType = "group") {
+            val colors = MaterialTheme.colorScheme
             GroupedRows {
-                items.forEachIndexed { index, item -> DownloadRow(item, ui.progress[item.key], first = index == 0, onOpen = { onOpen(item) }, onCancel = { onCancel(item) }) }
+                items.forEachIndexed { index, item ->
+                    val playlist = item.playlist?.takeIf { title == R.string.dl_now && it != items.getOrNull(index - 1)?.playlist }
+                    if (playlist != null) {
+                        val count = playlist.count(ui.items)
+                        GroupedRow(
+                            R.drawable.ic_queue_music,
+                            playlist.title,
+                            tile = colors.surfaceContainerHighest,
+                            onTile = colors.onSurfaceVariant,
+                            first = index == 0,
+                            supporting = {
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Text(DownloadNotices.playlistText(LocalContext.current, count), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    if (count.active > 0) Bar((count.saved + count.failed).toFloat() / count.total)
+                                }
+                            },
+                            trailing = playlist.rest(ui.items).firstOrNull()?.let { next ->
+                                { ChromeIconButton(R.drawable.ic_close, stringResource(R.string.dl_cancel_rest), onClick = { onCancel(next, true) }) }
+                            },
+                        )
+                    }
+                    DownloadRow(item, ui.progress[item.key], first = index == 0 && playlist == null, onOpen = { onOpen(item) }, onCancel = { onCancel(item.key, false) })
+                }
             }
         }
     }
@@ -828,8 +855,10 @@ private class LinkLookup(private val context: Context, private val scope: Corout
  * The save sheet for [url] (the share target's "Save to KJB", Look up on the page, or a video the search sheet found):
  * what the link is (quick info at once, the full info when it comes), then Audio at the set quality (Quality picks
  * another) or Video at a height. A tap starts at once, before the full info if need be (the add-on looks the link up
- * itself). With full info, a song KJB's Duplicates rules find on the phone asks first (Warn about copies). [onStarted]
- * hears a download that started.
+ * itself). With full info, a song KJB's Duplicates rules find on the phone asks first (Warn about copies). A playlist's
+ * link (a list, an album, a Mix) lists its songs, all ticked, and saves each one ticked as a download of its own, in the
+ * format and quality picked as for one song; a song's link that names a playlist too asks first which is meant.
+ * [onStarted] hears a download that started.
  */
 @Composable
 fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
@@ -845,6 +874,13 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
     var step by remember { mutableStateOf(SaveStep.MAIN) }
     var copyOf by remember { mutableStateOf<AudioFile?>(null) }
     var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
+    // A song's link that names a playlist too: whether the whole playlist is meant, null until the user says.
+    var whole by remember { mutableStateOf<Boolean?>(null) }
+    // The playlist's songs the user left out, by their place in it.
+    var unticked by remember { mutableStateOf(emptySet<Int>()) }
+    val named = lookup.info?.playlist
+    // What the sheet saves song by song: a playlist's own link, or the whole playlist a song's link names.
+    val playlist = named?.takeIf { !it.withSong || whole == true }
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         val next = pending
         pending = null
@@ -855,7 +891,11 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
     fun begin(kind: DlKind, height: Int?, quality: AudioQuality?) {
         val info = lookup.info
         val go = {
-            Downloads.add(context, url, kind, height, info?.title.orEmpty(), info?.artist.orEmpty(), info?.thumbnail, info?.durationSec ?: 0, quality)
+            if (playlist == null) {
+                Downloads.add(context, listOf(DlSearchResult(url, info?.title.orEmpty(), info?.artist.orEmpty(), info?.durationSec ?: 0, info?.thumbnail)), kind, height, quality)
+            } else {
+                Downloads.add(context, playlist.songs.filterIndexed { index, _ -> index !in unticked }, kind, height, quality, playlist.title)
+            }
             onStarted()
             onDismiss()
         }
@@ -869,10 +909,10 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
         }
     }
 
-    /** Audio: with full info and Warn about copies on, a song already on the phone asks first. */
+    /** Audio: with full info and Warn about copies on, a song already on the phone asks first (a playlist's songs never do). */
     fun audio(quality: AudioQuality?) {
         val info = lookup.info
-        if (!ui.settings.warnDuplicates || info == null || info.partial || info.durationSec <= 0) return begin(DlKind.AUDIO, null, quality)
+        if (playlist != null || !ui.settings.warnDuplicates || info == null || info.partial || info.durationSec <= 0) return begin(DlKind.AUDIO, null, quality)
         scope.launch {
             val library = withContext(Dispatchers.IO) { (MediaStoreLibrary(context.contentResolver, Lyrify.writes).read() as? LibraryRead.Files)?.files.orEmpty() }
             val copy = DuplicateCheck.copyOf(DuplicateCheck.Candidate(info.title, info.artist, info.durationSec * 1000L), library)
@@ -886,8 +926,39 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
     }
 
     when (step) {
-        SaveStep.MAIN -> LyrifySheet(onDismiss = onDismiss) {
-            LinkHead(lookup.info, url)
+        SaveStep.MAIN -> LyrifySheet(
+            onDismiss = onDismiss,
+            // A playlist's buttons stay in view under its songs, once they are in: Save, as audio at the quality set, or Video
+            // at a height.
+            footer = playlist?.takeIf { lookup.info?.partial == false && it.songs.isNotEmpty() }?.let { list ->
+                {
+                    val ticked = list.songs.size - unticked.size
+                    val ready = lookup.addon == AddonState.Ready && ticked > 0
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LyrifyButton(
+                            pluralStringResource(if (ticked == list.songs.size) R.plurals.dl_save_all else R.plurals.dl_save_songs, ticked, ticked),
+                            onClick = { audio(null) },
+                            icon = R.drawable.ic_music_note,
+                            enabled = ready,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                            LyrifyButton(stringResource(R.string.dl_video), onClick = { step = SaveStep.VIDEO }, icon = R.drawable.ic_movie, kind = ButtonKind.SECONDARY, enabled = ready, modifier = Modifier.weight(1f))
+                            LyrifyButton(
+                                stringResource(R.string.dl_quality) + " · " + stringResource(qualityLabel(ui.settings.audioQuality)),
+                                onClick = { step = SaveStep.AUDIO },
+                                kind = ButtonKind.GHOST,
+                                enabled = ready,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            },
+        ) {
+            // A song's playlist has the playlist's own name, its first song's cover and its songs' length together.
+            LinkHead(if (playlist?.withSong == true) DlInfo(url, playlist.title, "", playlist.songs.sumOf { it.durationSec }, playlist.songs.firstOrNull()?.thumbnail) else lookup.info, url)
+            val failed = lookup.failed
             when {
                 lookup.addon != null && lookup.addon != AddonState.Ready -> {
                     Text(stringResource(R.string.dl_get_first), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -896,8 +967,52 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
                         onDismiss()
                     }, modifier = Modifier.fillMaxWidth())
                 }
+                // Nothing to save: no one but its owner can list it.
+                failed == DlFailure.PRIVATE_PLAYLIST -> Text(stringResource(R.string.dl_playlist_private), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                playlist != null -> when {
+                    failed != null -> Text(stringResource(searchFailureText(failed)), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    lookup.info?.partial != false -> Text(stringResource(R.string.dl_looking_up), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else -> {
+                        val songs = playlist.songs.size
+                        Text(
+                            when {
+                                playlist.mix -> pluralStringResource(R.plurals.dl_mix_songs, songs, songs)
+                                playlist.more > 0 -> pluralStringResource(R.plurals.dl_playlist_first, songs + playlist.more, songs, songs + playlist.more)
+                                else -> pluralStringResource(R.plurals.dl_playlist_songs, songs, songs)
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (songs > 0) {
+                            CheckRow(unticked.isEmpty(), { all -> unticked = if (all) emptySet() else playlist.songs.indices.toSet() }) {
+                                Text(stringResource(R.string.dl_all_songs), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                        playlist.songs.forEachIndexed { index, song ->
+                            CheckRow(index !in unticked, { on -> unticked = if (on) unticked - index else unticked + index }) {
+                                Text(song.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(song.channel, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                    SongLength(song.durationSec * 1_000L)
+                                }
+                            }
+                        }
+                    }
+                }
+                // A song's link that names a playlist too: which one is meant.
+                named != null && whole == null -> {
+                    Text(stringResource(if (named.mix) R.string.dl_ask_mix else R.string.dl_ask_playlist), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    LyrifyButton(stringResource(R.string.dl_just_song), onClick = { whole = false }, icon = R.drawable.ic_music_note, modifier = Modifier.fillMaxWidth())
+                    LyrifyButton(
+                        pluralStringResource(if (named.mix) R.plurals.dl_whole_mix else R.plurals.dl_whole_playlist, named.songs.size, named.songs.size),
+                        onClick = { whole = true },
+                        icon = R.drawable.ic_queue_music,
+                        kind = ButtonKind.SECONDARY,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 else -> {
-                    if (lookup.failed != null && lookup.info?.partial != false) {
+                    if (failed != null && lookup.info?.partial != false) {
                         Text(stringResource(R.string.dl_lookup_failed), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else if (!lookup.settled) {
                         Text(stringResource(R.string.dl_looking_up), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -917,7 +1032,10 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
             }
         }
         SaveStep.AUDIO -> QualitySheet(R.string.dl_quality, R.string.dl_audio_quality_sheet, ui.settings.audioQuality, onDismiss = { step = SaveStep.MAIN }) { audio(it) }
-        SaveStep.VIDEO -> VideoSheet(lookup.info?.choices.orEmpty(), onDismiss = { step = SaveStep.MAIN }) { begin(DlKind.VIDEO, it.height, null) }
+        // A playlist's songs were never opened: a song's own sizes are not theirs.
+        SaveStep.VIDEO -> VideoSheet(lookup.info?.choices.orEmpty().map { if (playlist == null) it else it.copy(bytes = null) }, onDismiss = { step = SaveStep.MAIN }) {
+            begin(DlKind.VIDEO, it.height, null)
+        }
     }
     copyOf?.let { copy ->
         ConfirmDialog(

@@ -258,7 +258,7 @@ private fun Muted(text: String) {
 
 /** A row with its checkbox at the end: one TalkBack stop with the checkbox's role; dimmed and fixed when not [enabled]. */
 @Composable
-private fun CheckRow(checked: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true, content: @Composable ColumnScope.() -> Unit) {
+internal fun CheckRow(checked: Boolean, onChange: (Boolean) -> Unit, enabled: Boolean = true, content: @Composable ColumnScope.() -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),

@@ -8,6 +8,7 @@ import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlFile
 import app.lyrify.dl.api.DlKind
 import app.lyrify.dl.api.DlMeta
+import app.lyrify.dl.api.DlSearchResult
 import app.lyrify.dupes.AudioFile
 import app.lyrify.library.Library
 import app.lyrify.library.song
@@ -168,6 +169,90 @@ class DownloadsModelTest {
         assertEquals("Movies/Mine", read.settings.videoFolder)
         assertEquals(listOf(item), read.items)
         assertEquals(DownloadsMemory(), DownloadsJson.decode("not json"))
+    }
+
+    @Test
+    fun `a playlist's song reads back with its playlist, and one stored before playlists has none`() {
+        val song = item.copy(key = "d5", playlist = DownloadPlaylist("p1", "Harbour Nights"))
+
+        assertEquals(listOf(song), DownloadsJson.decode(DownloadsJson.encode(DownloadsMemory(items = listOf(song)))).items)
+        // KJB 3.1's own item, written before a download could be a playlist's song.
+        val stored = """{"key":"d1a2b3","url":"https://video.example.com/watch?v=abc","kind":"AUDIO","audio":"MP3_320","height":null,""" +
+            """"originalLanguage":true,"title":"Paper Lantern","artist":"The Quiet Hours","thumbnail":null,"durationSec":214,"addedAt":1800000000000,"state":{"type":"queued"}}"""
+        assertEquals(listOf(item), DownloadsJson.decode("""{"version":1,"items":[$stored]}""").items)
+    }
+
+    // A playlist, saved song by song
+
+    private val songs = listOf(
+        DlSearchResult("https://www.youtube.com/watch?v=abc123def45", "Paper Lantern", "Paper Harbour", 214, "https://img.example.com/a.jpg"),
+        DlSearchResult("https://www.youtube.com/watch?v=ghi789jkl01", "Glass Tide", "Paper Harbour", 163),
+    )
+
+    @Test
+    fun `a playlist's songs are queued as downloads of their own, its first song first`() {
+        val playlist = DownloadPlaylist("p1", "Harbour Nights")
+        val before = DownloadsMemory(DownloadSettings(audioQuality = AudioQuality.MP3_V0, originalLanguage = false), listOf(item))
+        var made = 0
+        // Added after the one already waiting, as the sheet adds them.
+        val now = item.addedAt + 60_000
+
+        val after = before.queue(songs, DlKind.AUDIO, height = null, audio = null, playlist = playlist, now = now) { "k${++made}" }
+
+        // Each its own: its own key, link, names, cover and length, Settings' quality and language, its playlist named; on
+        // the list newest first, the playlist in its own order.
+        assertEquals(
+            listOf(
+                DownloadItem("k1", songs[0].url, DlKind.AUDIO, AudioQuality.MP3_V0, null, false, "Paper Lantern", "Paper Harbour", "https://img.example.com/a.jpg", 214, now, DownloadState.Queued, playlist),
+                DownloadItem("k2", songs[1].url, DlKind.AUDIO, AudioQuality.MP3_V0, null, false, "Glass Tide", "Paper Harbour", null, 163, now, DownloadState.Queued, playlist),
+                item,
+            ),
+            after.items,
+        )
+        // The queue runs the one waiting before first, then the playlist in its order.
+        val run = generateSequence(after) { memory -> memory.next()?.let { next -> memory.copy(items = memory.items - next) } }.mapNotNull { it.next()?.key }.toList()
+        assertEquals(listOf(item.key, "k1", "k2"), run)
+    }
+
+    @Test
+    fun `the queue runs the download added first, also one queued again by Retry, and nothing once none waits`() {
+        val older = item.copy(key = "old", addedAt = 1, state = DownloadState.Failed(DownloadFailure.OFFLINE))
+        val newer = item.copy(key = "new", addedAt = 5)
+
+        assertEquals("new", DownloadsMemory(items = listOf(newer, older)).next()?.key)
+        assertEquals("old", DownloadsMemory(items = listOf(newer, older.copy(state = DownloadState.Queued))).next()?.key)
+        assertNull(DownloadsMemory(items = listOf(newer.copy(state = DownloadState.Running), older)).next())
+    }
+
+    @Test
+    fun `the sheet's own quality, or a video's height, goes to every song, and one song is a download of no playlist`() {
+        val memory = DownloadsMemory(DownloadSettings(audioQuality = AudioQuality.MP3_V0))
+
+        assertEquals(listOf(AudioQuality.MP3_192, AudioQuality.MP3_192), memory.queue(songs, DlKind.AUDIO, null, AudioQuality.MP3_192, null, 7) { "k" }.items.map { it.audio })
+        assertEquals(listOf(720, 720), memory.queue(songs, DlKind.VIDEO, 720, null, null, 7) { "k" }.items.map { it.height })
+        val one = memory.queue(songs.take(1), DlKind.AUDIO, null, null, null, 7) { "k1" }.items.single()
+        assertNull(one.playlist)
+        assertEquals("Paper Lantern" to "Paper Harbour", one.title to one.artist)
+    }
+
+    @Test
+    fun `a playlist counts its songs saved, not saved and still to come, and its rest is only those still to come`() {
+        val playlist = DownloadPlaylist("p1", "Harbour Nights")
+        val items = listOf(
+            item.copy(key = "a", state = DownloadState.Done("/x/a.mp3", 1), playlist = playlist),
+            item.copy(key = "b", state = DownloadState.Failed(DownloadFailure.NOT_FOUND), playlist = playlist),
+            item.copy(key = "c", state = DownloadState.Running, playlist = playlist),
+            item.copy(key = "d", state = DownloadState.Queued, playlist = playlist),
+            // Another save of the same playlist is another playlist, and a song alone is none.
+            item.copy(key = "e", state = DownloadState.Queued, playlist = DownloadPlaylist("p2", "Harbour Nights")),
+            item.copy(key = "f", state = DownloadState.Queued),
+        )
+
+        val count = playlist.count(items)
+
+        assertEquals(DownloadPlaylist.Count(saved = 1, failed = 1, total = 4), count)
+        assertEquals(2, count.active)
+        assertEquals(listOf("c", "d"), playlist.rest(items))
     }
 
     @Test
