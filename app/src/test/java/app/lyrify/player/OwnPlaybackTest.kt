@@ -27,6 +27,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
@@ -68,6 +69,35 @@ class OwnPlaybackTest {
         val bookSource = QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Folder Book/|Folder Book", "Folder Book")
         val queues = QueueBook().play(songs.take(3).map { it.ref }, 0, bookSource, now = 1).book
         assertEquals(SessionSnapshot.EMPTY, ownSnapshot(queues.current, find))
+    }
+
+    @Test
+    fun `Next or Previous keeps the sweep's songs as they were, the same list, and picks the current one again`() {
+        val gone = songs[6].ref
+        val onPhone: (SongRef) -> Song? = { ref -> if (ref == gone) null else find(ref) }
+        var finds = 0
+        val counted: (SongRef) -> Song? = { ref ->
+            finds++
+            onPhone(ref)
+        }
+        val playlist = QueueSource(SourceKind.PLAYLIST, "playlist:harbour", "Harbour Glass")
+        var book = QueueBook().play(songs.take(10).map { it.ref }, 2, playlist, now = 1).book
+        val first = ownSnapshot(book.current, counted)
+        var snapshot = first
+        finds = 0
+        // Next twice, then Previous: the book follows the player (QueueBook.at), its songs and the library as they were.
+        listOf(3, 4, 3).forEach { index ->
+            book = book.at(book.current!!.items[index].uid, now = 10L + index)
+            snapshot = ownSnapshot(book.current, counted, before = snapshot)
+            assertEquals(ownSnapshot(book.current, onPhone), snapshot)
+            assertSame(first.queue, snapshot.queue)
+        }
+        assertEquals(0, finds)
+        // On to a song not on the phone: the next one that is, as a snapshot made anew picks it.
+        book = book.at(book.current!!.items[6].uid, now = 20)
+        snapshot = ownSnapshot(book.current, counted, before = snapshot)
+        assertEquals(songs[7].path, snapshot.current?.mediaUri)
+        assertEquals(ownSnapshot(book.current, onPhone), snapshot)
     }
 
     @Test

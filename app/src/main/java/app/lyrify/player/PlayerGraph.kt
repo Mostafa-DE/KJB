@@ -276,6 +276,13 @@ private fun placesOnly(before: QueueBook, after: QueueBook): Boolean =
             was === now || (was.items === now.items && was.unshuffled === now.unshuffled && was.copy(index = now.index, positionMs = now.positionMs, updatedAt = now.updatedAt) == now)
         }
 
+/**
+ * Whether [after] is [before] with only places moved ([placesOnly]) and no jump: a song starting, Next or Previous, the
+ * book following the player. The player is there already, so the bridge has nothing to hand it ([QueueBridge]), and the
+ * session and the own lyrics' sweep have the same songs to show.
+ */
+fun movedOnly(before: QueueBook, after: QueueBook): Boolean = after.jumps == before.jumps && placesOnly(before, after)
+
 /** The player's objects, built by hand, one of each per process. */
 object PlayerGraph {
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)

@@ -266,6 +266,56 @@ class BigQueueTest {
     }
 
     /**
+     * Next and Previous in a library-sized queue, as the service runs them (PW2): the player moves, and the book follows it
+     * (QueueBook.at, the service's Follower). A book that only moved its place ([movedOnly]) goes neither to the bridge nor
+     * to the session, the own lyrics' sweep keeps its songs and picks the current one again ([ownSnapshot]), and every song
+     * is as long to the session as the library says ([sessionLengthMs]), so its timeline stays and Media3 sends no queue.
+     * Before PW2 each Next looked every song of the queue up twice, on the main thread, and made a new timeline.
+     */
+    @Test
+    fun `Next and Previous in a library-sized queue look up no song and keep the session's timeline`() {
+        playing()
+        var finds = 0
+        val counted: (SongRef) -> Song? = { ref ->
+            finds++
+            find(ref)
+        }
+        // The session's songs, each as long as the library says; decoded, each is a few ms longer.
+        val held = projection(book.current, find).map { item ->
+            MediaItem.Builder().setMediaId(item.uid.toString()).setMediaMetadata(MediaMetadata.Builder().setDurationMs(item.song.durationMs).build()).build()
+        }
+        val timeline = { held.mapIndexed { i, item -> sessionLengthMs(item, i == port.index, decodedMs = item.mediaMetadata.durationMs!! + 7) } }
+        var snapshot = ownSnapshot(book.current, find)
+        var shown = timeline()
+        var timelines = 0
+        val builtBefore = port.built
+        val times = mutableListOf<Long>()
+        repeat(SKIPS) { step ->
+            val started = System.nanoTime()
+            // Next, and every fourth time Previous.
+            port.seek(if (step % 4 == 3) port.index - 1 else port.index + 1, 0)
+            val before = book
+            book = book.at(port.current!!, now = 10L + step)
+            val moved = movedOnly(before, book)
+            if (!moved) bridge.sync(book, counted)
+            snapshot = ownSnapshot(book.current, counted, before = snapshot.takeIf { moved })
+            times += System.nanoTime() - started
+            val now = timeline()
+            if (now != shown) timelines++
+            shown = now
+        }
+        println(
+            "PW2 measure: a Next in a $QUEUED-song queue looked up ${finds / SKIPS} songs and built ${(port.built - builtBefore) / SKIPS} list entries; " +
+                "$timelines new timelines in $SKIPS skips; median %.3f ms for the steps the book and the sweep take".format(times.sorted()[SKIPS / 2] / 1e6),
+        )
+        assertEquals("songs looked up", 0, finds)
+        assertEquals("list entries built", 0L, port.built - builtBefore)
+        assertEquals("new timelines", 0, timelines)
+        assertEquals(ownSnapshot(book.current, find), snapshot)
+        assertEquals(book.current!!.current!!.uid, port.current)
+    }
+
+    /**
      * What a queued song costs while it waits, measured: its queue item, its place before Shuffle, what the player is
      * handed ([Projected]) and the media item the player holds, built as [mediaItemOf] builds it with its title, tags
      * and length (its two uris, the file's and the cover's, are measured on the phone: BigQueueDeviceTest). Never
@@ -314,5 +364,8 @@ class BigQueueTest {
 
         /** What one change may cost the player, in lists of the queue's songs. */
         const val LISTS = 8.0
+
+        /** Next and Previous presses measured. */
+        const val SKIPS = 41
     }
 }
