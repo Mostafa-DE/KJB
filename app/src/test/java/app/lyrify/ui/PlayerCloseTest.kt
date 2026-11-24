@@ -24,6 +24,7 @@ import coil3.request.ImageRequest
 import coil3.request.Options
 import coil3.request.transformations
 import coil3.size.Precision
+import coil3.size.pxOrElse
 import coil3.size.Size as ImageSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.plus
@@ -485,22 +486,28 @@ class PlayerCloseTest {
 
     @Test
     fun `after a Next or a Previous every cover the screens draw for the new song is already in memory`() {
-        // Counted on Coil's keys: the read ahead while each song plays, then what the player's cover, its backdrop and
-        // the Now bar look up for the song a skip brings: before PW3 each of them missed and loaded, after a fade.
+        // Counted on Coil's keys and sizes: the read ahead while each song plays, then what the player's cover, its
+        // backdrop and the Now bar look up for the song a skip brings, each at the size it draws (the player's cover
+        // inside its margins, smaller than the window-wide size read ahead). AsyncImage asks inexact, and Coil hands an
+        // inexact request a cut-down bitmap at least its size (MemoryCacheService.isCacheValueValidForSize): a bitmap
+        // read at a size is at least that size, or the whole cover. Before PW3 each of them missed and loaded, then
+        // faded in.
         val context = object : ContextWrapper(null) {}
         val queue = Queue("q", QueueSource(SourceKind.ALBUM, "album:x", "Paper Harbour"), (0 until 30).map { QueueItem(uid = it.toLong(), song = SongRef("/Music/Paper Harbour/made-up-$it.mp3")) })
-        val read = mutableSetOf<MemoryCache.Key>()
+        val read = mutableMapOf<MemoryCache.Key, Int>()
         var misses = 0
         val steps = List(12) { SkipWay.NEXT } + List(8) { SkipWay.PREVIOUS }
         steps.fold(queue) { now, way ->
             val ui = PlayerUi(QueueBook(), now, now.current!!, song = null, playing = true, positionMs = 0, at = 0, speed = 1f, durationMs = 200_000, repeat = Repeat.OFF, library = null)
             val before = read.size
-            coversAhead(ui, emptyMap()).flatMap { coverAheadRequests(context, it, playerPx = 945, barPx = 100) }.forEach { read += storedUnder(it) }
+            coversAhead(ui, emptyMap()).flatMap { coverAheadRequests(context, it, playerPx = 945, barPx = 100) }.forEach { read[storedUnder(it)] = runBlocking { it.sizeResolver.size() }.width.pxOrElse { 0 } }
             // Memory: one song's three covers at most are new while a song plays (the next one; the previous one played).
             if (now !== queue) assertTrue(read.size - before <= 3)
             val next = now.copy(index = now.items.indexOf(incoming(now, way, Repeat.OFF, positionMs = 0)))
             val art = SongArt(next.current!!.song.path)
-            misses += listOf(songCoverRequest(context, art, CoverAt.PLAYER), backdropRequest(context, art), songCoverRequest(context, art, CoverAt.BAR)).count { storedUnder(it) !in read }
+            // A 1080 px wide phone at 2.625: the player's cover is 945 px less its 24 dp margins either side.
+            val drawn = listOf(songCoverRequest(context, art, CoverAt.PLAYER) to 819, backdropRequest(context, art) to BACKDROP_PX, songCoverRequest(context, art, CoverAt.BAR) to 100)
+            misses += drawn.count { (request, px) -> (read[storedUnder(request)] ?: 0) < px }
             next
         }
         println("PW3 measure: ${steps.size} skips, ${read.size} covers read ahead, $misses covers the screens loaded after a skip")

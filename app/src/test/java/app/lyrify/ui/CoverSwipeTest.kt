@@ -181,9 +181,8 @@ class CoverSwipeTest {
     }
 
     @Test
-    fun `the backdrop of a song read ahead shows at once, one not read ahead still cross-fades in`() {
-        // Its own cross-fade (Compose's, from song to song), decided as the song changes; CoversAheadDeviceTest draws
-        // the rest.
+    fun `the backdrop's cross-fade is a snap for a song whose small cover is in memory, and the shell reads them ahead`() {
+        // Compose's cross-fade, from song to song, decided as the song changes: CoversAheadDeviceTest draws both cases.
         val player = File("src/main/java/app/lyrify/ui/PlayerScreen.kt").readText()
         assertTrue(player.contains("animationSpec = if (context.imageLoader.memoryCache?.get(backdropCoverKey(art)) != null) snap() else tween("))
         // Read ahead from the shell, the player open or not (the Now bar is not drawn under the player).

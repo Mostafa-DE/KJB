@@ -613,7 +613,7 @@ fun PlayerView() {
     }
 
     PlayerFrame(onClose = close) {
-        Backdrop(ui.item.song.path)
+        Backdrop(ui.item.song.path, ui.song?.ref?.mediaStoreId)
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             PlayerTopBar(ui, lyricsShare, tone = makesTone(book), cut = cutsSong(ui.song, book), onClose = close, onRoute = route)
             Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 4.dp)) {
@@ -866,10 +866,11 @@ private class PlayerDrag(private val scope: CoroutineScope) {
  * seamless gradient with no edge anywhere (the glow and its tint are masked to nothing, never cut at a box's edge), light
  * or dark. It cross-fades from song to song (a song read ahead shows at once) and to a cover Covers & tags changed; it
  * is drawn from a small image (the blur hides it) kept apart from the cover's own sizes ([backdropRequest]), and only
- * once the player has finished growing out of the Now bar, so the transform never re-blurs on every frame.
+ * once the player has finished growing out of the Now bar, so the transform never re-blurs on every frame. By the
+ * library's [mediaStoreId] when it has one.
  */
 @Composable
-private fun Backdrop(path: String) {
+internal fun Backdrop(path: String, mediaStoreId: Long?) {
     val context = LocalContext.current
     val surface = MaterialTheme.colorScheme.background
     val reduced = LocalReducedMotion.current
@@ -878,7 +879,7 @@ private fun Backdrop(path: String) {
     val shown by animateFloatAsState(if (arriving) 0f else 1f, motion(tween(Motion.FADE_IN_MS * 2), reduced), label = "backdrop")
     // Keyed by the cover's version too: a cover Covers & tags changed cross-fades in, never the old glow from memory. A
     // song whose small cover is in memory (read ahead before a skip, PW3) shows at once, as the player's cover does.
-    val art = backdropArt(path)
+    val art = backdropArt(path, mediaStoreId)
     Crossfade(art, Modifier.fillMaxWidth().fillMaxHeight(BACKDROP_SHARE).graphicsLayer { alpha = shown }, animationSpec = if (context.imageLoader.memoryCache?.get(backdropCoverKey(art)) != null) snap() else tween(if (reduced) Motion.REDUCED_MS else Motion.OPEN_MS), label = "backdrop") { cover ->
         val request = remember(cover, context) { backdropRequest(context, cover) }
         Box(
@@ -1154,7 +1155,7 @@ internal fun CoverFace(
                         ambientShadowColor = chrome.shadowStrong
                         spotShadowColor = chrome.shadowStrong
                     },
-            ) { SongCover(SongArt(neighbour.song.path), size = side, shape = shape) }
+            ) { SongCover(SongArt(neighbour.song.path, ui.library?.resolver?.find(neighbour.song)?.ref?.mediaStoreId), size = side, shape = shape) }
         }
         Box(
             Modifier

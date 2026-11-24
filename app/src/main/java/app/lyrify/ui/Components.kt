@@ -916,11 +916,14 @@ fun songCoverRequest(context: Context, model: Any, at: CoverAt = CoverAt.ELSEWHE
 /** The extra on [barCoverKey] that sets the bar's bitmap apart. */
 private const val BAR_EXTRA = "kjb#bar"
 
-/** [path]'s cover as the player's backdrop asks for it: its version in this process ([CoverVersions]) is in its key. */
+/**
+ * [path]'s cover as the player's backdrop asks for it: its version in this process ([CoverVersions]) is in its key; by
+ * the library's [mediaStoreId] when it has one, read with one MediaStore call (PW3).
+ */
 @Composable
-fun backdropArt(path: String): SongArt {
+fun backdropArt(path: String, mediaStoreId: Long? = null): SongArt {
     val versions by CoverVersions.versions.collectAsState()
-    return SongArt(path, version = versions[path] ?: 0)
+    return SongArt(path, mediaStoreId, versions[path] ?: 0)
 }
 
 /**
