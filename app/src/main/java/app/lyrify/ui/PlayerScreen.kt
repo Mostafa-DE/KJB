@@ -18,6 +18,7 @@ import androidx.compose.animation.Crossfade
 import android.os.SystemClock
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -65,6 +66,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.DisposableEffect
@@ -111,9 +113,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.books.BookNow
+import app.lyrify.books.BookState
+import app.lyrify.books.bookNow
 import app.lyrify.books.bookNowAt
 import app.lyrify.books.chapterStepPart
 import app.lyrify.books.knownBookPart
+import app.lyrify.books.playingBook
 import app.lyrify.cut.CutFormats
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.Song
@@ -134,7 +139,9 @@ import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlayerUiSettings
 import app.lyrify.settings.Settings
+import app.lyrify.tags.CoverVersions
 import coil3.compose.AsyncImage
+import coil3.imageLoader
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -294,6 +301,21 @@ fun incoming(queue: Queue, way: SkipWay, repeat: Repeat, positionMs: Long, book:
         SkipWay.PREVIOUS -> if (positionMs > PREVIOUS_RESTARTS_MS) -1 else (queue.index - 1).let { if (it >= 0) it else if (repeat == Repeat.ALL) items.lastIndex else -1 }
     }
     return items.getOrNull(at)?.takeIf { it.uid != queue.current?.uid }
+}
+
+/**
+ * The covers read ahead while [ui]'s song plays ([rememberOwnNow]), in the order they are read: its own, then the songs
+ * Next and Previous go to from its start, as the cover's swipe brings them in ([incoming]; past 3 s Previous starts the
+ * song over, and a second one goes to the song before). In a book, the parts its chapter buttons go to; a single file's
+ * chapters stay in its one part. Each by the library's MediaStore id, so its read skips the lookup by path, and at its
+ * version in [versions] ([CoverVersions]), the key the screens look it up by (PW3).
+ */
+fun coversAhead(ui: PlayerUi, versions: Map<String, Int>): List<SongArt> {
+    // At the part's start, a book's chapters are its parts: a single file's own chapters ([BookState]) never leave it.
+    val book = playingBook(ui.queue, ui.library, ui.item.uid)?.let { bookNow(it.book, it.partIndex, 0, BookState()) }
+    return (listOf(ui.item) + SkipWay.entries.mapNotNull { incoming(ui.queue, it, ui.repeat, positionMs = 0, book) })
+        .distinctBy { it.uid }
+        .map { SongArt(it.song.path, ui.library?.resolver?.find(it.song)?.ref?.mediaStoreId, versions[it.song.path] ?: 0) }
 }
 
 /** Previous starts the song over once it has played this long (the player's own rule, LyrifyPlayer's MAX_SEEK_TO_PREVIOUS_MS). */
@@ -500,6 +522,19 @@ fun rememberOwnNow(): OwnNowSource {
             store.update { it.copy(playerUi = it.playerUi.copy(recentQueueHintShown = true)) }
             toasts.show(Toast(resources.getString(R.string.player_recent_hint), R.drawable.ic_history))
         }
+    }
+    // The covers of the song playing and of the songs a skip brings in, read ahead here, the player open or not (the
+    // Now bar is not drawn under it), one at a time and the song's own first, so they never hold up its cover: after a
+    // Next or a Previous each screen draws the new cover in its first frame, with no fade (PW3). The song's own at the
+    // player's size is the cover that grows out of the Now bar (PW1's prewarm). The window's width, at most the
+    // player's largest cover ([COVER_MAX]): the player never draws a larger one.
+    val versions by CoverVersions.versions.collectAsState()
+    val density = LocalDensity.current
+    val playerPx = minOf(LocalWindowInfo.current.containerSize.width, with(density) { COVER_MAX.roundToPx() })
+    val barPx = with(density) { ORB_COVER.roundToPx() }
+    val ahead = ui?.let { coversAhead(it, versions) }.orEmpty()
+    LaunchedEffect(ahead, playerPx, barPx) {
+        if (playerPx > 0) ahead.forEach { art -> coverAheadRequests(context, art, playerPx, barPx).forEach { context.imageLoader.execute(it) } }
     }
     return OwnPlayer(ownNow(ui, settings.library), connection) { ui?.let { ringShare(it.positionAt(clock.value), it.durationMs) } ?: 0f }
 }
@@ -828,9 +863,9 @@ private class PlayerDrag(private val scope: CoroutineScope) {
 /**
  * Behind the top of the player: the cover blurred into a glow that fades into the page by 60% of the height, one
  * seamless gradient with no edge anywhere (the glow and its tint are masked to nothing, never cut at a box's edge), light
- * or dark. It cross-fades from song to song and to a cover Covers & tags changed; it is drawn from a small image (the
- * blur hides it) kept apart from the cover's own sizes ([backdropRequest]), and only once the player has finished growing
- * out of the Now bar, so the transform never re-blurs on every frame.
+ * or dark. It cross-fades from song to song (a song read ahead shows at once) and to a cover Covers & tags changed; it
+ * is drawn from a small image (the blur hides it) kept apart from the cover's own sizes ([backdropRequest]), and only
+ * once the player has finished growing out of the Now bar, so the transform never re-blurs on every frame.
  */
 @Composable
 private fun Backdrop(path: String) {
@@ -840,9 +875,11 @@ private fun Backdrop(path: String) {
     val container = LocalContainer.current
     val arriving = container != null && container.visibility.transition.run { currentState != targetState }
     val shown by animateFloatAsState(if (arriving) 0f else 1f, motion(tween(Motion.FADE_IN_MS * 2), reduced), label = "backdrop")
-    // Keyed by the cover's version too: a cover Covers & tags changed cross-fades in, never the old glow from memory.
-    Crossfade(backdropArt(path), Modifier.fillMaxWidth().fillMaxHeight(BACKDROP_SHARE).graphicsLayer { alpha = shown }, animationSpec = tween(if (reduced) Motion.REDUCED_MS else Motion.OPEN_MS), label = "backdrop") { art ->
-        val request = remember(art, context) { backdropRequest(context, art) }
+    // Keyed by the cover's version too: a cover Covers & tags changed cross-fades in, never the old glow from memory. A
+    // song whose small cover is in memory (read ahead before a skip, PW3) shows at once, as the player's cover does.
+    val art = backdropArt(path)
+    Crossfade(art, Modifier.fillMaxWidth().fillMaxHeight(BACKDROP_SHARE).graphicsLayer { alpha = shown }, animationSpec = if (context.imageLoader.memoryCache?.get(backdropCoverKey(art)) != null) snap() else tween(if (reduced) Motion.REDUCED_MS else Motion.OPEN_MS), label = "backdrop") { cover ->
+        val request = remember(cover, context) { backdropRequest(context, cover) }
         Box(
             Modifier
                 .fillMaxSize()
@@ -1427,7 +1464,7 @@ private const val BACKDROP_SHARE = 0.6f
 /** A blurred backdrop's cover, in px: blurred some 50 dp, a larger one would only cost decoding and upload time. */
 internal const val BACKDROP_PX = 192
 
-/** The player's cover at its largest, on a wide screen; the Now bar loads it at most this size ([PrewarmCover]). */
+/** The player's cover at its largest, on a wide screen; covers read ahead load at most this size ([rememberOwnNow]). */
 internal val COVER_MAX = 360.dp
 
 /** The player's side margin, past which the next cover waits. */

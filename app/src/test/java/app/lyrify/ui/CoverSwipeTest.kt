@@ -7,7 +7,9 @@ import app.lyrify.books.bookSource
 import app.lyrify.library.Library
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
+import app.lyrify.player.PlayerUi
 import app.lyrify.player.Queue
+import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueItem
 import app.lyrify.player.QueueSource
 import app.lyrify.player.Repeat
@@ -18,6 +20,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import kotlin.random.Random
 
 /**
  * The player cover's swipe (the prototype's coverSwipe): it locks to an axis after 12 dp, follows the finger at 0.6 with
@@ -112,6 +115,80 @@ class CoverSwipeTest {
         // It moved somewhere else: the cover springs back and nothing skips.
         assertEquals(Settled.RETURN, settledSwipe(startedOn = 4, playingNow = 9, coming = 5))
         assertEquals(Settled.RETURN, settledSwipe(startedOn = 4, playingNow = 9, coming = null))
+    }
+
+    // Covers read ahead (PW3): the songs Next and Previous go to, as the swipe brings them in, read before the skip
+
+    /** The player as the screens see [queue] playing, [positionMs] into its song. */
+    private fun playing(queue: Queue, repeat: Repeat = Repeat.OFF, library: Library? = null, positionMs: Long = 0) =
+        PlayerUi(QueueBook(), queue, queue.current!!, song = null, playing = true, positionMs = positionMs, at = 0, speed = 1f, durationMs = 200_000, repeat = repeat, library = library)
+
+    /** The file names of the covers read ahead while [ui]'s song plays, in the order they are read. */
+    private fun ahead(ui: PlayerUi): List<String> = coversAhead(ui, emptyMap()).map { it.path.substringAfterLast('/') }
+
+    @Test
+    fun `the covers read ahead are the song's own, then the next song's and the previous one's, the ones a skip brings in`() {
+        assertEquals(listOf("made-up-2.mp3", "made-up-3.mp3", "made-up-1.mp3"), ahead(playing(queue(5, 2))))
+        // Previous past 3 s starts the song over, and a second Previous goes to the song before: read it all the same.
+        assertEquals(listOf("made-up-2.mp3", "made-up-3.mp3", "made-up-1.mp3"), ahead(playing(queue(5, 2), positionMs = 120_000)))
+        // From the last song Next goes to the first whatever Repeat says; from the first, Previous goes round with
+        // Repeat all only.
+        assertEquals(listOf("made-up-4.mp3", "made-up-0.mp3", "made-up-3.mp3"), ahead(playing(queue(5, 4), Repeat.OFF)))
+        assertEquals(listOf("made-up-0.mp3", "made-up-1.mp3"), ahead(playing(queue(5, 0), Repeat.OFF)))
+        assertEquals(listOf("made-up-0.mp3", "made-up-1.mp3"), ahead(playing(queue(5, 0), Repeat.ONE)))
+        assertEquals(listOf("made-up-0.mp3", "made-up-1.mp3", "made-up-4.mp3"), ahead(playing(queue(5, 0), Repeat.ALL)))
+        // Two songs with Repeat all: the other one is both Next and Previous, read once. One song: its own only.
+        assertEquals(listOf("made-up-0.mp3", "made-up-1.mp3"), ahead(playing(queue(2, 0), Repeat.ALL)))
+        assertEquals(listOf("made-up-0.mp3"), ahead(playing(queue(1, 0), Repeat.ALL)))
+    }
+
+    @Test
+    fun `a shuffled queue's covers are read ahead in the order it plays, not the album's`() {
+        val songs = (0 until 8).map { SongRef("/Music/KJB test/made-up-$it.mp3") }
+        val shuffled = QueueBook().shuffle(songs, QueueSource(SourceKind.ALBUM, "album:x", "Paper Harbour"), Random(7), now = 1).book.place(3, 0).current!!
+        val order = shuffled.items.map { it.song.path.substringAfterLast('/') }
+        assertTrue(shuffled.shuffled && order != songs.map { it.path.substringAfterLast('/') })
+        assertEquals(listOf(order[3], order[4], order[2]), ahead(playing(shuffled)))
+    }
+
+    @Test
+    fun `in a book the covers read ahead are the parts its chapter buttons go to, and none round the ends or inside one file`() {
+        val parts = (1..3).map { song("Audiobooks/Folder Book/$it.mp3", album = "Folder Book", durationMs = 600_000) }
+        val library = Library.of(parts, Settings())
+        val book = library.books.single()
+        val queue = Queue("b", bookSource(book), parts.mapIndexed { i, part -> QueueItem(uid = i.toLong(), song = part.ref) }, index = 1)
+        // Wherever the part is: its chapter buttons go to the parts either side.
+        assertEquals(listOf("2.mp3", "3.mp3", "1.mp3"), ahead(playing(queue, library = library, positionMs = 400_000)))
+        // The last part's Next and the first part's Previous go nowhere, whatever Repeat says.
+        assertEquals(listOf("3.mp3", "2.mp3"), ahead(playing(queue.copy(index = 2), Repeat.ALL, library)))
+        assertEquals(listOf("1.mp3", "2.mp3"), ahead(playing(queue.copy(index = 0), Repeat.ALL, library)))
+        // A one-file book: its chapters are inside the file, whose cover is already the one shown.
+        val orchard = song("Audiobooks/Quiet Orchard.m4b", durationMs = 900_000)
+        val single = Library.of(listOf(orchard), Settings())
+        val one = Queue("o", bookSource(single.books.single()), listOf(QueueItem(uid = 9, song = orchard.ref)))
+        assertEquals(listOf("Quiet Orchard.m4b"), ahead(playing(one, Repeat.ALL, single)))
+    }
+
+    @Test
+    fun `a cover read ahead names the song by the library's MediaStore id, and at the version Covers & tags gave it`() {
+        val songs = (0 until 3).map { song("Music/Paper Harbour/made-up-$it.mp3", id = 40L + it) }
+        val queue = Queue("q", QueueSource(SourceKind.ALBUM, "album:x", "Paper Harbour"), songs.mapIndexed { i, it -> QueueItem(uid = i.toLong(), song = SongRef(it.path)) }, index = 1)
+        val read = coversAhead(playing(queue, library = Library.of(songs, Settings())), mapOf(songs[2].path to 3))
+        // The id from the library's read, not the queue's: one MediaStore call for each cover, no lookup by path first.
+        assertEquals(listOf(SongArt(songs[1].path, 41L), SongArt(songs[2].path, 42L, version = 3), SongArt(songs[0].path, 40L)), read)
+        // A song the library does not hold (a file another app opened, or before the library is read): by its path.
+        assertEquals(listOf(SongArt(songs[1].path), SongArt(songs[2].path, version = 3), SongArt(songs[0].path)), coversAhead(playing(queue), mapOf(songs[2].path to 3)))
+    }
+
+    @Test
+    fun `the backdrop of a song read ahead shows at once, one not read ahead still cross-fades in`() {
+        // Its own cross-fade (Compose's, from song to song), decided as the song changes; CoversAheadDeviceTest draws
+        // the rest.
+        val player = File("src/main/java/app/lyrify/ui/PlayerScreen.kt").readText()
+        assertTrue(player.contains("animationSpec = if (context.imageLoader.memoryCache?.get(backdropCoverKey(art)) != null) snap() else tween("))
+        // Read ahead from the shell, the player open or not (the Now bar is not drawn under the player).
+        assertTrue(player.contains("coversAhead(it, versions)"))
+        assertTrue("PrewarmCover" !in File("src/main/java/app/lyrify/ui/NowBar.kt").readText())
     }
 
     // In a book (BK1): the swipe is the player's chapter Previous and Next, as its buttons are

@@ -932,6 +932,19 @@ fun backdropRequest(context: Context, art: SongArt): ImageRequest = ImageRequest
     .placeholderMemoryCacheKey(MemoryCache.Key(coverKey(art)))
     .build()
 
+/**
+ * The requests that read [art]'s cover into memory ahead of a skip, as the screens will ask for it, so each finds its
+ * own key at a size it takes and draws it in its first frame, with no fade (Coil fades no memory hit): the player's
+ * cover and the swipe's neighbour at [playerPx] (Coil's own key for the song), the Now bar's at [barPx]
+ * ([barCoverKey]), and the backdrop's ([backdropRequest]). [playerPx] is never smaller than the player draws its cover
+ * (PW3).
+ */
+fun coverAheadRequests(context: Context, art: SongArt, playerPx: Int, barPx: Int): List<ImageRequest> = listOf(
+    songCoverRequest(context, art, CoverAt.PLAYER).newBuilder().size(playerPx).build(),
+    songCoverRequest(context, art, CoverAt.BAR).newBuilder().size(barPx).build(),
+    backdropRequest(context, art),
+)
+
 /** The extra on [backdropCoverKey] that sets the backdrop's bitmap apart. */
 private const val BACKDROP_EXTRA = "kjb#backdrop"
 

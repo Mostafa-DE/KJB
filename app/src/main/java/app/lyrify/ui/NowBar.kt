@@ -29,8 +29,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -50,7 +48,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -68,9 +65,6 @@ import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
 import app.lyrify.media.CurrentTrack
 import app.lyrify.media.NowPlayingListener
-import app.lyrify.tags.CoverVersions
-import coil3.imageLoader
-import coil3.request.ImageRequest
 import kotlinx.coroutines.delay
 
 /**
@@ -288,7 +282,6 @@ private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback
         NowBarShows.Hidden -> Unit
         is NowBarShows.Own -> {
             val now = shows.now
-            PrewarmCover(now.cover)
             val meta = metaLine(now.artist, now.album)
             val artist = meta.artist.text ?: stringResource(R.string.player_no_artist)
             val album = meta.album.text ?: stringResource(R.string.player_no_album)
@@ -345,23 +338,6 @@ fun metaText(meta: MetaLine, artist: String, album: String, ink: Color, placehol
     withStyle(SpanStyle(color = if (meta.artist.tappable) ink else placeholder)) { append(artist) }
     withStyle(SpanStyle(color = ink)) { append(" · ") }
     withStyle(SpanStyle(color = if (meta.album.tappable) ink else placeholder)) { append(album) }
-}
-
-/**
- * The player's cover, loaded at the player's size while the bar shows its song: the cover that grows out of the bar
- * is already in memory, under the key the player's own request looks up ([CoverAt.PLAYER], Coil's own for the song), so
- * its first frame is never an empty tile. The window's width, at most the player's largest cover ([COVER_MAX]): a
- * larger one is never drawn (PW1).
- */
-@Composable
-private fun PrewarmCover(cover: Any?) {
-    val context = LocalContext.current
-    val side = minOf(LocalWindowInfo.current.containerSize.width, with(LocalDensity.current) { COVER_MAX.roundToPx() })
-    val versions by CoverVersions.versions.collectAsState()
-    val shown = (cover as? SongArt)?.let { it.copy(version = versions[it.path] ?: 0) } ?: cover
-    LaunchedEffect(shown, side) {
-        if (shown != null && side > 0) context.imageLoader.execute(ImageRequest.Builder(context).data(shown).size(side, side).build())
-    }
 }
 
 @Composable
