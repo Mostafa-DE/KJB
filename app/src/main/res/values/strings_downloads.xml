@@ -168,7 +168,7 @@
     <string name="dl_search_go">Search</string>
     <string name="dl_searching">Searching YouTube</string>
     <string name="dl_search_none">Nothing found. Try other words.</string>
-    <string name="dl_search_update">Searching YouTube needs a newer Downloads add-on.</string>
+    <string name="dl_search_update">Searching YouTube and saving playlists need a newer Downloads add-on.</string>
     <string name="dl_search_get_first">Searching YouTube needs the Downloads add-on. Get it on the Downloads page.</string>
     <string name="dl_search_update_first">Searching YouTube needs a newer Downloads add-on. Update it on the Downloads page.</string>
     <string name="dl_open_downloads">Open Downloads</string>
