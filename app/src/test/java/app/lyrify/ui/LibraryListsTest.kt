@@ -445,15 +445,12 @@ class LibraryListsTest {
         val group = body("DuplicatesScreen.kt", "private fun GroupCard(")
         ends(group, "Text(artist, ", "SongLength(keep.durationMs, Modifier.padding(start = 8.dp))")
         assertTrue(group.contains("listOfNotNull(artist, lengthWords(keep.durationMs).ifEmpty { null }).joinToString(\", \")"))
-        // Insights' For you rows; the top songs (Your listening, Insights) and Insights' songs never played or forgotten.
-        ends(body("SuggestionScreens.kt", "fun ForYouInsights("), "Text(pick.song.artist.orEmpty(), ", "SongLength(pick.song.durationMs, Modifier.padding(start = 8.dp))")
+        // Your listening's top songs. (Insights' redesign has no For you song rows, only a mosaic, and no never played or
+        // forgotten cards; its own song rows are checked in InsightsViewTest.)
         val top = body("ListeningScreen.kt", "internal fun TopRowView(")
         ends(top, "Text(line, ", "SongLength(lengthMs, Modifier.padding(start = 8.dp))")
         assertTrue(top.contains("lengthWords(lengthMs).ifEmpty { null }"))
         assertTrue(body("ListeningScreen.kt", "internal fun TopRow(").contains("lengthMs = item.durationMs"))
-        val insights = File("src/main/java/app/lyrify/ui/InsightsCards.kt").readText()
-        assertTrue(insights.contains("lengthMs = song.durationMs"))
-        assertTrue(insights.contains("lengthMs = top.item.durationMs"))
         // A song's bookmarks, Downloads' rows, and the videos a YouTube search found (Grok review: the length was
         // inside the channel's line, where it could wrap and was read as digits).
         ends(body("BookmarksScreen.kt", "fun BookmarksPage("), "line?.let { Text(it, ", "group.song?.let { SongLength(it.durationMs) }")

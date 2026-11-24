@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Insights (KJB 3.2, lane in1): the page, its cards, the monthly recap and its card on the start screen. The page's
-     title, its period switch, its totals and top lists are Your listening's (strings_stats.xml). -->
+<!-- Insights (KJB 3.2, lane in1; redone in v4 by lane in2u): the page, its cards, the story and its pictures, and the
+     monthly recap's card on the start screen. The page's title, its period switch and top lists are Your listening's
+     (strings_stats.xml). -->
 <resources>
     <string name="insights_tool_line">Your week, month and year in music</string>
     <string name="insights_private">Made on this phone from what you play. Nothing leaves it unless you share a picture.</string>
@@ -21,45 +22,15 @@
     <string name="insights_top_genres">Top genres</string>
     <string name="insights_open_genre">Open genre</string>
     <string name="insights_open">Open Insights</string>
-    <!-- A row without a rank, for TalkBack: its name, then its line. -->
-    <string name="insights_row">%1$s, %2$s</string>
 
-    <!-- This period against the one before. -->
-    <string name="insights_versus_week">Against last week, up to now</string>
-    <string name="insights_versus_month">Against last month, up to now</string>
-    <string name="insights_versus_year">Against last year, up to now</string>
-    <!-- A month's recap: "Against September". -->
-    <string name="insights_versus_month_name">Against %1$s</string>
     <!-- "40%". -->
     <string name="insights_percent">%1$s%%</string>
-    <string name="insights_more">%1$s more</string>
-    <string name="insights_less">%1$s less</string>
-    <string name="insights_same">The same</string>
-
-    <!-- The listening clock and streaks. -->
-    <string name="insights_clock_title">When you listen</string>
-    <string name="insights_clock_peak">Most around %1$s</string>
-    <plurals name="insights_streak_longest">
-        <item quantity="one">Longest run: %1$d day of music</item>
-        <item quantity="other">Longest run: %1$d days in a row</item>
-    </plurals>
-    <plurals name="insights_streak_now">
-        <item quantity="one">Now: %1$d day of music</item>
-        <item quantity="other">Now: %1$d days in a row</item>
-    </plurals>
-
-    <!-- Milestones: "1,000 plays", "100 hours heard", then "Next: 2,500 plays, 62 to go". -->
-    <string name="insights_milestones_title">Milestones</string>
+    <!-- "100 hours heard": a milestone. -->
     <plurals name="insights_hours">
         <item quantity="one">%1$s hour heard</item>
         <item quantity="other">%1$s hours heard</item>
     </plurals>
-    <string name="insights_next">Next: %1$s, %2$s to go</string>
-
-    <!-- Books and podcasts: "12 h 5 min of books". -->
     <string name="insights_spoken_title">Books and podcasts</string>
-    <string name="insights_books_time">%1$s of books</string>
-    <string name="insights_podcasts_time">%1$s of podcasts</string>
 
     <!-- The nudges. -->
     <string name="insights_never_title">Never played</string>
@@ -67,19 +38,9 @@
         <item quantity="one">%1$s song you have never played</item>
         <item quantity="other">%1$s songs you have never played</item>
     </plurals>
-    <string name="insights_dig_title">Dig deeper</string>
-    <string name="insights_dig_text">Albums you played, with songs you have never played</string>
-    <string name="insights_dig_played">You played %1$s</string>
-    <plurals name="insights_dig_unplayed">
-        <item quantity="one">%1$s never played</item>
-        <item quantity="other">%1$s never played</item>
-    </plurals>
     <string name="insights_forgotten_title">Forgotten favourites</string>
-    <string name="insights_forgotten_text">Songs you loved that went quiet</string>
-    <string name="insights_last_played">Last played %1$s</string>
 
-    <!-- The monthly recap: its card on the start screen, its page, its picture. -->
-    <string name="insights_recaps">Monthly recaps</string>
+    <!-- The monthly recap's card on the start screen, and the pictures to share. -->
     <string name="insights_recap_title">Your %1$s</string>
     <string name="insights_recap_ready">Your month in music is ready</string>
     <string name="insights_close">Close</string>
@@ -87,4 +48,397 @@
     <string name="insights_share_failed">Couldn\'t make the picture</string>
     <string name="insights_top_artist">Top artist: %1$s</string>
     <string name="insights_picture_footer">Made with KJB</string>
+
+    <!-- The redesign (v4, the approved mockup handoff/insights/preview-insights-v1.html, lane in2u). -->
+    <string name="insights_unit_h">h</string>
+    <string name="insights_unit_min">min</string>
+    <string name="insights_percent_sign" formatted="false">%</string>
+    <string name="insights_plus">+%1$s</string>
+    <string name="insights_minus">\u2212%1$s</string>
+    <string name="insights_new">New</string>
+    <string name="insights_other">Other</string>
+    <string name="insights_nothing">nothing</string>
+    <!-- A chart's step for TalkBack: "Mon 23 Nov 2 h 8 min". -->
+    <string name="insights_step">%1$s %2$s</string>
+    <string name="insights_chart_days">By day: %1$s</string>
+    <string name="insights_chart_months">By month: %1$s</string>
+    <string name="insights_share_of">%1$s %2$s%%</string>
+    <string name="insights_place_new">, new</string>
+    <plurals name="insights_place_up">
+        <item quantity="one">, up %1$d place</item>
+        <item quantity="other">, up %1$d places</item>
+    </plurals>
+    <plurals name="insights_place_down">
+        <item quantity="one">, down %1$d place</item>
+        <item quantity="other">, down %1$d places</item>
+    </plurals>
+
+    <!-- For you's row (lane sg1's card, as the mockup draws it). -->
+    <plurals name="insights_for_you_songs">
+        <item quantity="one">%1$d song from what you play</item>
+        <item quantity="other">%1$d songs from what you play</item>
+    </plurals>
+    <string name="insights_for_you_line">New ones and old ones, picked on your phone</string>
+
+    <!-- The top bar, the period switch and its line. -->
+    <string name="insights_story_play_yours">Play your story</string>
+    <string name="insights_how_title">How Insights count</string>
+    <string name="insights_how_plays">Plays follow Count a play after, in Settings. Quick skips never count as plays.</string>
+    <string name="insights_how_time">Time is real minutes: a song at 2x counts half its length.</string>
+    <string name="insights_range">%1$s to %2$s</string>
+    <string name="insights_range_all">Since %1$s, when KJB started counting</string>
+    <string name="insights_against_now">against %1$s, up to now</string>
+    <string name="insights_against_until">against %1$s, up to %2$s</string>
+    <string name="insights_against">against %1$s</string>
+    <string name="insights_last_week">last week</string>
+
+    <!-- The stories row. -->
+    <string name="insights_ring_so_far">%1$s so far</string>
+    <string name="insights_ring">%1$s: play the story</string>
+    <string name="insights_ring_new">%1$s, new: play the story</string>
+
+    <!-- Your time. -->
+    <string name="insights_time_kicker">%1$s · listening time</string>
+    <string name="insights_more_than">more than %1$s</string>
+    <string name="insights_less_than">less than %1$s</string>
+    <string name="insights_up_to_now">, up to now</string>
+    <string name="insights_a_day">About %1$s a day</string>
+    <plurals name="insights_plays_word">
+        <item quantity="one">play</item>
+        <item quantity="other">plays</item>
+    </plurals>
+    <plurals name="insights_songs_word">
+        <item quantity="one">song</item>
+        <item quantity="other">songs</item>
+    </plurals>
+    <plurals name="insights_artists_word">
+        <item quantity="one">artist</item>
+        <item quantity="other">artists</item>
+    </plurals>
+    <plurals name="insights_albums_word">
+        <item quantity="one">album</item>
+        <item quantity="other">albums</item>
+    </plurals>
+    <string name="insights_play_week">Play your week so far</string>
+    <string name="insights_play_so_far">Play your %1$s so far</string>
+    <string name="insights_play_all">Play your KJB so far</string>
+
+    <!-- Every day you listened. -->
+    <string name="insights_days_title">Every day you listened</string>
+    <string name="insights_days_week">Day by day</string>
+    <string name="insights_days_month">%1$s, day by day</string>
+    <string name="insights_days_year">One square a day</string>
+    <string name="insights_days_all">Hours by month</string>
+    <string name="insights_heat_less">Less</string>
+    <string name="insights_heat_more">More</string>
+    <!-- "2.1 h" under a day of the week. -->
+    <string name="insights_hours_short">%1$s h</string>
+    <!-- Some time heard, under half a minute, which would round to "0 min". -->
+    <string name="insights_under_a_minute">&lt;1 min</string>
+    <!-- A month of all time heard for less than an hour, in its small cell. -->
+    <string name="insights_under_an_hour">&lt;1</string>
+    <plurals name="insights_year_summary">
+        <item quantity="one">%1$d, one square a day, darker for more time: music on %2$d day</item>
+        <item quantity="other">%1$d, one square a day, darker for more time: music on %2$d days</item>
+    </plurals>
+    <string name="insights_run_now">Run now</string>
+    <string name="insights_run_now_line">in a row, today too</string>
+    <string name="insights_run_longest">Longest</string>
+    <string name="insights_run_ongoing">the run you are on</string>
+    <string name="insights_run_from">from %1$s</string>
+    <string name="insights_run_in">in %1$s</string>
+    <string name="insights_busiest">Busiest</string>
+    <plurals name="insights_days_word">
+        <item quantity="one">day</item>
+        <item quantity="other">days</item>
+    </plurals>
+
+    <!-- Your day on a record. -->
+    <string name="insights_record_title">Your day on a record</string>
+    <string name="insights_record_line">Each line is an hour; the longer, the more you listened</string>
+    <string name="insights_your_hour">your hour</string>
+    <string name="insights_dial">Listening by hour of the day, most at %1$s: %2$s</string>
+    <string name="insights_morning">Morning</string>
+    <string name="insights_afternoon">Afternoon</string>
+    <string name="insights_evening">Evening</string>
+    <string name="insights_night">Night</string>
+    <string name="insights_morning_hours">6 am to 12</string>
+    <string name="insights_afternoon_hours">12 to 6 pm</string>
+    <string name="insights_evening_hours">6 to 10 pm</string>
+    <string name="insights_night_hours">10 pm to 6 am</string>
+    <string name="insights_weekdays">Weekdays %1$s%%</string>
+    <string name="insights_weekends">Weekends %1$s%%</string>
+
+    <!-- The top lists. -->
+    <plurals name="insights_loyal_weeks">
+        <item quantity="one">Your number 1 for %1$d week running</item>
+        <item quantity="other">Your number 1 for %1$d weeks running</item>
+    </plurals>
+    <plurals name="insights_loyal_months_running">
+        <item quantity="one">Your number 1 for %1$d month running</item>
+        <item quantity="other">Your number 1 for %1$d months running</item>
+    </plurals>
+    <string name="insights_loyal_months">Your number 1 in %1$d of %2$d months</string>
+    <string name="insights_loyal_since">Your number 1 since %1$s</string>
+    <string name="insights_top_song">Your top song</string>
+    <string name="insights_play_song">Play %1$s</string>
+    <string name="insights_play_top">Play your top %1$d</string>
+    <string name="insights_album_place">%1$d. %2$s by %3$s</string>
+    <string name="insights_share_collage">Share the collage</string>
+
+    <!-- Your taste. -->
+    <string name="insights_taste_title">Your taste</string>
+    <string name="insights_taste_line">Genres from your songs\u2019 tags, by plays</string>
+    <string name="insights_decades">Decades</string>
+    <!-- "10s": songs from 2010 to 2019. -->
+    <string name="insights_decade">%1$ss</string>
+    <string name="insights_middle_year">The middle year of your music: half of what you played came out before it, half after.</string>
+
+    <!-- How you listen. -->
+    <string name="insights_how_listen_title">How you listen</string>
+    <string name="insights_how_listen_line">What started each song</string>
+    <string name="insights_start_picked">Picked by you</string>
+    <string name="insights_start_in_order">Albums and lists in order</string>
+    <string name="insights_start_shuffle">Shuffle</string>
+    <string name="insights_start_suggestions">Suggestions</string>
+    <string name="insights_start_huddle">Huddle</string>
+    <string name="insights_end_finished">Played to the end</string>
+    <string name="insights_end_moved_on">Moved on after 30 s</string>
+    <string name="insights_end_early">Skipped in the first 30 s</string>
+    <string name="insights_to_the_end">to the end</string>
+    <string name="insights_shuffle_skips">Songs from Shuffle were skipped early %1$s times as often as songs in order.</string>
+    <string name="insights_times">%1$s times</string>
+    <string name="insights_most_skipped">Most skipped: %1$s</string>
+    <string name="insights_most_skipped_line">Skipped early %1$d of %2$d times. Quick skips never count as plays.</string>
+
+    <!-- Moments. -->
+    <string name="insights_moments_title">Moments</string>
+    <string name="insights_moments_line">The real and the odd, from your plays</string>
+    <string name="insights_moment_repeat">On repeat</string>
+    <string name="insights_moment_repeat_line">of %1$s on %2$s</string>
+    <string name="insights_moment_session">Longest session</string>
+    <string name="insights_moment_session_line">without a break, %1$s from %2$s</string>
+    <string name="insights_moment_night">Latest night</string>
+    <string name="insights_moment_night_line">%1$s, on %2$s</string>
+    <string name="insights_moment_albums">Start to finish</string>
+    <string name="insights_moment_albums_line">played through in order, like %1$s</string>
+    <string name="insights_moment_zones">On the move</string>
+    <plurals name="insights_time_zones">
+        <item quantity="one">%1$d time zone</item>
+        <item quantity="other">%1$d time zones</item>
+    </plurals>
+    <string name="insights_moment_zones_two">you listened at %1$s and %2$s</string>
+    <string name="insights_moment_zones_range">from %1$s to %2$s</string>
+    <string name="insights_moment_faster">Faster</string>
+    <string name="insights_moment_faster_line">saved by %1$s at faster speeds</string>
+    <string name="insights_moment_faster_books">books</string>
+    <string name="insights_moment_faster_podcasts">podcasts</string>
+    <string name="insights_moment_faster_both">books and podcasts</string>
+    <string name="insights_moment_year_ago">One year ago today</string>
+    <plurals name="insights_moment_year_ago_line">
+        <item quantity="one">by %1$s, played %2$d time on %3$s</item>
+        <item quantity="other">by %1$s, played %2$d times on %3$s</item>
+    </plurals>
+    <string name="insights_moment_first">Where it began</string>
+    <string name="insights_moment_first_line">your first play here, on %1$s</string>
+
+    <!-- New to you. -->
+    <string name="insights_found_title">New to you</string>
+    <string name="insights_found_line">Heard for the first time</string>
+    <string name="insights_found_all_title">Every artist you found</string>
+    <string name="insights_found_all_line">Since you started</string>
+    <plurals name="insights_new_artists">
+        <item quantity="one">new artist</item>
+        <item quantity="other">new artists</item>
+    </plurals>
+    <plurals name="insights_found_songs">
+        <item quantity="one">%1$s song you had never played</item>
+        <item quantity="other">%1$s songs you had never played</item>
+    </plurals>
+    <plurals name="insights_found_songs_all">
+        <item quantity="one">%1$s song played</item>
+        <item quantity="other">%1$s songs played</item>
+    </plurals>
+    <string name="insights_of_plays">%1$s%% of your plays</string>
+    <plurals name="insights_kept">
+        <item quantity="one">You kept %1$d: played on 3 or more days. The tick marks it.</item>
+        <item quantity="other">You kept %1$d: played on 3 or more days. The tick marks them.</item>
+    </plurals>
+    <string name="insights_found_from">Where they came from</string>
+    <string name="insights_from_suggestions">Suggestions</string>
+    <string name="insights_from_friends">Friends</string>
+    <string name="insights_from_own">On your own</string>
+    <string name="insights_back_again">Back again</string>
+    <plurals name="insights_quiet_days">
+        <item quantity="one">after %1$s quiet day</item>
+        <item quantity="other">after %1$s quiet days</item>
+    </plurals>
+    <plurals name="insights_quiet_favourites">
+        <item quantity="one">%1$s favourite is still quiet</item>
+        <item quantity="other">%1$s favourites are still quiet</item>
+    </plurals>
+    <string name="insights_quiet_line">Not played for 60 days or more</string>
+
+    <!-- You and your friends. -->
+    <string name="insights_friends_title">You and your friends</string>
+    <string name="insights_friends_line">From Huddle, worked out on your phone</string>
+    <string name="insights_most_like_you">Most like you</string>
+    <string name="insights_alike_line">You and %1$s play the same artists</string>
+    <string name="insights_both_love">You both love</string>
+    <string name="insights_friend_match">%1$s: %2$d%% match</string>
+    <string name="insights_open_friend">Open you and this friend</string>
+    <string name="insights_sent">songs you sent</string>
+    <string name="insights_got">sent to you</string>
+    <string name="insights_kept_playing">you kept playing</string>
+    <plurals name="insights_in_sync">
+        <item quantity="one">In sync once</item>
+        <item quantity="other">In sync %1$d times</item>
+    </plurals>
+    <string name="insights_in_sync_line">You and %1$s played %2$s within the same hour</string>
+    <string name="insights_from_friend_kept">From %1$s, kept</string>
+    <plurals name="insights_from_friend_line">
+        <item quantity="one">The song a friend sent you that you played most: %1$d time since</item>
+        <item quantity="other">The song a friend sent you that you played most: %1$d times since</item>
+    </plurals>
+
+    <!-- Read along, new favourites, your searches. -->
+    <string name="insights_read_along">Read along</string>
+    <plurals name="insights_lyrics_opened">
+        <item quantity="one">time you opened lyrics</item>
+        <item quantity="other">times you opened lyrics</item>
+    </plurals>
+    <string name="insights_lyrics_most">Most: %1$s, %2$d times · %3$d%% of plays had synced lyrics</string>
+    <string name="insights_new_favourites">New favourites</string>
+    <plurals name="insights_favourites_new">
+        <item quantity="one">song you hearted</item>
+        <item quantity="other">songs you hearted</item>
+    </plurals>
+    <plurals name="insights_favourites_all">
+        <item quantity="one">favourite in all</item>
+        <item quantity="other">favourites in all</item>
+    </plurals>
+    <string name="insights_favourites_most">Most played of them: %1$s</string>
+    <string name="insights_searches_title">Your searches</string>
+    <string name="insights_only_here">Only on this phone</string>
+    <plurals name="insights_searches">
+        <item quantity="one">search</item>
+        <item quantity="other">searches</item>
+    </plurals>
+    <string name="insights_ended_in_tap">ended in a tap</string>
+    <string name="insights_played_within">played within a minute</string>
+    <string name="insights_show_words">Show your words</string>
+    <string name="insights_looked_for">What you looked for</string>
+    <string name="insights_searches_private">Your words stay hidden until you tap, and never go in a story or a picture. Remove a search from Recent searches and its words go from here too.</string>
+
+    <!-- Books and podcasts. -->
+    <string name="insights_spoken_line">Counted in real minutes: 2x counts half</string>
+    <string name="insights_in_books">in books</string>
+    <string name="insights_in_podcasts">in podcasts</string>
+    <string name="insights_saved">Saved at faster speeds</string>
+    <string name="insights_bookmarks_made">Bookmarks you made</string>
+    <string name="insights_books_finished">Books finished</string>
+
+    <!-- Your library. -->
+    <string name="insights_library_title">Your library</string>
+    <string name="insights_library_line">The music on your phone, and how much of it you know</string>
+    <string name="insights_played_ever">played, ever</string>
+    <string name="insights_library_ring">%1$d%% of your library played at least once</string>
+    <string name="insights_on_phone">%1$s on your phone</string>
+    <string name="insights_play_it_all">to play it all, end to end</string>
+    <string name="insights_days_hours">%1$s %2$d h</string>
+    <plurals name="insights_days_word_count">
+        <item quantity="one">%1$s day</item>
+        <item quantity="other">%1$s days</item>
+    </plurals>
+    <string name="insights_added">%1$s added</string>
+    <string name="insights_added_line">%1$s, %2$s played already</string>
+    <string name="insights_this_week_lower">this week</string>
+    <string name="insights_this_month_lower">this month</string>
+    <string name="insights_this_year_lower">this year</string>
+    <string name="insights_last_30_days">in the last 30 days</string>
+    <string name="insights_never_line">The newest added first. Shuffle them into a queue.</string>
+    <string name="insights_dig_album">Dig deeper: %1$s</string>
+    <string name="insights_dig_line">You played %1$d of its %2$d songs</string>
+
+    <!-- Your listening type. -->
+    <string name="insights_listen_like">You listen like a</string>
+    <string name="insights_trait_night_owl">Night owl</string>
+    <string name="insights_trait_shuffler">Shuffler</string>
+    <string name="insights_trait_album_lover">Album lover</string>
+    <string name="insights_trait_explorer">Explorer</string>
+    <string name="insights_trait_loyal">Loyal</string>
+    <string name="insights_trait_night_owl_why">%1$d%% of your time was after 9 pm</string>
+    <string name="insights_trait_shuffler_why">%1$d%% of plays came from Shuffle</string>
+    <string name="insights_trait_album_lover_why">%1$d%% of plays were albums in order</string>
+    <string name="insights_trait_explorer_why">%1$d%% of plays were new to you</string>
+    <string name="insights_trait_loyal_why">%1$s is %2$d%% of your plays</string>
+
+    <!-- Milestones and badges. -->
+    <string name="insights_milestones_badges">Milestones and badges</string>
+    <string name="insights_next_word">Next</string>
+    <string name="insights_of_the_way">of the way</string>
+    <string name="insights_next_ring">Next milestone %1$s: %2$s to go</string>
+    <string name="insights_to_go">%1$s to go</string>
+    <string name="insights_pace">. At this month\u2019s pace, around %1$s.</string>
+    <string name="insights_no_milestone_week">No milestone this week yet.</string>
+    <string name="insights_no_milestone_month">No milestone this month yet.</string>
+    <plurals name="insights_run_badge">
+        <item quantity="one">%1$d-day run</item>
+        <item quantity="other">%1$d-day run</item>
+    </plurals>
+    <string name="insights_your_longest">Your longest</string>
+    <string name="insights_in_one_month">in one month</string>
+    <string name="insights_bookworm">Bookworm</string>
+    <plurals name="insights_books_finished_count">
+        <item quantity="one">%1$d book finished</item>
+        <item quantity="other">%1$d books finished</item>
+    </plurals>
+    <string name="insights_there">%1$d%% there</string>
+
+    <!-- Your story. -->
+    <string name="insights_story_week">Your week so far</string>
+    <string name="insights_story_so_far">Your %1$s so far</string>
+    <string name="insights_story_all">Your KJB so far</string>
+    <string name="insights_story_slide">Slide %1$d of %2$d</string>
+    <string name="insights_story_back">Back</string>
+    <string name="insights_story_next">Next</string>
+    <string name="insights_story_pause">Pause</string>
+    <string name="insights_story_play">Play</string>
+    <string name="insights_story_kicker">KJB · %1$s</string>
+    <string name="insights_story_intro">Your music, worked out on your phone. Tap to go on.</string>
+    <string name="insights_story_listened">You listened for</string>
+    <string name="insights_story_a_day">That is %1$s a day.</string>
+    <string name="insights_story_a_day_more">That is %1$s a day, %2$s%% more than %3$s.</string>
+    <string name="insights_story_a_day_less">That is %1$s a day, %2$s%% less than %3$s.</string>
+    <string name="insights_quiz_kicker">Quick one</string>
+    <string name="insights_quiz_title">Guess your top song</string>
+    <string name="insights_quiz_right">Yes! %1$s it is.</string>
+    <string name="insights_quiz_wrong">Close. It was %1$s.</string>
+    <plurals name="insights_story_repeat">
+        <item quantity="one">You played it %1$d time on %2$s alone</item>
+        <item quantity="other">You played it %1$d times on %2$s alone</item>
+    </plurals>
+    <string name="insights_story_artists">Your top artists</string>
+    <string name="insights_story_wins">%1$s wins it</string>
+    <string name="insights_story_you_are">You are a</string>
+    <string name="insights_your_hour_title">Your hour</string>
+    <string name="insights_story_owl">%1$d%% of your time was after 9 pm. Your hour is %2$s.</string>
+    <string name="insights_story_hour">You listen most around %1$s.</string>
+    <plurals name="insights_story_new_artists">
+        <item quantity="one">%1$s new artist</item>
+        <item quantity="other">%1$s new artists</item>
+    </plurals>
+    <plurals name="insights_story_kept">
+        <item quantity="one">You kept %1$d: you played it on 3 or more days.</item>
+        <item quantity="other">You kept %1$d: you played them on 3 or more days.</item>
+    </plurals>
+    <string name="insights_story_alike">You and %1$s: %2$d%% alike</string>
+    <string name="insights_story_both">You both played %1$s the most.</string>
+    <string name="insights_story_type">Your listening type</string>
+
+    <!-- The pictures to share. -->
+    <string name="insights_picture_album_top">%1$s by %2$s, played most</string>
+    <string name="insights_picture_albums_of">%1$d of %2$d albums</string>
+    <string name="insights_picture_owl">%1$d%% of my listening was after 9 pm</string>
+    <string name="insights_picture_busiest">Busiest at %1$s</string>
 </resources>

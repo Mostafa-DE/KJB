@@ -352,6 +352,7 @@ fun AppShell(
                     is FullScreen.EditTags -> EditTagsView(view)
                     is FullScreen.EditAlbum -> EditAlbumView(view)
                     FullScreen.Equalizer -> EqualizerView()
+                    is FullScreen.Story -> StoryView(view)
                     FullScreen.CompanionNow -> CompanionNowScreen(
                         ledger = ledger,
                         track = track,

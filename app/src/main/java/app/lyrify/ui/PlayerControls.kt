@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -407,12 +408,22 @@ private fun repeatLabel(repeat: Repeat): Int = when (repeat) {
     Repeat.ONE -> R.string.player_repeat_one
 }
 
+/** A round icon button [size] across; [container] and [tint] fill it (Insights' play buttons), [modifier] places it. */
 @Composable
-internal fun RoundButton(@DrawableRes icon: Int, label: String, size: Dp = TOUCH, iconSize: Dp = 26.dp, onClick: () -> Unit) {
+internal fun RoundButton(
+    @DrawableRes icon: Int,
+    label: String,
+    size: Dp = TOUCH,
+    iconSize: Dp = 26.dp,
+    modifier: Modifier = Modifier,
+    container: Color = Color.Transparent,
+    tint: Color = LocalContentColor.current,
+    onClick: () -> Unit,
+) {
     Box(
         contentAlignment = Alignment.Center,
-        modifier = Modifier.size(size).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
-    ) { Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(iconSize)) }
+        modifier = modifier.size(size).clip(CircleShape).background(container).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
+    ) { Icon(painterResource(icon), contentDescription = null, tint = tint, modifier = Modifier.size(iconSize)) }
 }
 
 /** A toggle of the second row: in [onColor] (the highlight) with a bar while [on]; [badge]: the suggestion mark on its corner (Smart shuffle). */

@@ -70,6 +70,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -488,9 +489,12 @@ internal fun JoinedDialog(friend: Friend, onSend: () -> Unit, onDone: () -> Unit
 /** A tap that lands here and on nothing nearer: [onTap] (the scrim closes the dialog; the card keeps its taps). */
 private fun Modifier.pointerTapOutside(onTap: () -> Unit): Modifier = pointerInput(onTap) { detectTapGestures { onTap() } }
 
-/** Your face and the new friend's, bumping together, with a gold spark popping between them. */
+/**
+ * Your face and the new friend's, bumping together, with a gold spark popping between them; [size] each, ringed as
+ * [ring] says, on [gap] (Insights' "Most like you" and its story slide too).
+ */
 @Composable
-private fun JoinedFaces(me: String, friend: String, color: Color) {
+internal fun JoinedFaces(me: String, friend: String, color: Color, size: Dp = 76.dp, ring: FaceRing = FaceRing.NONE, gap: Color = LocalChromeColors.current.sheet) {
     val motion = if (huddleMoves()) rememberInfiniteTransition(label = "pair") else null
     val bump = motion?.animateFloat(
         0f,
@@ -520,14 +524,14 @@ private fun JoinedFaces(me: String, friend: String, color: Color) {
         ),
         label = "spark",
     )
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.height(96.dp).clearAndSetSemantics {}) {
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.height(size + 20.dp).clearAndSetSemantics {}) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            FriendFace(me, OwnFaceColor, 76.dp, gap = LocalChromeColors.current.sheet, modifier = Modifier.graphicsLayer {
+            FriendFace(me, OwnFaceColor, size, ring = ring, gap = gap, modifier = Modifier.graphicsLayer {
                 val at = bump?.value ?: 1f
                 translationX = (-8 + 10 * at) * density
                 rotationZ = -6f * at
             })
-            FriendFace(friend, color, 76.dp, gap = LocalChromeColors.current.sheet, modifier = Modifier.offset(x = (-12).dp).graphicsLayer {
+            FriendFace(friend, color, size, ring = ring, gap = gap, modifier = Modifier.offset(x = -size * 0.16f).graphicsLayer {
                 val at = bump?.value ?: 1f
                 translationX = (8 - 10 * at) * density
                 rotationZ = 6f * at
@@ -537,7 +541,7 @@ private fun JoinedFaces(me: String, friend: String, color: Color) {
             painterResource(R.drawable.ic_auto_awesome_fill),
             contentDescription = null,
             tint = HuddleGold,
-            modifier = Modifier.align(Alignment.TopCenter).offset(x = (-6).dp).size(28.dp).graphicsLayer {
+            modifier = Modifier.align(Alignment.TopCenter).offset(x = (-6).dp).size(size * 0.37f).graphicsLayer {
                 val at = pop?.value ?: 1f
                 scaleX = 0.4f + 0.6f * at
                 scaleY = 0.4f + 0.6f * at

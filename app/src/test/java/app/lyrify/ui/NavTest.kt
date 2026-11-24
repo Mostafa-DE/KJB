@@ -3,6 +3,7 @@ package app.lyrify.ui
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.SongRef
 import app.lyrify.settings.DockTab
+import app.lyrify.stats.ListeningPeriod
 import app.lyrify.settings.LibraryTab
 import app.lyrify.settings.SettingsSection
 import org.junit.Assert.assertEquals
@@ -151,17 +152,21 @@ class NavTest {
     }
 
     @Test
-    fun `Insights from Tools stays on Tools with its recaps, from the recap card in Library, and on its own bar item there`() {
-        val tools = NavState.start(DockTab.TOOLS).open(Page.Listening).open(Page.Recap("2026-10"))
+    fun `Insights from Tools stays on Tools with its top lists, on its own bar item there, and its story is a full screen view`() {
+        // Changed on purpose (IN2U): a month's recap and the list of recaps are stories now (FullScreen.Story).
+        val tools = NavState.start(DockTab.TOOLS).open(Page.Listening).open(Page.TopList(TopKind.SONGS))
         assertEquals(DockTab.TOOLS, tools.tab)
-        assertEquals(listOf(Page.Listening, Page.Recap("2026-10")), tools.pages)
+        assertEquals(listOf(Page.Listening, Page.TopList(TopKind.SONGS)), tools.pages)
         assertFalse("Tools pages are full screens", tools.chrome)
-        val card = NavState.start(DockTab.LIBRARY).open(Page.Recap("2026-10"))
-        assertEquals(DockTab.LIBRARY, card.tab)
         val bar = listOf(DockTab.LIBRARY, DockTab.INSIGHTS, DockTab.SEARCH, DockTab.TOOLS)
-        val own = NavState.start(DockTab.INSIGHTS).open(Page.TopList(TopKind.GENRES), docked = bar).open(Page.Recaps, docked = bar).open(album, docked = bar)
+        val own = NavState.start(DockTab.INSIGHTS).open(Page.TopList(TopKind.GENRES), docked = bar).open(album, docked = bar)
         assertEquals(DockTab.INSIGHTS, own.tab)
-        assertEquals(listOf(Page.TopList(TopKind.GENRES), Page.Recaps, album), own.pages)
+        assertEquals(listOf(Page.TopList(TopKind.GENRES), album), own.pages)
+        val story = NavState.start(DockTab.LIBRARY).show(FullScreen.Story(month = "2026-10"))
+        assertEquals(listOf(FullScreen.Story(month = "2026-10")), story.views)
+        assertEquals(story, NavState.decode(story.encode()))
+        val period = NavState.start(DockTab.INSIGHTS).show(FullScreen.Story(period = ListeningPeriod.YEAR))
+        assertEquals(period, NavState.decode(period.encode()))
     }
 
     @Test
@@ -779,7 +784,7 @@ class NavTest {
         val every = listOf(
             Page.Songs(SongGroup.NO_LYRICS, LyricsStatus.NOT_FOUND), Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists, Page.Folder("Music/Rips"), Page.Genre("Folk"),
             Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum,
-            Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.TopList(TopKind.GENRES), Page.Recap("2026-10"), Page.Recaps, Page.Tones, Page.Bookmarks, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
+            Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.TopList(TopKind.GENRES), Page.Tones, Page.Bookmarks, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
             Page.Licences, Page.Licence("Media3"), Page.Settings(), Page.Settings(SettingsSection.LYRICS),
             Page.ForYou, Page.MoreLike(SeedKind.ALBUM, "Harbour Glass"), Page.NeverSuggest, Page.SuggestionsHealth,
         ).fold(NavState.start(DockTab.LIBRARY)) { state, page -> state.copy(stacks = state.stacks + (DockTab.LIBRARY to state.stacks[DockTab.LIBRARY].orEmpty() + StackEntry(page))) }

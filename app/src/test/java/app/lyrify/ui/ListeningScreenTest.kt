@@ -1,13 +1,38 @@
 package app.lyrify.ui
 
 import app.lyrify.settings.LibraryTab
+import app.lyrify.stats.InsightsCards
+import app.lyrify.stats.TopCard
+import app.lyrify.stats.Totals
+import app.lyrify.stats.fakeInsightsPage
+import app.lyrify.ui.InsightsCardKind.ALBUMS
+import app.lyrify.ui.InsightsCardKind.ARTISTS
+import app.lyrify.ui.InsightsCardKind.CLOCK
+import app.lyrify.ui.InsightsCardKind.DAYS
+import app.lyrify.ui.InsightsCardKind.EMPTY
+import app.lyrify.ui.InsightsCardKind.FOR_YOU
+import app.lyrify.ui.InsightsCardKind.FOUND
+import app.lyrify.ui.InsightsCardKind.FRIENDS
+import app.lyrify.ui.InsightsCardKind.HOW
+import app.lyrify.ui.InsightsCardKind.LIBRARY
+import app.lyrify.ui.InsightsCardKind.LYRICS
+import app.lyrify.ui.InsightsCardKind.MILESTONES
+import app.lyrify.ui.InsightsCardKind.MOMENTS
+import app.lyrify.ui.InsightsCardKind.PRIVATE
+import app.lyrify.ui.InsightsCardKind.SEARCHES
+import app.lyrify.ui.InsightsCardKind.SONGS
+import app.lyrify.ui.InsightsCardKind.SPOKEN
+import app.lyrify.ui.InsightsCardKind.STORIES
+import app.lyrify.ui.InsightsCardKind.TASTE
+import app.lyrify.ui.InsightsCardKind.TIME
+import app.lyrify.ui.InsightsCardKind.TRAITS
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
-/** What Your listening shows, as pure logic. */
+/** What Insights shows, as pure logic and, where only the wiring can say it, as its source. */
 class ListeningScreenTest {
     @Test
     fun `listening time is whole minutes, rounded, then hours and minutes from an hour on`() {
@@ -28,34 +53,69 @@ class ListeningScreenTest {
         assertEquals(emptyList<Int>() to false, topPreview(emptyList<Int>()))
     }
 
-    @Test
-    fun `the library's pages show plays as Insights says them, and every Insights page with top rows gives Top songs a song sheet`() {
-        val pages = source("CollectionScreens.kt")
-        val tabs = source("LibraryScreen.kt")
-        val sheets = source("SongSheets.kt")
-        val listening = source("ListeningScreen.kt")
+    // The redesign (IN2U): which cards show
 
-        // Most played's card gave way to an Insights button in its head (user 2026-11-22: FavouritesPageTest).
-        listOf("playsNote(", "lastPlayedText(", "StatsGraph.counter(context).written").forEach { assertTrue(it, pages.contains(it)) }
-        assertTrue(tabs.contains("StatsGraph.counter(context).written"))
-        listOf("songPlaysInfo(song.ref)", "dateText(").forEach { assertTrue(it, sheets.contains(it)) }
-        // A Top songs row opening the sheet is ListeningScreenDeviceTest's; the pages read plays.db and the library
-        // themselves, with no seam for a test to draw them, so that each passes its rows a sheet stays a source check.
-        // Changed on purpose (IN1): Insights, a month's recap and View all, each with its sheet; the first two through
-        // their cards, the third through its rows.
-        listOf("val sheets = rememberSongSheets()", "SongSheetsHost(sheets)").forEach { assertEquals(it, 3, Regex(Regex.escape(it)).findAll(listening).count()) }
-        assertEquals(2, Regex(Regex.escape("settings, onOpen, sheets::openSong, reduced, viewAll = ")).findAll(listening).count())
-        assertTrue(listening.contains("TopRow(top, i + 1, settings, onOpen, onSong)"))
-        assertTrue(listening.contains("TopRow(top, i + 1, settings, onOpen, sheets::openSong)"))
-        listOf(pages, tabs, sheets, listening).forEach { assertFalse(it.contains("S1:")) }
+    @Test
+    fun `every card shows in the mockup's order when the page has it`() {
+        assertEquals(
+            listOf(STORIES, TIME, FOR_YOU, DAYS, CLOCK, ARTISTS, SONGS, ALBUMS, TASTE, HOW, MOMENTS, FOUND, FRIENDS, LYRICS, SEARCHES, SPOKEN, LIBRARY, TRAITS, MILESTONES, PRIVATE),
+            insightsCardsOf(fakeInsightsPage().cards),
+        )
     }
 
-    // Insights (KJB 3.2)
+    @Test
+    fun `a card without its data does not show, so there are no empty boxes`() {
+        // Nothing heard: the empty state where your time goes, and the note; no stories, no For you.
+        assertEquals(listOf(EMPTY, PRIVATE), insightsCardsOf(InsightsCards()))
+        val full = fakeInsightsPage().cards
+        // A top list with no rows, no friends to match, nothing that read lyrics or hearted: none of their cards.
+        val thin = full.copy(
+            artists = TopCard(emptyList(), compared = false),
+            friends = full.friends?.copy(matches = emptyList()),
+            lyrics = null,
+            favourites = null,
+            moments = emptyList(),
+            traits = emptyList(),
+        )
+        val shown = insightsCardsOf(thin)
+        listOf(ARTISTS, FRIENDS, LYRICS, MOMENTS, TRAITS).forEach { assertFalse("$it", it in shown) }
+        // New to you stands for comebacks or quiet favourites alone; read along for new favourites alone.
+        assertTrue(FOUND in insightsCardsOf(full.copy(found = null, forgotten = emptyList())))
+        assertTrue(LYRICS in insightsCardsOf(full.copy(lyrics = null)))
+        assertFalse(FOUND in insightsCardsOf(full.copy(found = null, comebacks = emptyList(), forgotten = emptyList())))
+        // The stories row stands for past recaps even in a quiet period.
+        assertEquals(listOf(STORIES, EMPTY, PRIVATE), insightsCardsOf(InsightsCards(recaps = full.recaps)))
+    }
+
+    @Test
+    fun `the stories row follows this month's and this year's own time, so a quiet week keeps it and no ring opens an empty story`() {
+        val some = Totals(heardMs = 90 * 60_000L, plays = 30, songs = 20, artists = 8, albums = 10)
+        // A quiet week in a month with time: the row stays, the month and the year so far in it.
+        assertEquals(listOf(STORIES, EMPTY, PRIVATE), insightsCardsOf(InsightsCards(monthSoFar = some, yearSoFar = some)))
+        assertEquals(listOf(STORIES, EMPTY, PRIVATE), insightsCardsOf(InsightsCards(yearSoFar = some)))
+        // Your time alone (a week of last month's days, nothing this month or recap yet) makes no row of empty rings.
+        assertFalse(STORIES in insightsCardsOf(fakeInsightsPage().cards.copy(recaps = emptyList(), monthSoFar = null, yearSoFar = null)))
+        val story = source("InsightsStory.kt")
+        assertTrue(story.contains("if (page.cards.monthSoFar != null) {"))
+        assertEquals(2, Regex(Regex.escape("page.cards.yearSoFar != null")).findAll(story).count())
+        assertFalse(story.contains("val going = page.cards.time != null"))
+    }
+
+    @Test
+    fun `the page draws the cards insightsCardsOf names, each arriving as it scrolls in`() {
+        val listening = source("ListeningScreen.kt")
+        val cards = listening.substringAfter("private fun LazyListScope.insightsCards(").substringBefore("\n}\n")
+        assertTrue(cards.contains("insightsCardsOf(cards).forEach"))
+        // Every card but the stories row, For you, the empty state and the note arrives ([Arriving]).
+        assertTrue(cards.contains("Arriving(key.name, list, arrived, period.kind"))
+    }
+
+    // Reading
 
     @Test
     fun `Insights are worked out only while they show, the app on screen, and at most every few seconds as plays are written`() {
         val listening = source("ListeningScreen.kt")
-        val reads = listening.substringAfter("private fun <T> rememberStats(").substringBefore("\n}\n")
+        val reads = listening.substringAfter("internal fun <T> rememberStats(").substringBefore("\n}\n")
         listOf(
             "val shown = LocalLayerHeaded.current",
             "if (!shown) return@produceState",
@@ -64,9 +124,9 @@ class ListeningScreenTest {
             "delay(REREAD_MS)",
         ).forEach { assertTrue(it, reads.contains(it)) }
         assertTrue(listening.contains("private const val REREAD_MS: Long = 3_000"))
-        // Never on the main thread: PlayStats reads on IO and works out on Default.
-        val stats = File("src/main/java/app/lyrify/stats/Listening.kt").readText()
-        assertTrue(stats.contains("withContext(compute) {\n            val all = insightsOf("))
+        // The page and the story read in2d's page model, never the cards' own sums.
+        assertTrue(listening.contains("StatsGraph.stats(context).page(period, System.currentTimeMillis(), phoneCalendar())"))
+        assertTrue(source("InsightsStory.kt").contains("stats.page(month, System.currentTimeMillis(), phoneCalendar())"))
     }
 
     @Test
@@ -80,26 +140,7 @@ class ListeningScreenTest {
     }
 
     @Test
-    fun `Insights holds all eight cards, For you under the totals, and its nudges and recaps stay on the page itself`() {
-        val listening = source("ListeningScreen.kt")
-        listOf(
-            "TotalsCard(", "ForYouInsights(", "VersusCard(", "TopRow(", "ClockCard(", "MilestonesCard(", "SpokenCard(",
-            "NeverPlayedCard(", "DigDeeperCard(", "ForgottenCard(", "RecapRow(", "R.string.insights_private",
-        ).forEach { assertTrue(it, listening.contains(it)) }
-        // For you right under the totals, on Insights alone (viewAll), as agreed with sg1.
-        assertTrue(listening.indexOf("TotalsCard(") < listening.indexOf("ForYouInsights(") && listening.indexOf("ForYouInsights(") < listening.indexOf("VersusCard("))
-        assertTrue(listening.contains("if (viewAll) item(key = \"for you\""))
-        // A month's recap: its picture, shared as drawn, and its own cards; the nudges only on Insights.
-        listOf("RecapPicture(", "shareRecapPicture(context, picture, shown, title)").forEach { assertTrue(it, listening.contains(it)) }
-        val recap = listening.substringAfter("private fun RecapPage(").substringBefore("private fun RecapsPage(")
-        listOf("NeverPlayedCard(", "DigDeeperCard(", "ForgottenCard(").forEach { card ->
-            assertEquals(card, 1, Regex(Regex.escape(card)).findAll(listening).count())
-            assertFalse(card, recap.contains(card))
-        }
-    }
-
-    @Test
-    fun `the recap card sits first on every Library tab, only in Library itself, and shows on the one Library opens on`() {
+    fun `the recap card sits first on every Library tab, only in Library itself, and plays the month's story`() {
         val library = source("LibraryScreen.kt") + source("BooksScreen.kt")
         val lines = library.lines()
         LibraryTab.entries.forEach { tab ->
@@ -113,13 +154,13 @@ class ListeningScreenTest {
             "if (inLibrary) recapCard(LibraryTab.PLAYLISTS)", "if (inLibrary) recapCard(LibraryTab.BOOKS)",
             "LibraryTab.PLAYLISTS -> PlaylistsTab(ui, library, padding, reselect, sheets, inLibrary = true)",
             "LibraryTab.BOOKS -> BooksTab(library, padding, reselect, inLibrary = true)",
-            "PlaylistsTab(ui, shown, padding, nav.state.reselectsOf(DockTab.PLAYLISTS), sheets, inLibrary = false)",
-            "BooksTab(it, padding, nav.state.reselectsOf(DockTab.BOOKS), inLibrary = false)",
         ).forEach { assertTrue(it, library.contains(it)) }
-        val cards = source("InsightsCards.kt")
-        assertTrue(cards.contains("if (tab != libraryOpensOn(shownLibraryTabs(read.library, (library as? LibraryState.Ready)?.library), read.library.opensOn)) return"))
+        val card = source("InsightsMilestones.kt")
+        assertTrue(card.contains("if (tab != libraryOpensOn(shownLibraryTabs(read.library, (library as? LibraryState.Ready)?.library), read.library.opensOn)) return"))
         // The month turns with the phone's day, so an app kept running across the 1st shows the new month's card (Grok b-ui).
-        assertTrue(cards.contains("val month = remember(today) { recapMonthOf(System.currentTimeMillis(), zone) }"))
+        assertTrue(card.contains("val month = remember(today) { recapMonthOf(System.currentTimeMillis(), zone) }"))
+        // Changed on purpose (IN2U): a tap plays the month's story; the recap pages are stories now.
+        assertTrue(card.contains("nav.show(FullScreen.Story(month = month.toString()))"))
         // On its own bar item Insights has no back arrow.
         assertTrue(source("AppShell.kt").contains("DockTab.INSIGHTS -> ListeningPage(Page.Listening, root = true)"))
     }

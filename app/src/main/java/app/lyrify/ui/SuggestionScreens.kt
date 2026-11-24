@@ -42,11 +42,13 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -65,10 +67,10 @@ import app.lyrify.suggestions.Pick
 import app.lyrify.suggestions.Seed
 import app.lyrify.suggestions.Suggestions
 import app.lyrify.suggestions.SuggestionsGraph
-import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.launch
 
 // Suggestions' pages (SG1, the approved mockup suggest/preview-suggestions-v2.html): For you (the Library card, its page
 // and the Insights section), More like this, Settings > Suggestions, Never suggest and Suggestions health. The mark, the
@@ -172,61 +174,44 @@ internal fun SuggestionSettings.hiddenTillTomorrow(now: ZonedDateTime): Suggesti
     copy(forYouHiddenUntil = now.toLocalDate().plusDays(1).atStartOfDay(now.zone).toInstant().toEpochMilli())
 
 /**
- * For you on the Insights page, one item of its list right under the period's totals (agreed with lane in1, which calls
- * it): its name and size, View all, Play and Shuffle, and its first songs with their reasons; a tap on one plays For you
- * from it. Nothing while there is no mix; the Library card's on/off and Hide are the card's only, so For you stays
- * findable here.
+ * For you on the Insights page, one item of its list right under your time (agreed with lane in1, which calls it), as
+ * the Insights mockup draws it: on suggestions' teal ground, four of its covers, the compass mark, how many songs and
+ * where they come from, and a teal Play; a tap on the row opens For you. Nothing while there is no mix; the Library
+ * card's on/off and Hide are the card's only, so For you stays findable here.
  */
 @Composable
 fun ForYouInsights(modifier: Modifier = Modifier) {
     val nav = LocalNavigator.current
-    val context = LocalContext.current
     val ui = rememberLibraryUi() ?: return
     val playback = rememberPlayback()
     val picks = rememberForYou(ui.library, ui.settings.suggestions).orEmpty()
     if (picks.isEmpty()) return
     val refs = picks.map { it.song.ref }
     val source = forYouSource()
+    val brand = LocalBrandColors.current
     val colors = MaterialTheme.colorScheme
-    Column(modifier.padding(horizontal = ScreenPadding, vertical = 8.dp).fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(colors.surfaceContainerLow).padding(vertical = 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 16.dp, end = 8.dp)) {
-            Column(Modifier.weight(1f)) {
-                SuggestedMark(stringResource(R.string.suggest_for_you), Modifier.semantics { heading() })
-                Text(
-                    listOf(stringResource(R.string.suggest_for_you_new_today), pluralStringResource(R.plurals.lib_songs, picks.size, picks.size)).joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = colors.onSurfaceVariant,
-                )
-            }
-            LyrifyButton(stringResource(R.string.lib_view_all), { nav.open(Page.ForYou) }, kind = ButtonKind.GHOST, compact = true)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = modifier
+            .padding(start = ScreenPadding, end = ScreenPadding, top = 12.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
+            .background(brand.suggestionContainer)
+            .clickable(onClickLabel = stringResource(R.string.lib_view_all)) { nav.open(Page.ForYou) }
+            .padding(start = 12.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+    ) {
+        MosaicTile(refs, size = 56.dp)
+        Column(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
+            SuggestedMark(stringResource(R.string.suggest_for_you))
+            Text(pluralStringResource(R.plurals.insights_for_you_songs, picks.size, picks.size), style = display(17, 22, weight = 650), color = colors.onSurface)
+            Text(stringResource(R.string.insights_for_you_line), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp, lineHeight = 18.sp), color = colors.onSurface)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-            LyrifyButton(stringResource(R.string.lib_play), { playback.play(refs, 0, source) }, icon = R.drawable.ic_play_arrow_fill, compact = true)
-            LyrifyButton(stringResource(R.string.lib_shuffle), { playback.shuffle(refs, source) }, kind = ButtonKind.SECONDARY, icon = R.drawable.ic_shuffle, compact = true)
-        }
-        val reasons = ui.settings.suggestions.showReasons
-        picks.take(SECTION_SONGS).forEachIndexed { at, pick ->
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth().clickable { playback.play(refs, at, source) }.heightIn(min = 56.dp).padding(horizontal = 16.dp, vertical = 6.dp),
-            ) {
-                SongCover(SongArt(pick.song.path, pick.song.ref.mediaStoreId), size = 44.dp)
-                Column(Modifier.weight(1f)) {
-                    Text(ui.title(pick.song), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(pick.song.artist.orEmpty(), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                        SongLength(pick.song.durationMs, Modifier.padding(start = 8.dp))
-                    }
-                    if (reasons) ReasonLine(reasonWords(context, pick.reason, ui::title))
-                }
-            }
+        RoundButton(R.drawable.ic_play_arrow_fill, stringResource(R.string.insights_play_song, stringResource(R.string.suggest_for_you)), container = brand.suggestion, tint = brand.suggestionContainer) {
+            playback.play(refs, 0, source)
         }
     }
 }
-
-/** The Insights section shows this many of For you's songs. */
-private const val SECTION_SONGS = 3
 
 /** For you or More like this. */
 @Composable
