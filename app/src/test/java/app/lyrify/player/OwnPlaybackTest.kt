@@ -1,6 +1,8 @@
 package app.lyrify.player
 
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import app.lyrify.auto.DEFAULT_COVER
 import app.lyrify.auto.coverPath
@@ -186,6 +188,31 @@ class OwnPlaybackTest {
         val view = sessionView(StillPort(uids, 1, 12_000), playing = true, book = book, repeat = Repeat.ALL)
         assertEquals(SessionView(uids, 1, 12_000, playing = true, shuffled = true, repeat = Repeat.ALL), view)
         assertEquals(SessionView(emptyList(), -1, 0, playing = false, shuffled = false, repeat = Repeat.ONE), sessionView(StillPort(emptyList(), -1, 0), playing = true, book = QueueBook(), repeat = Repeat.ONE))
+    }
+
+    /** A song as the session holds it: its uid, and its length as the library says (null: the library has none). */
+    private fun held(uid: Long, libraryMs: Long?): MediaItem =
+        MediaItem.Builder().setMediaId(uid.toString()).setMediaMetadata(MediaMetadata.Builder().setDurationMs(libraryMs).build()).build()
+
+    @Test
+    fun `every song is as long to the session as the library says, the one playing too, so Next and Previous keep its timeline`() {
+        // Decoded, a song is a few ms off the library's length (an encoder's delay and padding left out).
+        val items = (1L..7L).map { held(it, 200_000 + it) }
+        fun lengths(playing: Int, decodedMs: Long = 200_007L + playing) = items.mapIndexed { i, item -> sessionLengthMs(item, i == playing, decodedMs) }
+        assertEquals(items.map { it.mediaMetadata.durationMs }, lengths(2))
+        // Next, then Previous: the same lengths, so the same timeline, and Media3 sends the controllers no queue.
+        assertEquals(lengths(2), lengths(3))
+        assertEquals(lengths(3), lengths(2))
+        // Before the new song's length is decoded too.
+        assertEquals(lengths(2), lengths(3, decodedMs = C.TIME_UNSET))
+    }
+
+    @Test
+    fun `a song the library has no length for is as long as it decoded while it plays, of unknown length otherwise`() {
+        val unknown = held(5, libraryMs = null)
+        assertEquals(181_000L, sessionLengthMs(unknown, playing = true, decodedMs = 181_000))
+        assertEquals(C.TIME_UNSET, sessionLengthMs(unknown, playing = true, decodedMs = C.TIME_UNSET))
+        assertEquals(C.TIME_UNSET, sessionLengthMs(unknown, playing = false, decodedMs = 181_000))
     }
 
     @Test

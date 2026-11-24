@@ -4,6 +4,8 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
+import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.MediaSession
@@ -308,12 +310,14 @@ class BigQueueDeviceTest {
     }
 
     /**
-     * Next and Previous in a library-sized queue (PW2), back and forth over the one song that plays: the engine reads its
-     * songs once, not again on every Next. Before PW2 each Next walked the queue about 20 times.
+     * Next and Previous in a library-sized queue (PW2), back and forth over the one song that plays, whose decoded length
+     * is 7 ms off the library's: the engine reads its songs once, not again on every Next, and the controller (as the
+     * notification, the lock screen and the car are) follows each song with no new timeline, so the session sends the
+     * phone no queue. Before PW2 each Next walked the queue about 20 times and sent it whole once or twice.
      */
     @Test
-    fun nextAndPreviousInALibrarySizedQueueKeepTheEnginesSongs() {
-        val songs = library(seconds = 20)
+    fun nextAndPreviousInALibrarySizedQueueKeepTheEnginesSongsAndTheSessionsTimeline() {
+        val songs = library(seconds = 20).map { if (it.path.endsWith(".wav")) it.copy(durationMs = it.durationMs + 7) else it }
         val byPath = songs.associateBy { it.path }
         val stack = Stack(KeptStorage(), { ref -> byPath[ref.path] }, "kjb-pw2-skip")
         assertTrue(waitFor(2_000) { stack.core.ready.value })
@@ -323,6 +327,14 @@ class BigQueueDeviceTest {
         onMain { stack.controller.play() }
         assertTrue("never played: ${onMain { stack.describe() }}", waitFor(5_000) { stack.engine.isPlaying })
         val held = onMain { stack.engine.items }
+        var timelines = 0
+        onMain {
+            stack.controller.addListener(object : Player.Listener {
+                override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                    timelines++
+                }
+            })
+        }
         val times = mutableListOf<Long>()
         repeat(SKIPS) { step ->
             val target = if (step % 2 == 0) START + 1 else START
@@ -330,9 +342,11 @@ class BigQueueDeviceTest {
             onMain { if (step % 2 == 0) stack.controller.seekToNextMediaItem() else stack.controller.seekToPreviousMediaItem() }
             assertTrue("skip $step never reached the controller", waitFor(5_000) { stack.controller.currentMediaItemIndex == target })
             times += SystemClock.elapsedRealtime() - started
+            // The song that plays as long as it decodes, so its decoded length is known before the next skip.
             if (target == START) assertTrue("never played again: ${onMain { stack.describe() }}", waitFor(5_000) { stack.engine.isPlaying })
         }
-        Log.i(TAG, "PW2 measure: a skip in a $QUEUED-song queue reached the controller in ${times.sorted()[SKIPS / 2]} ms (median of $SKIPS)")
+        Log.i(TAG, "PW2 measure: a skip in a $QUEUED-song queue reached the controller in ${times.sorted()[SKIPS / 2]} ms (median of $SKIPS), $timelines new timelines")
+        assertEquals("new timelines the controller heard", 0, timelines)
         assertSame("the engine's songs were read again", held, onMain { stack.engine.items })
     }
 
