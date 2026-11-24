@@ -329,6 +329,7 @@ class BigQueueDeviceTest {
         onMain { stack.controller.play() }
         assertTrue("never played: ${onMain { stack.describe() }}", waitFor(5_000) { stack.engine.isPlaying })
         val held = onMain { stack.engine.items }
+        val shown = onMain { stack.player.currentTimeline }
         var timelines = 0
         onMain {
             stack.controller.addListener(object : Player.Listener {
@@ -350,6 +351,8 @@ class BigQueueDeviceTest {
         Log.i(TAG, "PW2 measure: a skip in a $QUEUED-song queue reached the controller in ${times.sorted()[SKIPS / 2]} ms (median of $SKIPS), $timelines new timelines")
         assertEquals("new timelines the controller heard", 0, timelines)
         assertSame("the engine's songs were read again", held, onMain { stack.engine.items })
+        // The facade handed the session the timeline it had built, not a new one of the whole queue (Grok review, PW2).
+        assertSame("the session's timeline was built again", shown, onMain { stack.player.currentTimeline })
     }
 
     /**

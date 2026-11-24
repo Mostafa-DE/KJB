@@ -269,11 +269,13 @@ class BigQueueTest {
      * Next and Previous in a library-sized queue, as the service runs them (PW2): the player moves, and the book follows it
      * (QueueBook.at, the service's Follower). A book that only moved its place ([movedOnly]) goes neither to the bridge nor
      * to the session, the own lyrics' sweep keeps its songs and picks the current one again ([ownSnapshot]), and every song
-     * is as long to the session as the library says ([sessionLengthMs]), so its timeline stays and Media3 sends no queue.
-     * Before PW2 each Next looked every song of the queue up twice, on the main thread, and made a new timeline.
+     * is as long to the session as the library says ([sessionLengthMs]), so the lengths its timeline is made of stay the
+     * same and Media3 sends no queue. That the facade hands the session the very timeline it built before needs a Looper:
+     * BigQueueDeviceTest checks it. Before PW2 each Next looked every song of the queue up twice, on the main thread, and
+     * made a new timeline.
      */
     @Test
-    fun `Next and Previous in a library-sized queue look up no song and keep the session's timeline`() {
+    fun `Next and Previous in a library-sized queue look up no song and keep the lengths of the session's timeline`() {
         playing()
         var finds = 0
         val counted: (SongRef) -> Song? = { ref ->
