@@ -37,6 +37,7 @@ import app.lyrify.audio.MediaFocus
 import app.lyrify.audio.OutputKind
 import app.lyrify.audio.OutputRoutesPart
 import app.lyrify.audio.QueueFadeRules
+import app.lyrify.audio.memoryLow
 import app.lyrify.audio.readOutput
 import app.lyrify.auto.CarBrowse
 import app.lyrify.auto.CarCovers
@@ -273,6 +274,12 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
+
+    /** The phone wants memory back: Crossfade's second player, waiting with the next song, is let go (PW2). */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (::engine.isInitialized && memoryLow(level)) engine.trimMemory()
+    }
 
     /** Each update Media3 makes to the media notification; once they stop, [repost] posts it once more. */
     override fun onUpdateNotificationAsync(session: MediaSession, startInForegroundRequired: Boolean): ListenableFuture<Void> {

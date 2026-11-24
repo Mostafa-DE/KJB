@@ -15,8 +15,10 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.audio.AudioRendererEventListener
 import androidx.media3.exoplayer.audio.AudioSink
@@ -37,6 +39,15 @@ import app.lyrify.library.displayTitle
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
 import java.io.File
+
+/**
+ * A player that does not play (the song a Next goes to, waiting on Crossfade's second player, or one paused) loads this
+ * much ahead at most, not ExoPlayer's 50 s: it starts at once from it and loads on as it plays.
+ */
+const val PAUSED_BUFFER_MS: Long = 5_000
+
+/** Whether a player loads on, [playing] or not, with [bufferedMs] loaded ahead ([PAUSED_BUFFER_MS]). */
+fun keepsLoading(playing: Boolean, bufferedMs: Long): Boolean = playing || bufferedMs < PAUSED_BUFFER_MS
 
 /** What an engine tells the service: a song starting (a new one, or again for Repeat one), seeks, play and pause, the end, errors. */
 interface EngineListener {
@@ -125,6 +136,7 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
     private val listeners = mutableListOf<EngineListener>()
 
     private val player: ExoPlayer = ExoPlayer.Builder(context, ChainRenderers(context, settings, levels), DefaultMediaSourceFactory(context, extractors))
+        .setLoadControl(PausedLoadControl())
         .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
         .setHandleAudioBecomingNoisy(true)
         .setWakeMode(C.WAKE_MODE_LOCAL)
@@ -294,6 +306,16 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
 
     override fun addListener(listener: EngineListener) {
         listeners += listener
+    }
+
+    /**
+     * ExoPlayer's own load control, but a player that does not play loads only [PAUSED_BUFFER_MS] ahead ([keepsLoading]):
+     * the song a Next goes to, waiting on Crossfade's second player, holds a chunk of its file, not 50 s of it. A file is
+     * read in chunks of about 1 MB, each asked for here.
+     */
+    private class PausedLoadControl : DefaultLoadControl() {
+        override fun shouldContinueLoading(parameters: LoadControl.Parameters): Boolean =
+            super.shouldContinueLoading(parameters) && keepsLoading(parameters.playWhenReady, Util.usToMs(parameters.bufferedDurationUs))
     }
 
     /**

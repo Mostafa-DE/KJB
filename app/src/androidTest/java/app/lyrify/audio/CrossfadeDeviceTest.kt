@@ -195,12 +195,16 @@ class CrossfadeDeviceTest {
      */
     @Test
     fun aNextByHandInALibrarySizedQueuePlaysTheSongWaitingAndMakesNoPlayer() {
-        val tones = listOf(song(tone("kjb-skip-1.wav", 20, 440.0), "Skip One", 20), song(tone("kjb-skip-2.wav", 20, 660.0), "Skip Two", 20))
+        val tones = listOf(song(tone("kjb-skip-1.wav", 60, 440.0), "Skip One", 60), song(tone("kjb-skip-2.wav", 60, 660.0), "Skip Two", 60))
         val built = build(List(QUEUED) { tones[it % 2] }, seconds = 6)
         onMain { built.engine.setPlayWhenReady(true) }
         assertTrue("never played", waitFor(3_000) { built.engine.isPlaying })
         assertTrue("the next song never waited", waitFor(3_000) { built.made.size == 2 })
-        SystemClock.sleep(500)
+        SystemClock.sleep(2_000)
+        // Waiting, it loaded a few seconds of its song (a chunk of the file at most), not ExoPlayer's 50 s.
+        val waited = onMain { built.made[1].bufferedMs }
+        Log.i(TAG, "PW2 measure: the song waiting had $waited ms loaded")
+        assertTrue("the song waiting loaded $waited ms", waited < 20_000)
         val tookNs = onMain {
             val started = SystemClock.elapsedRealtimeNanos()
             built.engine.seek(1, 0)

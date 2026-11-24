@@ -2,6 +2,7 @@
 
 package app.lyrify.audio
 
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.os.Looper
 import androidx.annotation.OptIn
@@ -27,7 +28,6 @@ import app.lyrify.player.SongState
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Speed
 import app.lyrify.player.albumInOrder
-import app.lyrify.player.around
 import app.lyrify.player.edits
 import app.lyrify.player.resumeAt
 import app.lyrify.settings.RememberPlace
@@ -71,6 +71,12 @@ const val LOOK_EVERY_MS: Long = 1_000
 const val FROZEN_FADE_MS: Long = 60_000
 
 private const val HALF_PI: Float = (PI / 2).toFloat()
+
+/**
+ * A song this close to its end (in time) may have ended already on ExoPlayer's own thread, which then went on to the next
+ * song before the main thread hears of it (CR2); further from its end it plays there for sure.
+ */
+private const val MAY_HAVE_ENDED_MS: Long = 5_000
 private const val MAX_CROSSFADE_SECONDS: Int = 12
 private const val MIN_SPEED: Float = 0.1f
 
@@ -250,10 +256,11 @@ class CrossfadeEngine(
     private var held: Held? = null
 
     /**
-     * Each song that came right after the song playing on its player since it started: at the song's end ExoPlayer's own
-     * thread may go on to any of them before the main thread hears of it (CR2), so none is taken out from under it.
+     * Each song that came right after the song playing on its player since the song came near its end
+     * ([MAY_HAVE_ENDED_MS]), by uid: ExoPlayer's own thread may have gone on to any of them before the main thread hears of
+     * it (CR2), so none is taken out from under it ([reshape]).
      */
-    private val mayBePlaying = mutableSetOf<Long>()
+    private val mayBePlaying = mutableMapOf<Long, Projected>()
 
     /**
      * The song a Next goes to, loaded and waiting silent on the second player ([standbyFor] its uid, at [standbyAt]):
@@ -298,6 +305,12 @@ class CrossfadeEngine(
 
     /** Since when the music sounds (Play), for the song a Next goes to ([NEXT_READY_AFTER_MS]); null while it does not. */
     private var heardFrom: Long? = null
+
+    /**
+     * The phone asked for memory back ([trimMemory]): until the next song starts, the song a Next goes to waits only near
+     * its fade, as before PW2.
+     */
+    private var lean: Boolean = false
     private var next: Job? = null
     private var looking: Boolean = false
     private var lookAgain: Boolean = false
@@ -340,12 +353,12 @@ class CrossfadeEngine(
             } else {
                 dropStandby()
                 if (fading) shorten(fromSilence = false)
-                // The one player takes the whole queue back around its song, which plays on, and the song after it too,
-                // which ExoPlayer's thread may be on already (CR2, [around]). The engine lets the queue go first: the look
-                // the player's news asks for must not take its songs back to a few.
-                val playing = active.loaded.getOrNull(active.index)
+                // The one player takes the whole queue back around its song, which plays on, and a song ExoPlayer's
+                // thread may be on already too ([reshape]). The engine lets the queue go first: the look the player's news
+                // asks for must not take its songs back to a few.
                 held = null
-                if (playing != null) active.applyAll(around(active.loaded, songs, playing))
+                reshape(songs)
+                mayBePlaying.clear()
                 active.setRepeat(repeat)
                 focus.setHandled(false)
                 obey(focus.update(wantPlay, active.playbackState))
@@ -562,6 +575,12 @@ class CrossfadeEngine(
         listeners += listener
     }
 
+    /** The phone asks for memory back ([memoryLow]): the player waiting is let go, and waits again from the next song on. */
+    fun trimMemory() {
+        lean = true
+        dropStandby()
+    }
+
     // Fades
 
     /**
@@ -597,19 +616,18 @@ class CrossfadeEngine(
             heardFrom = null
         }
         // While crossfade is on, the player playing holds its song and the next ones as the queue and Repeat have them now
-        // ([windowOf]); the songs played go. A song ExoPlayer's thread may be on already ([mayBePlaying]) that the queue
-        // still has stays after them, and the edits keep every song that stays ([edits]); one the queue left goes last,
-        // behind the new songs, so the thread goes on to the queue's next song ([around]).
+        // ([windowOf]); the songs played go. Near the song's end, ExoPlayer's own thread may be on the song after it already
+        // ([mayBePlaying]): one the queue still has waits before the song playing, where it never plays by itself.
         val at = index
         if (held != null && at >= 0) {
-            active.loaded.getOrNull(active.index + 1)?.let(mayBePlaying::add)
-            val window = windowOf(at)
-            val wanted = window.map(loaded::get)
-            val holds = window + mayBePlaying.filter { it in active.loaded && it !in wanted }.map(loaded::indexOf).filter { it >= 0 }.sorted()
-            if (active.loaded != holds.map(loaded::get)) {
-                val left = mayBePlaying.any { it in active.loaded && it !in holds.map(loaded::get) }
-                active.applyAll(if (left) around(active.loaded, holds.map(songs::get), loaded[at]) else checkNotNull(edits(active.loaded, holds.map(songs::get))))
+            val nearEnd = active.durationMs == C.TIME_UNSET || (active.durationMs - active.positionMs) / active.playbackParameters.speed <= MAY_HAVE_ENDED_MS
+            if (!nearEnd) {
+                mayBePlaying.clear()
+            } else {
+                active.loaded.getOrNull(active.index + 1)?.takeIf { it !in mayBePlaying }?.let { uid -> songs.getOrNull(loaded.indexOf(uid))?.let { mayBePlaying[uid] = it } }
             }
+            val window = windowOf(at).map(songs::get)
+            reshape(mayBePlaying.values.filter { song -> song.uid in active.loaded && window.none { it.uid == song.uid } && song.uid in loaded } + window)
             active.setRepeat(slotRepeat)
         }
         if (tailRamp?.done == true || tail?.let(::finished) == true) letTailGo()
@@ -659,7 +677,7 @@ class CrossfadeEngine(
         val ahead = if (from == null || loaded.size < 2) null else (at + 1) % loaded.size
         when {
             ahead == null || loaded[ahead] == failedAhead -> dropStandby()
-            standbyFor != loaded[ahead] && (standby != null || lookedAt - (heardFrom ?: lookedAt) >= NEXT_READY_AFTER_MS) ->
+            standbyFor != loaded[ahead] && !lean && (standby != null || lookedAt - (heardFrom ?: lookedAt) >= NEXT_READY_AFTER_MS) ->
                 prepareAhead(ahead, loaded[ahead], comingIn(ahead, loaded[ahead], null))
         }
         val toIndex = nextIndexFor(at, loaded.size, repeat)
@@ -733,6 +751,7 @@ class CrossfadeEngine(
         tailRamp = Ramp(up = false, lengthMs = lengthMs)
         active = incoming
         mayBePlaying.clear()
+        lean = false
         activeRamp = Ramp(up = true, lengthMs = lengthMs)
         applyVolumes()
         incoming.loaded.getOrNull(incoming.index)?.let { uid ->
@@ -769,6 +788,7 @@ class CrossfadeEngine(
         tailRamp = Ramp(up = false, lengthMs = SHORT_FADE_MS)
         active = incoming
         mayBePlaying.clear()
+        lean = false
         activeRamp = Ramp(up = true, lengthMs = SHORT_FADE_MS)
         applyVolumes()
         incoming.loaded.getOrNull(incoming.index)?.let { uid -> tell { it.onSongStarted(uid, lap = false, natural = false) } }
@@ -818,6 +838,23 @@ class CrossfadeEngine(
     private fun loadAt(slot: FadeSlot, index: Int, positionMs: Long) {
         val window = windowOf(index)
         slot.load(window.map(songs::get), window.indexOf(index), positionMs)
+    }
+
+    /**
+     * The player playing comes to hold [to], which holds its song, with edits that keep every song both hold ([edits]), so
+     * a song ExoPlayer's thread may be on already ([mayBePlaying]) is never taken out and put back, which would start it
+     * again. One [to] leaves out first comes right after the song playing, before the songs [to] has there, and goes last:
+     * a thread on it goes on to the queue's next song (CR2).
+     */
+    private fun reshape(to: List<Projected>) {
+        if (active.loaded == to.map { it.uid }) return
+        val playing = active.loaded.getOrNull(active.index) ?: return
+        val leaving = mayBePlaying.values.filter { song -> song.uid in active.loaded && to.none { it.uid == song.uid } }
+        if (leaving.isNotEmpty()) {
+            val at = to.indexOfFirst { it.uid == playing }
+            active.applyAll(checkNotNull(edits(active.loaded, to.take(at + 1) + leaving + to.drop(at + 1))))
+        }
+        active.applyAll(checkNotNull(edits(active.loaded, to)))
     }
 
     /** The player playing goes to the queue's song at [index]: a seek when it holds that song, else it and the next ones loaded there. */
@@ -951,6 +988,7 @@ class CrossfadeEngine(
             if (slot !== active) return
             // The player says where it is: its thread is on this song, no other.
             mayBePlaying.clear()
+            lean = false
             if (natural && fading) finishFade()
             failedAhead = null
             if (offloadAtNextSong) {
@@ -1002,6 +1040,15 @@ class CrossfadeEngine(
 }
 
 // In the app
+
+/**
+ * Whether the phone asks KJB's player service for memory back at this onTrimMemory [trimLevel]: KJB gone to the
+ * background list, or on Android 13 and older the phone running low while it plays (later versions send no such level).
+ * Not when its screens close (UI_HIDDEN): the music plays on with the screen off.
+ */
+@Suppress("DEPRECATION") // The running levels, still sent up to Android 13.
+fun memoryLow(trimLevel: Int): Boolean =
+    trimLevel >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND || trimLevel in ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW until ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN
 
 /** Music, as the player asks for focus with it. */
 private val MUSIC: AudioAttributes = AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build()

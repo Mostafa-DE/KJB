@@ -1,14 +1,17 @@
 package app.lyrify.audio
 
+import android.content.ComponentCallbacks2
 import androidx.media3.common.C
 import app.lyrify.library.song
 import app.lyrify.player.AbPart
+import app.lyrify.player.PAUSED_BUFFER_MS
 import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
 import app.lyrify.player.Repeat
 import app.lyrify.player.SleepTimer
 import app.lyrify.player.SongState
 import app.lyrify.player.SourceKind
+import app.lyrify.player.keepsLoading
 import app.lyrify.player.sleepAfter
 import app.lyrify.player.sleepFor
 import app.lyrify.settings.RememberPlace
@@ -190,5 +193,27 @@ class CrossfadeTest {
         // A song the queue no longer holds.
         assertTrue(mayCrossfade(queue, a, 9_999, keepAlbumsGapless = true, part = null, sleep = null))
         assertFalse(mayCrossfade(null, a, b, keepAlbumsGapless = true, part = null, sleep = null))
+    }
+
+    // What the second player holds on to (PW2, the lead's round 3)
+
+    @Test
+    fun `a player that does not play loads only a few seconds ahead, and one that plays as ExoPlayer would`() {
+        assertTrue(keepsLoading(playing = false, bufferedMs = 0))
+        assertTrue(keepsLoading(playing = false, bufferedMs = PAUSED_BUFFER_MS - 1))
+        assertFalse(keepsLoading(playing = false, bufferedMs = PAUSED_BUFFER_MS))
+        assertFalse(keepsLoading(playing = false, bufferedMs = 50_000))
+        assertTrue(keepsLoading(playing = true, bufferedMs = 50_000))
+    }
+
+    @Test
+    fun `memory goes back when the phone moves KJB to its background list, or runs low on Android 13 and older, not when its screens close`() {
+        assertTrue(memoryLow(ComponentCallbacks2.TRIM_MEMORY_BACKGROUND))
+        assertFalse(memoryLow(ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN))
+        @Suppress("DEPRECATION")
+        val olderPhones = listOf(ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW, ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL, ComponentCallbacks2.TRIM_MEMORY_COMPLETE)
+        olderPhones.forEach { assertTrue("$it", memoryLow(it)) }
+        @Suppress("DEPRECATION")
+        assertFalse(memoryLow(ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE))
     }
 }
