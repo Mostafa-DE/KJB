@@ -160,7 +160,8 @@ fun LyrifyButton(
  * A capsule chip, 36 dp tall with a tap of at least 48 dp, no border at rest. Selected, a status chip ([tone]) takes its tone's
  * container and a ring in its accent (a filter keeps its status meaning); any other chip the brand's container and a
  * coral ring. No check mark. [role]: [Role.Checkbox] toggles (status filters), [Role.RadioButton] is one choice of a
- * few, else a button ([chevron]: it opens something).
+ * few, else a button ([chevron]: it opens something). [leading]: a drawing of its own in place of [icon], padded as one
+ * (the headers' Huddle glyph); [capsule]: on the capsule itself, inside its tap (Huddle's live ring round it).
  */
 @Composable
 fun LyrifyChip(
@@ -173,6 +174,8 @@ fun LyrifyChip(
     iconTint: Color = Color.Unspecified,
     count: Int? = null,
     chevron: Boolean = false,
+    leading: (@Composable () -> Unit)? = null,
+    capsule: Modifier = Modifier,
     content: @Composable RowScope.() -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
@@ -209,14 +212,16 @@ fun LyrifyChip(
         modifier = modifier
             .then(action)
             .minimumInteractiveComponentSize()
+            .then(capsule)
             .indication(source, PressIndication(CircleShape, 0.96f))
             .background(fill, CircleShape)
             .then(if (selected) Modifier.border(1.5.dp, toneColors?.accent ?: brand.highlight, CircleShape) else Modifier)
             .heightIn(min = 36.dp)
-            .padding(start = if (icon != null) 11.dp else 14.dp, end = if (count != null || chevron) 6.dp else 14.dp),
+            .padding(start = if (icon != null || leading != null) 11.dp else 14.dp, end = if (count != null || chevron) 6.dp else 14.dp),
     ) {
         CompositionLocalProvider(LocalContentColor provides contentColor, LocalTextStyle provides MaterialTheme.typography.labelLarge) {
             if (icon != null) Icon(painterResource(icon), contentDescription = null, tint = iconTint.takeOrElse { contentColor }, modifier = Modifier.size(18.dp))
+            leading?.invoke()
             content()
             if (count != null) {
                 Text(
