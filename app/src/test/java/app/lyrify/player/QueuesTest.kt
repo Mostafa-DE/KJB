@@ -118,6 +118,20 @@ class QueuesTest {
         assertEquals(0, round.index)
     }
 
+    @Test
+    fun `a second tap on the album playing starts it again from that song, wrapped round, in place of the queue before`() {
+        val book = QueueBook().play(album, 2, albumSource, now = 1).book.playNext(listOf(folder[0]), picked, now = 2)!!.book
+        val tapped = book.play(album, 4, albumSource, now = 3)
+        assertEquals(listOf("Harbour Glass 5", "Harbour Glass 6", "Harbour Glass 1", "Harbour Glass 2", "Harbour Glass 3", "Harbour Glass 4"), paths(tapped.book.current))
+        assertEquals(0, tapped.book.current!!.index)
+        // One queue per place: the album's queue before goes, the Play next song it held with it.
+        assertEquals(listOf(tapped.book.currentId), tapped.book.queues.map { it.id })
+        assertFalse(tapped.toRecent)
+        // A song taken out of the album's queue and tapped again starts the album from it too.
+        val removed = book.remove(book.currentId!!, uidOf(book, album[4]))!!.book
+        assertEquals(paths(tapped.book.current), paths(removed.play(album, 4, albumSource, now = 3).book.current))
+    }
+
     // One recent queue per place
 
     /** The songs of each queue in Recent from a list of [kind], newest first. */
@@ -859,10 +873,12 @@ class QueuesTest {
         val items = listOf(2, 3, 4, 5, 0, 1).mapIndexed { i, place -> QueueItem(i + 1L, album[place], sourceIndex = place) }
         val wrapped = Queue("q1", albumSource, items, listSize = 6)
         assertTrue((0 until 6).all { albumInOrder(wrapped, it) })
-        // Only the album's first song counts after its last; not another song, nor after a Play next song.
+        // Only the album's first song counts after its last; not another song, nor after a Play next song, nor in a queue
+        // stored before the list's length was kept.
         assertFalse(albumInOrder(wrapped.copy(items = items.filter { it.sourceIndex != 0 }), 4))
         assertFalse(albumInOrder(wrapped.copy(items = listOf(QueueItem(9, folder[0]), items[4])), 1))
         assertFalse(albumInOrder(wrapped.copy(items = listOf(QueueItem(9, folder[0]), items[4]), listSize = null), 1))
+        assertFalse(albumInOrder(wrapped.copy(listSize = null), 4))
     }
 
     // Suggestions in the queue (v4)

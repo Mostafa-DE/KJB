@@ -126,13 +126,14 @@ data class QueueBook(
      * A tap on [songs]`[start]` in a list from [source]: inside the current queue when it came from that place and the
      * place still shows the list it was made from ([Queue.madeFrom]), and it is not saved (songs added with Play next
      * stay; a song of the list taken out of the queue goes back in at its place). Else a new queue from the list as shown,
-     * starting at the tapped song (an album's wraps round from it, [made]). The old one is kept in Recent, where a queue from the same place replaces it (one
-     * recent queue per place), or in Saved at its place: a saved queue is kept for later, so a tap never moves it.
+     * starting at the tapped song. An album's tap always makes a new queue, wrapped round from that song ([made]; user
+     * 2026-11-24). The old one is kept in Recent, where a queue from the same place replaces it (one recent queue per
+     * place), or in Saved at its place: a saved queue is kept for later, so a tap never moves it.
      */
     fun play(songs: List<SongRef>, start: Int, source: QueueSource, now: Long): Switched {
         val song = songs.getOrNull(start) ?: return Switched(this, toRecent = false)
         val playing = current?.takeUnless { it.id in saved }
-        if (playing != null && playing.from(source) && playing.madeFrom(songs)) {
+        if (playing != null && source.kind != SourceKind.ALBUM && playing.from(source) && playing.madeFrom(songs)) {
             val shown = songs.distinctBy { it.path }
             // A queue stored before the list's length was kept learns it here, its songs seen in their places.
             val book = if (playing.listSize == null) edit(playing.id) { it.copy(listSize = shown.size) } else this
