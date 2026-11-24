@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.os.StrictMode
 import android.util.Log
+import androidx.work.Configuration
 import app.lyrify.backup.Imports
 import app.lyrify.books.isBookPartOnceRead
 import app.lyrify.crash.CrashLog
@@ -70,9 +71,12 @@ val logFailures: CoroutineExceptionHandler = CoroutineExceptionHandler { _, e ->
 
 /**
  * The process: one image loader for the covers, set before any screen asks for one. Debug builds also log disk work on
- * the main thread (StrictMode; stack traces only), so the player keeps the main thread free.
+ * the main thread (StrictMode; stack traces only), so the player keeps the main thread free. WorkManager's
+ * configuration, the default: it starts on its first use, not at the process's start (the manifest, PW1).
  */
-class LyrifyApplication : Application() {
+class LyrifyApplication : Application(), Configuration.Provider {
+    override val workManagerConfiguration: Configuration get() = Configuration.Builder().build()
+
     override fun onCreate() {
         super.onCreate()
         // Crashes are kept on the phone from here on (Settings > About > Crash reports), never sent.

@@ -386,5 +386,19 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/share_paths" />
         </provider>
+
+        <!-- WorkManager starts on its first use (LyrifyApplication is its Configuration.Provider), off the main thread
+             when that is the similar artists' schedule, instead of on the main thread before every process start's
+             first line of KJB (PW1). The other initializers stay. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
     </application>
 </manifest>

@@ -669,6 +669,21 @@ class SimilarArtistsTest {
         assertEquals(listOf(Neighbour(ROWAN, "Rowan Vale", 900), Neighbour(GLASS, "Glass Harbour", 120)), ListenBrainzJson.neighbours(body.encodeToByteArray()))
     }
 
+    /**
+     * KJB's start (PW1): WorkManager starts on its first use, which is this schedule's, off the main thread, not on the
+     * main thread before KJB's first line; and a start keeps the schedule that is there, writing nothing.
+     */
+    @Test
+    fun `a start keeps the schedule that is there, and WorkManager starts with it, not before KJB's first line`() {
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+        val follow = File("src/main/java/app/lyrify/similar/SimilarWork.kt").readText()
+
+        assertTrue(Regex("""android:name="androidx\.work\.WorkManagerInitializer"\s+android:value="androidx\.startup"\s+tools:node="remove"""").containsMatchIn(manifest))
+        assertTrue(File("src/main/java/app/lyrify/Lyrify.kt").readText().contains("class LyrifyApplication : Application(), Configuration.Provider"))
+        assertTrue(follow.contains("enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.KEEP, request)"))
+        assertTrue(follow.contains("scope.launch {"))
+    }
+
     private data class Hit(val id: String, val name: String, val score: Int)
 
     private fun artistsJson(vararg hits: Hit): String =
