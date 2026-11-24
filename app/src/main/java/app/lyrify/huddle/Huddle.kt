@@ -637,6 +637,12 @@ class Huddle(
         return plays.filter { it.friend in here }
     }
 
+    /** Every friend's plays from [from] on, past friends' too, the oldest first, as Suggestions read them: Insights' You and your friends (stats/). */
+    suspend fun historySince(from: Long): List<SuggestionsPlay> = moved().playsSince(from).orEmpty().map(::suggestionsPlayOf)
+
+    /** Every card both ways, the newest first: Insights' You and your friends (stats/). */
+    suspend fun everyCard(): List<KeptCard> = moved().cards(0, Int.MAX_VALUE).orEmpty()
+
     private suspend fun now(): HuddleState = storage.state.first()
 
     /**
@@ -1068,6 +1074,9 @@ private fun standIn(name: String, friends: List<Friend>): String =
  * Suggestions' own form.
  */
 class HuddleFriends(private val huddle: Huddle) : FriendsSource {
-    override suspend fun since(from: Long): List<SuggestionsPlay> = huddle.playsSince(from)
-        .map { play -> SuggestionsPlay(play.friend, play.song.title, play.song.artist, play.song.album, play.song.durationMs.takeIf { it > 0 }, play.at, play.favourite) }
+    override suspend fun since(from: Long): List<SuggestionsPlay> = huddle.playsSince(from).map(::suggestionsPlayOf)
 }
+
+/** A friend's [play] in Suggestions' form (Insights read it so too): a length not known is none. */
+private fun suggestionsPlayOf(play: FriendPlay): SuggestionsPlay =
+    SuggestionsPlay(play.friend, play.song.title, play.song.artist, play.song.album, play.song.durationMs.takeIf { it > 0 }, play.at, play.favourite)

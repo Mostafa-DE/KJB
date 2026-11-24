@@ -249,25 +249,6 @@ class PlaysSqlTest {
     }
 
     @Test
-    fun `Insights read the plays heard here between two bounds, the oldest first, without an import's or the short ones`() = runBlocking {
-        val store = store()
-        val heard = LoggedPlay(salt, T0, 200_000, counted = true, start = picked, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 210_000), clockMs = 100_000)
-        val skippedLate = LoggedPlay(ember, T0 + 3_000, 1_000, counted = false, zoneOffsetMinutes = -300)
-        val plays = listOf(
-            heard,
-            LoggedPlay(ember, T0 + 1_000, 999, counted = false, end = PlayEnded(PlayEnd.NEXT, 999)),
-            LoggedPlay(alder, T0 + 2_000, 0, counted = true, imported = true),
-            skippedLate,
-            LoggedPlay(alder, T0 + 4_000, 30_000, counted = true),
-        )
-        store.putAll(plays.reversed())
-
-        assertEquals(listOf(heard, skippedLate, plays.last()), store.listened())
-        assertEquals(listOf(skippedLate), store.listened(T0 + 1, T0 + 4_000))
-        assertEquals(listOf(heard), store.listened(until = T0 + 1))
-    }
-
-    @Test
     fun `the fake log keeps plays as plays_db does`() = runBlocking {
         val writes = listOf(
             LoggedPlay(salt, T0, 15_000, counted = false, start = picked, zoneOffsetMinutes = 120, clockMs = 7_500) to OpenState(210_000, 15_000, emptyList()),
@@ -292,8 +273,7 @@ class PlaysSqlTest {
         assertEquals(sql.all(), fake.all())
         assertEquals(sql.totals().toSet(), fake.totals().toSet())
         assertEquals(sql.totals(T0 + 1_000, T0 + 3_000).toSet(), fake.totals(T0 + 1_000, T0 + 3_000).toSet())
-        assertEquals(sql.listened(), fake.listened())
-        assertEquals(sql.listened(T0 + 1_000, T0 + 4_000), fake.listened(T0 + 1_000, T0 + 4_000))
+        assertEquals(sql.since(T0 + 1_000), fake.since(T0 + 1_000))
     }
 
     // The interaction log (version 5)

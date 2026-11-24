@@ -480,8 +480,7 @@ private fun friendLove(plays: List<FriendPlay>, library: Library, now: Long): Ma
     val perSong = HashMap<String, HashMap<String, Pair<Int, Boolean>>>()
     val week = HashMap<String, Int>()
     plays.filter { it.at in (now - FRIENDS_MS)..now }.forEach { play ->
-        val song = byName[nameKey(play.title, play.artist)]?.firstOrNull { song -> play.durationMs == null || abs(song.durationMs - play.durationMs) <= LENGTH_SLACK_MS }
-            ?: return@forEach
+        val song = friendSong(byName, play.title, play.artist, play.durationMs) ?: return@forEach
         perSong.getOrPut(song.path) { HashMap() }.merge(play.friend, 1 to play.favourite) { a, b -> (a.first + b.first) to (a.second || b.second) }
         if (play.at >= now - WEEK_MS) week.merge(song.path, 1, Int::plus)
     }
@@ -490,7 +489,15 @@ private fun friendLove(plays: List<FriendPlay>, library: Library, now: Long): Ma
     }.filterValues { it.friends > 0 || it.playsThisWeek > 0 }
 }
 
-private fun nameKey(title: String, artist: String?): String = TrackNames.normalize(title) + "|" + TrackNames.normalize(artist.orEmpty())
+/** A song's title and artist as friends' plays are matched by (Insights' friends too, stats/InsightsFigures.kt). */
+internal fun nameKey(title: String, artist: String?): String = TrackNames.normalize(title) + "|" + TrackNames.normalize(artist.orEmpty())
+
+/**
+ * A friend's song in the library, from its songs by [nameKey] ([byName], each list in the library's order): the first
+ * titled [title] by [artist] whose length is within [LENGTH_SLACK_MS] of [durationMs] when that is known.
+ */
+internal fun friendSong(byName: Map<String, List<Song>>, title: String, artist: String?, durationMs: Long?): Song? =
+    byName[nameKey(title, artist)]?.firstOrNull { durationMs == null || abs(it.durationMs - durationMs) <= LENGTH_SLACK_MS }
 
 internal const val FRIENDS_MS: Long = 30 * 86_400_000L
 private const val WEEK_MS: Long = 7 * 86_400_000L

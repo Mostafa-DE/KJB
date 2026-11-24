@@ -156,6 +156,7 @@ class PlayStats(
     private val compute: CoroutineDispatcher = Dispatchers.Default,
     private val books: PlayLogStore? = null,
     private val favourites: suspend () -> List<SongRef> = { emptyList() },
+    private val sources: suspend (from: Long?) -> PageSources = { PageSources() },
 ) : PlaysQuery {
     /** The library's songs played most since [since] ([totals]), under their paths now; ties as in [listeningOf]. */
     override suspend fun mostPlayed(limit: Int, since: Long?): List<SongPlays> {
@@ -218,6 +219,50 @@ class PlayStats(
     /** [month]'s recap: its insights, set against the month before. */
     suspend fun recap(month: YearMonth, now: Long, zone: ZoneId): Insights = insights(monthPeriod(month, zone), monthPeriod(month.minusMonths(1), zone), now, zone)
 
+    /** The Insights page of [period] as of [now], in the phone's [calendar] ([phoneCalendar]), set against the period before. */
+    suspend fun page(period: ListeningPeriod, now: Long, calendar: PhoneCalendar): InsightsPage {
+        val bounds = periodOf(period, now, calendar.zone, calendar.firstDayOfWeek)
+        return page(period, bounds, previousPeriod(period, bounds, calendar.zone, calendar.firstDayOfWeek), now, calendar)
+    }
+
+    /** [month]'s recap as a page (its story), set against the month before. */
+    suspend fun page(month: YearMonth, now: Long, calendar: PhoneCalendar): InsightsPage =
+        page(ListeningPeriod.MONTH, monthPeriod(month, calendar.zone), monthPeriod(month.minusMonths(1), calendar.zone), now, calendar)
+
+    /**
+     * The page of [bounds] against [before], kept until a play in it or before it is written, the library or Favourites
+     * change, or [PAGE_FRESH_MS] go by (Huddle, searches, lyrics, bookmarks and books change without a play, and "up to
+     * now" moves); a page going on, also until the day turns, so it is never a month's story once the month is over.
+     */
+    private suspend fun page(kind: ListeningPeriod, bounds: Period?, before: Period?, now: Long, calendar: PhoneCalendar): InsightsPage {
+        // The copy of the logs is made off the caller's thread too: the first read is every play.
+        val logs = withContext(compute) { logs() }
+        val library = library()
+        val favourites = favourites()
+        val stamp = library to favourites
+        val key = PageKey(kind, bounds, before, calendar)
+        held.withLock {
+            if (pagesFor != stamp) {
+                pages.clear()
+                pagesFor = stamp
+            }
+            pages[key]?.let { (at, page) ->
+                if (now - at in 0 until PAGE_FRESH_MS && (!page.period.going || dayOf(now, calendar.zone).date == page.period.lastDay)) return page
+            }
+        }
+        val page = withContext(compute) {
+            val read = sources(bounds?.from).copy(interactions = store.interactions(bounds?.from, bounds?.until).orEmpty())
+            insightsPageOf((logs ?: InsightsData(emptyList())).copy(favourites = favourites), read, kind, bounds, before, now, calendar, library)
+        }
+        // A log that could not be read gives nothing (the book log, no books), worked out again next time; nor is a page kept
+        // when another read took in a play meanwhile (the copy of the logs it was worked out from is no longer the one kept).
+        if (logs != null) held.withLock { if (pagesFor == stamp && logs.plays === music && logs.books === bookPlays) pages[key] = now to page }
+        return page
+    }
+
+    /** A page by what it shows: the same period in the same calendar is the same page. */
+    private data class PageKey(val kind: ListeningPeriod, val bounds: Period?, val before: Period?, val calendar: PhoneCalendar)
+
     /** The months with a recap ([recapMonths]), the latest first. */
     suspend fun recaps(now: Long, zone: ZoneId): List<YearMonth> {
         val plays = logs()?.plays.orEmpty()
@@ -274,24 +319,32 @@ class PlayStats(
         this.music = when {
             music == null || musicFrom == EVERY -> store.all()?.let { all ->
                 imports = slim(all.filter { it.imported })
+                skips = slim(all.filter { !it.imported && it.isShort })
                 slim(all.filter { !it.imported && !it.isShort })
             }
             musicFrom == NONE -> music
-            else -> spliced(music, musicFrom, store.listened(from = musicFrom))
+            // The quick skips are spliced too: How you listen counts them.
+            else -> store.since(musicFrom)?.let { read ->
+                val quick = spliced(skips, musicFrom, read.filter { !it.imported && it.isShort })
+                spliced(music, musicFrom, read.filter { !it.imported && !it.isShort })?.takeIf { quick != null }?.also { skips = checkNotNull(quick) }
+            }
         }
         val bookPlays = this.bookPlays
         this.bookPlays = when {
             books == null -> emptyList()
             bookPlays == null || booksFrom == EVERY -> books.all()?.let { all -> slim(all.filter { !it.isShort }) }
             booksFrom == NONE -> bookPlays
-            else -> spliced(bookPlays, booksFrom, books.listened(from = booksFrom))
+            else -> books.since(booksFrom)?.let { read -> spliced(bookPlays, booksFrom, read.filter { !it.isShort }) }
         }
         val touched = minOf(musicFrom, booksFrom)
-        if (touched != NONE) worked.keys.removeAll { (period, _) -> touched < period.until }
+        if (touched != NONE) {
+            worked.keys.removeAll { (period, _) -> touched < period.until }
+            pages.keys.removeAll { key -> key.bounds == null || touched < key.bounds.until }
+        }
         // A log not read (or a read cut short) stays null, so the next read is whole.
         val read = this.music ?: return@withLock null
         if (read !== music) ever = songPlaysOf(imports + read)
-        InsightsData(read, this.bookPlays.orEmpty(), ever)
+        InsightsData(read, this.bookPlays.orEmpty(), ever, skips = skips, imports = imports)
     }
 
     /**
@@ -303,18 +356,30 @@ class PlayStats(
         return if (read.size < kept.size - before.size) null else before + slim(read)
     }
 
-    /** Only what Insights use of [plays] (how each began and ended is not kept), each song's reference once: 100,000 plays stay a few MB. */
-    private fun slim(plays: List<LoggedPlay>): List<LoggedPlay> = plays.map { it.copy(song = refs.getOrPut(it.song) { it.song }, start = null, end = null) }
+    /**
+     * Only what Insights use of [plays] (the song's key is not kept), each song's reference and each way a play began
+     * once: 100,000 plays stay a few MB.
+     */
+    private fun slim(plays: List<LoggedPlay>): List<LoggedPlay> = plays.map { play ->
+        val start = play.start?.copy(songKey = null)?.let { starts.getOrPut(it) { it } }
+        play.copy(song = refs.getOrPut(play.song) { play.song }, start = start)
+    }
 
     /** Insights' copy of the logs and the periods over already worked out, by their bounds and the period before. */
     private val held = Mutex()
     private var music: List<LoggedPlay>? = null
     private var imports: List<LoggedPlay> = emptyList()
+    private var skips: List<LoggedPlay> = emptyList()
     private var bookPlays: List<LoggedPlay>? = null
     private var ever: List<SongPlays> = emptyList()
     private val refs = HashMap<SongRef, SongRef>()
+    private val starts = HashMap<PlayStart, PlayStart>()
     private val worked = HashMap<Pair<Period, Period?>, Insights>()
     private var overFor: Pair<Library?, List<SongRef>>? = null
+
+    /** The Insights pages worked out, each with when; for the library and Favourites they were worked out with. */
+    private val pages = HashMap<PageKey, Pair<Long, InsightsPage>>()
+    private var pagesFor: Pair<Library?, List<SongRef>>? = null
 
     /** The earliest start among the plays written since Insights last read each log: [NONE] for none, [EVERY] for a restore or an import. */
     private val musicSince = AtomicLong(NONE)
@@ -325,6 +390,7 @@ class PlayStats(
     private companion object {
         const val NONE: Long = Long.MAX_VALUE
         const val EVERY: Long = Long.MIN_VALUE
+        const val PAGE_FRESH_MS: Long = 60_000
     }
 }
 

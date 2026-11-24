@@ -17,7 +17,7 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 
 // Insights (KJB 3.2, handoff/suggest/plan.md part 1): the figures behind the Insights page and the monthly recap, from
-// the plays heard here ([PlayLogStore.listened]: an import's and the short ones left out, so neither adds to a count),
+// the plays heard here (PlayStats leaves an import's and the short ones out, so neither adds to a count),
 // the book log and the library. Time is in real minutes ([realMs]). Two ledgers, as Spotify keeps them: the time heard
 // counts everything (books, podcasts, hidden songs, songs gone from the phone) and the plays everything but books, which
 // never count one; the top lists and the songs, artists and albums counted are music only (no books, podcasts or hidden
@@ -26,13 +26,16 @@ import java.time.ZoneOffset
 /**
  * What Insights are worked out from, all time: the [plays] heard here, the oldest first, the book log's ([books]), each
  * song's totals with an import's plays ([everPlayed]: what was ever played, here or in the app imported from), and the
- * [favourites].
+ * [favourites]; for the Insights page also the quick skips the log keeps apart ([skips], [LoggedPlay.isShort]) and an
+ * import's plays ([imports]).
  */
 data class InsightsData(
     val plays: List<LoggedPlay>,
     val books: List<LoggedPlay> = emptyList(),
     val everPlayed: List<SongPlays> = emptyList(),
     val favourites: List<SongRef> = emptyList(),
+    val skips: List<LoggedPlay> = emptyList(),
+    val imports: List<LoggedPlay> = emptyList(),
 )
 
 /** A period's totals: the time heard and the plays that counted (both ledgers), and the songs, artists and albums played (music). */
@@ -119,7 +122,7 @@ fun insightsOf(data: InsightsData, period: Period?, previous: Period?, now: Long
         artists = tops.artists.takeIf { enough && it.size >= MIN_TOP_OTHERS }.orEmpty(),
         albums = tops.albums.takeIf { enough && it.size >= MIN_TOP_OTHERS }.orEmpty(),
         genres = genresOf(tops.songs, library).takeIf { enough && it.size >= MIN_TOP_OTHERS }.orEmpty(),
-        versus = versusOf(ledger, data, period, previous, now, kinds),
+        versus = versusOf(ledger, data, period, previous, now, zone, kinds),
         clock = clockOf(heard, zone),
         streaks = streaksOf(heard, data.plays, going, now, zone, kinds),
         milestones = milestonesOf(data, period, going, kinds),
@@ -163,28 +166,28 @@ const val RECAP_MIN_PLAYS: Int = 10
 // The minimums before a card shows
 
 /** The totals: a minute heard, or one play that counted. */
-private const val MIN_HEARD_MS: Long = 60_000
+internal const val MIN_HEARD_MS: Long = 60_000
 
 /** The top lists: this many music plays that counted, of 3 songs or more, or 2 artists, albums or genres. */
-private const val MIN_TOP_PLAYS = 10
-private const val MIN_TOP_SONGS = 3
-private const val MIN_TOP_OTHERS = 2
+internal const val MIN_TOP_PLAYS = 10
+internal const val MIN_TOP_SONGS = 3
+internal const val MIN_TOP_OTHERS = 2
 
 /** This period against the one before: the one before needs this many plays, or this much time heard. */
-private const val MIN_VERSUS_PLAYS = 10
-private const val MIN_VERSUS_HEARD_MS: Long = 30 * 60_000
+internal const val MIN_VERSUS_PLAYS = 10
+internal const val MIN_VERSUS_HEARD_MS: Long = 30 * 60_000
 
 /** The clock: this many plays that counted in the period. */
-private const val MIN_CLOCK_PLAYS = 10
+internal const val MIN_CLOCK_PLAYS = 10
 
 /** A streak: this many days in a row. */
-private const val MIN_STREAK_DAYS = 2
+internal const val MIN_STREAK_DAYS = 2
 
 /** Books and podcasts: a minute heard. */
 private const val MIN_SPOKEN_MS: Long = 60_000
 
 /** Never played: this many plays that counted ever, here or imported, so a new phone is not told it never played anything. */
-private const val MIN_HISTORY_PLAYS = 20
+internal const val MIN_HISTORY_PLAYS = 20
 
 /** Dig deeper: an album of this many songs or more, this many never played; at most [DIG_MAX] albums. */
 private const val DIG_MIN_ALBUM_SONGS = 4
@@ -202,18 +205,18 @@ private val PLAY_MILESTONES = listOf(100, 250, 500, 1_000, 2_500, 5_000, 10_000,
 private val HOUR_MILESTONES = listOf(10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000)
 
 private const val HOUR_MS: Long = 3_600_000
-private const val HOURS_IN_DAY = 24
+internal const val HOURS_IN_DAY = 24
 
 // How each card is worked out
 
 /** A play's real minutes: the clock's time it played ([LoggedPlay.clockMs]), or its time heard for a play from before KJB kept them. */
-private val LoggedPlay.realMs: Long get() = clockMs ?: heardMs
+internal val LoggedPlay.realMs: Long get() = clockMs ?: heardMs
 
 /** What a play's song is now: music the lists show, a podcast, a book, or other (a hidden song, one gone from the phone). */
-private enum class Kind { MUSIC, PODCAST, BOOK, OTHER }
+internal enum class Kind { MUSIC, PODCAST, BOOK, OTHER }
 
 /** Each play's [Kind], by its song found again in [library]; once per song. */
-private class Kinds(private val library: Library?) {
+internal class Kinds(private val library: Library?) {
     private val known = HashMap<String, Kind>()
 
     fun of(play: LoggedPlay): Kind = known.getOrPut(play.song.path) {
@@ -229,14 +232,14 @@ private class Kinds(private val library: Library?) {
 }
 
 /** The time heard (books' too) and the plays that counted (never a book's). */
-private class Ledger(val heardMs: Long, val plays: Int)
+internal class Ledger(val heardMs: Long, val plays: Int)
 
-private fun ledgerOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Kinds): Ledger =
+internal fun ledgerOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Kinds): Ledger =
     Ledger(heard.sumOf { it.realMs } + books.sumOf { it.realMs }, heard.count { it.counted && kinds.of(it) != Kind.BOOK })
 
-private operator fun Period.contains(at: Long): Boolean = at >= from && at < until
+internal operator fun Period.contains(at: Long): Boolean = at >= from && at < until
 
-private fun List<LoggedPlay>.within(period: Period?): List<LoggedPlay> = if (period == null) this else filter { it.startedAt in period }
+internal fun List<LoggedPlay>.within(period: Period?): List<LoggedPlay> = if (period == null) this else filter { it.startedAt in period }
 
 /** [plays] per song, as the log's totals give them: under the latest play's song, so its id hint is the latest. */
 internal fun songPlaysOf(plays: List<LoggedPlay>): List<SongPlays> = plays.groupBy { it.song.path }.map { (_, its) ->
@@ -244,7 +247,7 @@ internal fun songPlaysOf(plays: List<LoggedPlay>): List<SongPlays> = plays.group
 }
 
 /** The genres of the top [songs], each song's plays under its genre tag, the most played first. */
-private fun genresOf(songs: List<Top<Song>>, library: Library): List<Top<Genre>> {
+internal fun genresOf(songs: List<Top<Song>>, library: Library): List<Top<Genre>> {
     val collator = Collator.getInstance()
     return songs.mapNotNull { top -> top.item.genre?.trim()?.takeIf(String::isNotEmpty)?.let(library::genre)?.let { top to it } }
         .groupBy { it.second.name }
@@ -253,12 +256,24 @@ private fun genresOf(songs: List<Top<Song>>, library: Library): List<Top<Genre>>
 }
 
 /** The period so far against the one before up to the same point (all of it once the period is over). */
-private fun versusOf(ledger: Ledger, data: InsightsData, period: Period?, previous: Period?, now: Long, kinds: Kinds): Versus? {
+private fun versusOf(ledger: Ledger, data: InsightsData, period: Period?, previous: Period?, now: Long, zone: ZoneId, kinds: Kinds): Versus? {
     if (period == null || previous == null) return null
-    val window = if (now in period) Period(previous.from, minOf(previous.until, previous.from + (now - period.from))) else previous
+    val window = Period(previous.from, samePointIn(previous, period, now, zone))
     val before = ledgerOf(data.plays.within(window), data.books.within(window), kinds)
     if (before.plays < MIN_VERSUS_PLAYS && before.heardMs < MIN_VERSUS_HEARD_MS) return null
     return Versus(ledger.heardMs, ledger.plays, before.heardMs, before.plays)
+}
+
+/**
+ * As far into [previous] as [now] is into [period] by the phone's calendar: the same date and time a week, a month or a
+ * year earlier (a day of 23 or 25 hours is still a day; a date the shorter month lacks, 31 March or 29 February, at its
+ * last day), and no further than its end; all of it once [period] is over.
+ */
+internal fun samePointIn(previous: Period, period: Period, now: Long, zone: ZoneId): Long {
+    if (now !in period) return previous.until
+    fun local(at: Long): LocalDateTime = LocalDateTime.ofInstant(Instant.ofEpochMilli(at), zone)
+    val back = local(previous.from).toLocalDate().until(local(period.from).toLocalDate())
+    return minOf(previous.until, local(now).minus(back).atZone(zone).toInstant().toEpochMilli())
 }
 
 private fun clockOf(heard: List<LoggedPlay>, zone: ZoneId): ListeningClock? {
@@ -269,7 +284,7 @@ private fun clockOf(heard: List<LoggedPlay>, zone: ZoneId): ListeningClock? {
 }
 
 /** When [play] started where it was heard: in its time zone then, else the phone's now (plays from before KJB kept it). */
-private fun localTimeOf(play: LoggedPlay, zone: ZoneId): LocalDateTime {
+internal fun localTimeOf(play: LoggedPlay, zone: ZoneId): LocalDateTime {
     val start = Instant.ofEpochMilli(play.startedAt)
     return LocalDateTime.ofInstant(start, play.zoneOffsetMinutes?.let { ZoneOffset.ofTotalSeconds(it * SECONDS_PER_MINUTE) } ?: zone)
 }
@@ -278,28 +293,32 @@ private const val SECONDS_PER_MINUTE = 60
 
 /** The longest run of days with a play that counted in the period ([heard]), and while it [going] the run up to today from [all]. */
 private fun streaksOf(heard: List<LoggedPlay>, all: List<LoggedPlay>, going: Boolean, now: Long, zone: ZoneId, kinds: Kinds): Streaks? {
-    fun days(plays: List<LoggedPlay>): Set<LocalDate> = plays.filter { it.counted && kinds.of(it) != Kind.BOOK }.mapTo(HashSet()) { localTimeOf(it, zone).toLocalDate() }
-    val longest = days(heard).let { days -> days.maxOfOrNull { day -> if (day.minusDays(1) in days) 0 else runFrom(day, days, step = 1) } ?: 0 }
-    val current = if (going) {
-        val ever = days(all)
-        val today = dayOf(now, zone).date
-        // From today or yesterday; or from tomorrow, a day a play heard in a time zone ahead of the phone's is on already.
-        listOf(today.plusDays(1), today, today.minusDays(1)).filter { it in ever }.maxOfOrNull { runFrom(it, ever, step = -1) } ?: 0
-    } else {
-        null
-    }
+    val longest = longestRunOf(countedDays(heard, zone, kinds))?.days ?: 0
+    val current = if (going) runUpTo(dayOf(now, zone).date, countedDays(all, zone, kinds)) else null
     return Streaks(longest, current).takeIf { longest >= MIN_STREAK_DAYS || (current ?: 0) >= MIN_STREAK_DAYS }
 }
 
+/** The days of [plays] that counted (a book's never does), each where it was heard. */
+internal fun countedDays(plays: List<LoggedPlay>, zone: ZoneId, kinds: Kinds): Set<LocalDate> =
+    plays.filter { it.counted && kinds.of(it) != Kind.BOOK }.mapTo(HashSet()) { localTimeOf(it, zone).toLocalDate() }
+
+/** The longest run of [days] in a row, the earliest of equals; null for no days. */
+internal fun longestRunOf(days: Set<LocalDate>): Run? = days.filter { it.minusDays(1) !in days }.map { Run(runFrom(it, days, step = 1), it) }
+    .maxWithOrNull(compareBy<Run> { it.days }.thenByDescending { it.from })
+
+/** The run of [days] up to [today]: from today or yesterday; or from tomorrow, a day a play heard in a time zone ahead of the phone's is on already. */
+internal fun runUpTo(today: LocalDate, days: Set<LocalDate>): Int =
+    listOf(today.plusDays(1), today, today.minusDays(1)).filter { it in days }.maxOfOrNull { runFrom(it, days, step = -1) } ?: 0
+
 /** How many days of [days] follow one another from [start], [step] days at a time. */
-private fun runFrom(start: LocalDate, days: Set<LocalDate>, step: Long): Int = generateSequence(start) { it.plusDays(step) }.takeWhile { it in days }.count()
+internal fun runFrom(start: LocalDate, days: Set<LocalDate>, step: Long): Int = generateSequence(start) { it.plusDays(step) }.takeWhile { it in days }.count()
 
 /**
  * The milestones reached in [period] (all of them for all time), the latest first, each by the play that crossed it:
  * the plays that counted (never a book's) and the hours heard (books' too); and while it [going] the next one. Shown
  * once one was reached in the period, or while it goes on once one was ever reached.
  */
-private fun milestonesOf(data: InsightsData, period: Period?, going: Boolean, kinds: Kinds): Milestones? {
+internal fun milestonesOf(data: InsightsData, period: Period?, going: Boolean, kinds: Kinds): Milestones? {
     val counted = data.plays.filter { it.counted && kinds.of(it) != Kind.BOOK }
     val reached = PLAY_MILESTONES.mapNotNull { count -> counted.getOrNull(count - 1)?.let { Milestone(MilestoneKind.PLAYS, count, it.startedAt) } }.toMutableList()
     var heardMs = 0L
@@ -325,14 +344,14 @@ private fun nextMilestone(plays: Int, heardMs: Long): NextMilestone? {
 }
 
 /** Books (the book log, and plays logged before their file became a book) and podcasts, from a minute heard. */
-private fun spokenOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Kinds): Spoken? {
+internal fun spokenOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Kinds): Spoken? {
     val booksMs = books.sumOf { it.realMs } + heard.filter { kinds.of(it) == Kind.BOOK }.sumOf { it.realMs }
     val podcastsMs = heard.filter { kinds.of(it) == Kind.PODCAST }.sumOf { it.realMs }
     return Spoken(booksMs, podcastsMs).takeIf { booksMs + podcastsMs >= MIN_SPOKEN_MS }
 }
 
 /** The library's music no play counted for ([played]: here or imported), the newest added first. */
-private fun neverPlayedOf(library: Library, played: Set<String>): List<Song> {
+internal fun neverPlayedOf(library: Library, played: Set<String>): List<Song> {
     val collator = Collator.getInstance()
     return library.songs.filter { !it.isPodcast && it.path !in played }
         .sortedWith(compareByDescending<Song> { it.addedAt ?: Long.MIN_VALUE }.thenBy(collator) { it.title }.thenBy { it.path })
@@ -342,7 +361,7 @@ private fun neverPlayedOf(library: Library, played: Set<String>): List<Song> {
  * The albums of the [music] played in the period, with their songs never played ([played]: here or imported), the most
  * played album first, then the latest played; each with its song played most there.
  */
-private fun digDeeperOf(music: List<LoggedPlay>, library: Library, played: Set<String>): List<DigDeeper> {
+internal fun digDeeperOf(music: List<LoggedPlay>, library: Library, played: Set<String>): List<DigDeeper> {
     class Heard(val album: Album, val song: Song, val at: Long)
     val heard = music.filter { it.counted }.mapNotNull { play ->
         val song = library.resolver.find(play.song) ?: return@mapNotNull null
@@ -362,7 +381,7 @@ private fun digDeeperOf(music: List<LoggedPlay>, library: Library, played: Set<S
 }
 
 /** Music played [FORGOTTEN_MIN_PLAYS] times or a favourite, with no play that counted for [QUIET_MS], the most played first. */
-private fun forgottenOf(data: InsightsData, now: Long, library: Library, kinds: Kinds): List<Top<Song>> {
+internal fun forgottenOf(data: InsightsData, now: Long, library: Library, kinds: Kinds): List<Top<Song>> {
     val favourites = data.favourites.mapNotNullTo(HashSet()) { library.resolver.find(it)?.path }
     val quiet = now - QUIET_MS
     return listeningOf(songPlaysOf(data.plays.filter { kinds.of(it) == Kind.MUSIC }), library).songs

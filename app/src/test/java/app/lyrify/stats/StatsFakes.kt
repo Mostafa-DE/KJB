@@ -1,10 +1,19 @@
 package app.lyrify.stats
 
+import app.lyrify.library.Library
+import app.lyrify.library.Playlist
 import app.lyrify.library.SongRef
+import app.lyrify.library.song
+import app.lyrify.settings.Settings
 import java.sql.Connection
 import java.sql.DriverManager
 import java.sql.ResultSet
 import java.sql.SQLException
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.YearMonth
+import java.time.ZoneId
 
 /** The play as 3.1.0 kept it: its song, start, time heard and count, and nothing more, for tests of those alone. */
 fun LoggedPlay.as310(): LoggedPlay = LoggedPlay(song, startedAt, heardMs, counted)
@@ -62,10 +71,6 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList(), interactions: List<Inte
         if (old == null || new == null) old ?: new else old.copy(source = old.source ?: new.source, songKey = old.songKey ?: new.songKey)
 
     override suspend fun all(): List<LoggedPlay>? = if (failing) null else plays.sortedBy { it.startedAt }
-
-    override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> =
-        plays.filter { !it.imported && !it.isShort && (from == null || it.startedAt >= from) && (until == null || it.startedAt < until) }
-            .sortedWith(compareBy({ it.startedAt }, { it.song.path }))
 
     /** Each as [put] writes it, and each interaction not there yet, or none when [failing]. */
     override suspend fun putAll(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean {
@@ -190,12 +195,6 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
         buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
     }
 
-    override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> =
-        query(PlaysSchema.LISTENED, (from ?: Long.MIN_VALUE).toString(), (until ?: Long.MAX_VALUE).toString()) { rows ->
-            val row = ResultRow(rows)
-            buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
-        }
-
     override suspend fun putAll(plays: List<LoggedPlay>, interactions: List<Interaction>): Boolean {
         transaction {
             plays.forEach { update(PlaysSchema.PUT, *PlaysSchema.putArgs(it)) }
@@ -261,3 +260,125 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
         private fun index(column: String): Int? = (1..rows.metaData.columnCount).firstOrNull { rows.metaData.getColumnName(it) == column }
     }
 }
+
+/**
+ * An Insights page with every card filled with made-up figures, for the screens' tests: this week (Monday 23 to Thursday
+ * 26 November 2026, Amman), set against last week. Made-up names only.
+ */
+fun fakeInsightsPage(): InsightsPage {
+    val copper = song("Music/Low Sun/01 Copper Sky.mp3", artist = "Kestrel", album = "Low Sun", track = 1, year = 2014, genre = "Indie", id = 1)
+    val tide = song("Music/Low Sun/02 Tidewater.mp3", artist = "Kestrel", album = "Low Sun", track = 2, year = 2014, genre = "Indie", id = 2)
+    val harbour = song("Music/Tidelines/Paper Harbour.mp3", artist = "Mira Solen", album = "Tidelines", year = 2019, genre = "Folk", id = 3)
+    val drive = song("Music/Night Drive/Northbound.mp3", artist = "The Lowlands", album = "Night Drive", year = 2008, genre = "Electronic", id = 4)
+    val library = Library.of(listOf(copper, tide, harbour, drive), Settings())
+    fun <T> ranked(item: T, plays: Int, minutes: Long, before: Int?, cover: app.lyrify.library.Song) = Ranked(Top(item, plays, minutes * 60_000, 0), before, cover)
+    val kestrel = checkNotNull(library.artist("Kestrel"))
+    val mira = checkNotNull(library.artist("Mira Solen"))
+    val lowlands = checkNotNull(library.artist("The Lowlands"))
+    val lowSun = checkNotNull(library.albums.firstOrNull { it.title == "Low Sun" })
+    val tidelines = checkNotNull(library.albums.firstOrNull { it.title == "Tidelines" })
+    val monday = LocalDate.of(2026, 11, 23)
+    val days = listOf(128L, 171L, 104L, 185L).map { it * 60_000 } + listOf(null, null, null)
+    val period = PagePeriod(
+        kind = ListeningPeriod.WEEK,
+        bounds = Period(1_795_381_200_000, 1_795_986_000_000),
+        firstDay = monday,
+        lastDay = monday.plusDays(3),
+        going = true,
+        before = Period(1_794_776_400_000, 1_795_381_200_000),
+        beforeUntil = 1_795_113_600_000,
+    )
+    val cards = InsightsCards(
+        recaps = listOf(RecapMonth(YearMonth.of(2026, 10), listOf(copper, harbour, drive))),
+        monthSoFar = Totals(heardMs = 2_140 * 60_000, plays = 702, songs = 311, artists = 96, albums = 140),
+        yearSoFar = Totals(heardMs = 24_610 * 60_000, plays = 8_066, songs = 1_904, artists = 402, albums = 655),
+        time = TimeCard(
+            totals = Totals(heardMs = 588 * 60_000, plays = 193, songs = 128, artists = 47, albums = 61),
+            before = Totals(heardMs = 493 * 60_000, plays = 162, songs = 117, artists = 44, albums = 58),
+            heard = Steps(Step.DAY, monday, days),
+            heardBefore = Steps(Step.DAY, monday.minusWeeks(1), listOf(102L, 131L, 88L, 172L, 0L, 140L, 96L).map { it * 60_000 }),
+        ),
+        days = DaysCard(Steps(Step.DAY, monday, days), current = 19, longest = Run(19, LocalDate.of(2026, 11, 8)), busiest = DayHeard(monday.plusDays(3), 185 * 60_000)),
+        clock = ClockCard(
+            List(24) { (it + 1) * 600_000L },
+            peak = 21,
+            weekdaysMs = 420 * 60_000,
+            weekendMs = 168 * 60_000,
+            morningMs = 150 * 60_000,
+            afternoonMs = 120 * 60_000,
+            eveningMs = 180 * 60_000,
+            nightMs = 138 * 60_000,
+            lateMs = 241 * 60_000,
+        ),
+        artists = TopCard(
+            listOf(ranked(kestrel, 31, 101, 1, copper), ranked(mira, 24, 79, 3, harbour), ranked(lowlands, 17, 58, null, drive)),
+            compared = true,
+            loyalty = Loyalty.Running(6),
+        ),
+        songs = TopCard(
+            listOf(ranked(harbour, 11, 34, 2, harbour), ranked(copper, 10, 47, 1, copper), ranked(drive, 7, 26, null, drive)),
+            compared = true,
+            firstsDay = DayPlays(harbour, monday.plusDays(1), 6),
+        ),
+        albums = TopCard(listOf(ranked(tidelines, 11, 34, 2, harbour), ranked(lowSun, 10, 47, 1, copper)), compared = true),
+        taste = TasteCard(
+            genres = library.genres.map { Top(it, 10, 600_000, 0) },
+            decades = listOf(Decade(2000, 7), Decade(2010, 21)),
+            middleYear = 2014,
+        ),
+        how = HowCard(Starts(picked = 56, inOrder = 42, shuffle = 46, suggestions = 33, huddle = 16), Ends(133, 35, 25), Ends(30, 8, 12), Ends(60, 9, 4), Skipped(tide, 4, 5)),
+        moments = listOf(
+            Moment.OnRepeat(harbour, monday.plusDays(1), 6),
+            Moment.LongestSession(LocalDateTime.of(2026, 11, 24, 20, 5), 161 * 60_000, drive),
+            Moment.LatestNight(LocalDateTime.of(2026, 11, 25, 1, 48), harbour),
+            Moment.StartToFinish(2, lowSun),
+            Moment.OnTheMove(listOf(180, 60)),
+            Moment.Faster(booksMs = 0, podcastsMs = 18 * 60_000),
+            Moment.YearAgo(copper, LocalDate.of(2025, 11, 26), 4),
+        ),
+        found = FoundCard(listOf(FoundArtist(lowlands, kept = true)), songs = 13, newPlays = 35, plays = 193, fromSuggestions = 2, fromFriends = 1, onYourOwn = 1),
+        comebacks = listOf(Comeback(tide, 94)),
+        forgotten = listOf(Top(drive, 12, 2_400_000, 0), Top(tide, 9, 1_800_000, 0), Top(copper, 7, 1_400_000, 0)),
+        friends = FriendsCard(
+            matches = listOf(FriendMatch("f-wren", "Wren", past = false, percent = 74), FriendMatch("f-omar", "Omar", past = true, percent = 61)),
+            both = listOf(kestrel, mira),
+            sent = 3,
+            got = 5,
+            kept = 1,
+            inSync = InSync("f-omar", "Omar", copper, 1),
+            favourite = SentKept("f-wren", "Wren", drive, 5),
+        ),
+        lyrics = LyricsCard(opened = 21, most = harbour, mostTimes = 6, syncedPlays = 147, plays = 193),
+        favourites = FavouritesCard(added = 4, mostPlayed = harbour),
+        searches = SearchesCard(17, tapped = 14, played = 12, words = listOf(WordCount("harbour", 3), WordCount("kite", 1)), songs = 9, artists = 4, albums = 1, others = 0),
+        spoken = SpokenCard(booksMs = 65 * 60_000, podcastsMs = 40 * 60_000, savedMs = 18 * 60_000, bookmarks = 2, finished = 0, book = null, podcast = null),
+        outputs = OutputsCard(speaker = 30, headphones = 110, bluetooth = 40, car = 13),
+        playlists = PlaylistsCard(listOf(Top(Playlist("p-late", "Late Walks", listOf(harbour.ref, copper.ref), createdAt = 1_000), 22, 66 * 60_000, 0))),
+        library = LibraryCard(
+            songs = 4,
+            bytes = 41_600_000,
+            durationMs = 800_000,
+            played = 3,
+            added = 2,
+            addedPlayed = 1,
+            types = listOf(FileType("audio/mpeg", 3), FileType("audio/flac", 1)),
+            neverPlayed = listOf(tide),
+            digDeeper = listOf(DigDeeper(lowSun, copper, listOf(tide))),
+        ),
+        traits = listOf(Trait(TraitKind.NIGHT_OWL, 41), Trait(TraitKind.SHUFFLER, 24), Trait(TraitKind.LOYAL, 16, kestrel)),
+        milestones = MilestonesCard(
+            reached = listOf(Milestone(MilestoneKind.PLAYS, 1_000, 1_795_503_600_000)),
+            next = NextMilestone(MilestoneKind.HOURS, 100, 12 * 3_600_000),
+            nextAround = YearMonth.of(2026, 12),
+            longestRun = Run(27, LocalDate.of(2026, 3, 1)),
+            plays = Milestone(MilestoneKind.PLAYS, 1_000, 1_795_503_600_000),
+            hours = Milestone(MilestoneKind.HOURS, 50, 1_790_000_000_000),
+            artistsMonth = MonthArtists(YearMonth.of(2026, 10), 96),
+            booksFinished = 1,
+        ),
+    )
+    return InsightsPage(period, cards)
+}
+
+/** The phone's calendar in the tests: Amman, the week from Monday, the weekend Friday and Saturday (a phone in Jordan). */
+val ammanCalendar: PhoneCalendar = PhoneCalendar(ZoneId.of("Asia/Amman"), DayOfWeek.MONDAY, setOf(DayOfWeek.FRIDAY, DayOfWeek.SATURDAY))
