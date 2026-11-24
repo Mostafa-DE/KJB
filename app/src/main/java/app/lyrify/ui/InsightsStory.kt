@@ -342,7 +342,8 @@ internal const val QUIZ_SONGS = 3
 /**
  * Your recaps as stories (the mockup's rings): this month so far, the latest month's recap (its ring turning while it is
  * new), the year so far, then the months before, each a ring that opens its story: a recap's covers, or the month's or
- * the year's name for one still going.
+ * the year's name for one still going. The month's and the year's rings show with their own time, whatever the page's
+ * period ([InsightsCards.monthSoFar], [InsightsCards.yearSoFar]), so a quiet week keeps them and none opens an empty story.
  */
 @Composable
 internal fun StoriesRow(page: app.lyrify.stats.InsightsPage, modifier: Modifier = Modifier) {
@@ -354,9 +355,8 @@ internal fun StoriesRow(page: app.lyrify.stats.InsightsPage, modifier: Modifier 
     val due = latest != null && settings.nav.recapSeen?.let { it >= latest } != true
     val today = rememberToday()
     val month = java.time.YearMonth.from(today)
-    val going = page.cards.time != null
     LazyRow(modifier = modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        if (going) {
+        if (page.cards.monthSoFar != null) {
             item(key = "month so far") {
                 StoryRing(stringResource(R.string.insights_ring_so_far, monthText(month, short = true)), new = false, covers = emptyList(), name = monthText(month, short = true)) {
                     nav.show(FullScreen.Story(period = ListeningPeriod.MONTH))
@@ -371,7 +371,7 @@ internal fun StoriesRow(page: app.lyrify.stats.InsightsPage, modifier: Modifier 
                 }
             }
             // The year so far: the year in big type on the hero's ground.
-            if (i == 0 && going) {
+            if (i == 0 && page.cards.yearSoFar != null) {
                 item(key = "year so far") {
                     StoryRing(stringResource(R.string.insights_ring_so_far, today.year.toString()), new = false, covers = emptyList(), name = today.year.toString()) {
                         nav.show(FullScreen.Story(period = ListeningPeriod.YEAR))
@@ -379,7 +379,7 @@ internal fun StoriesRow(page: app.lyrify.stats.InsightsPage, modifier: Modifier 
                 }
             }
         }
-        if (recaps.isEmpty() && going) {
+        if (recaps.isEmpty() && page.cards.yearSoFar != null) {
             item(key = "year so far") {
                 StoryRing(stringResource(R.string.insights_ring_so_far, today.year.toString()), new = false, covers = emptyList(), name = today.year.toString()) {
                     nav.show(FullScreen.Story(period = ListeningPeriod.YEAR))

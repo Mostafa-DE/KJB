@@ -169,10 +169,11 @@ enum class InsightsCardKind { STORIES, TIME, EMPTY, FOR_YOU, DAYS, CLOCK, ARTIST
 
 /**
  * The cards [cards] shows, in the page's order (the approved mockup's), each only with enough behind it: no empty boxes.
- * With no time in the period, the empty state stands in for your time and For you.
+ * The stories row follows its rings (this month's and this year's own time, the recaps), not the period's time; with no
+ * time in the period, the empty state stands in for your time and For you.
  */
 fun insightsCardsOf(cards: InsightsCards): List<InsightsCardKind> = buildList {
-    if (cards.time != null || cards.recaps.isNotEmpty()) add(InsightsCardKind.STORIES)
+    if (cards.monthSoFar != null || cards.yearSoFar != null || cards.recaps.isNotEmpty()) add(InsightsCardKind.STORIES)
     if (cards.time != null) addAll(listOf(InsightsCardKind.TIME, InsightsCardKind.FOR_YOU)) else add(InsightsCardKind.EMPTY)
     if (cards.days != null) add(InsightsCardKind.DAYS)
     if (cards.clock != null) add(InsightsCardKind.CLOCK)

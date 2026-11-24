@@ -3,6 +3,7 @@ package app.lyrify.ui
 import app.lyrify.settings.LibraryTab
 import app.lyrify.stats.InsightsCards
 import app.lyrify.stats.TopCard
+import app.lyrify.stats.Totals
 import app.lyrify.stats.fakeInsightsPage
 import app.lyrify.ui.InsightsCardKind.ALBUMS
 import app.lyrify.ui.InsightsCardKind.ARTISTS
@@ -84,6 +85,20 @@ class ListeningScreenTest {
         assertFalse(FOUND in insightsCardsOf(full.copy(found = null, comebacks = emptyList(), forgotten = emptyList())))
         // The stories row stands for past recaps even in a quiet period.
         assertEquals(listOf(STORIES, EMPTY, PRIVATE), insightsCardsOf(InsightsCards(recaps = full.recaps)))
+    }
+
+    @Test
+    fun `the stories row follows this month's and this year's own time, so a quiet week keeps it and no ring opens an empty story`() {
+        val some = Totals(heardMs = 90 * 60_000L, plays = 30, songs = 20, artists = 8, albums = 10)
+        // A quiet week in a month with time: the row stays, the month and the year so far in it.
+        assertEquals(listOf(STORIES, EMPTY, PRIVATE), insightsCardsOf(InsightsCards(monthSoFar = some, yearSoFar = some)))
+        assertEquals(listOf(STORIES, EMPTY, PRIVATE), insightsCardsOf(InsightsCards(yearSoFar = some)))
+        // Your time alone (a week of last month's days, nothing this month or recap yet) makes no row of empty rings.
+        assertFalse(STORIES in insightsCardsOf(fakeInsightsPage().cards.copy(recaps = emptyList(), monthSoFar = null, yearSoFar = null)))
+        val story = source("InsightsStory.kt")
+        assertTrue(story.contains("if (page.cards.monthSoFar != null) {"))
+        assertEquals(2, Regex(Regex.escape("page.cards.yearSoFar != null")).findAll(story).count())
+        assertFalse(story.contains("val going = page.cards.time != null"))
     }
 
     @Test
