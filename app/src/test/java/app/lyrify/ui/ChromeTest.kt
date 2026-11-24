@@ -340,10 +340,10 @@ class ChromeTest {
     @Test
     fun `every bar root's header ends with Huddle, after the page's own buttons, the title in what is left, Huddle's own root none`() {
         val header = mainHeader()
-        // One measured line, as the list header's: the title (logo and words), the page's own buttons, Huddle in its two forms.
+        // One measured line, as the list header's: the title (logo and words), the page's own buttons, then Huddle.
         assertTrue(header, "SubcomposeLayout(Modifier.heightIn(min = BAR_HEIGHT).padding(start = 20.dp, end = 12.dp))" in header)
         assertTrue(header, "subcompose(\"actions\") { Row(verticalAlignment = Alignment.CenterVertically, content = actions) }" in header)
-        assertTrue(header, "val huddles = if (tab == DockTab.HUDDLE) null else listOf(true, false).associateWith { word ->" in header)
+        assertTrue(header, "val huddle = if (tab == DockTab.HUDDLE) emptyList() else {" in header)
         // The page's buttons, then Huddle at the very end; the title from the start in what they leave, shortened if it must.
         assertTrue(header, "val end = buttons + huddle.sumOf { it.width }" in header)
         assertTrue(header, "Text(title, style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)" in header)
@@ -380,10 +380,15 @@ class ChromeTest {
         assertFalse(huddleWord(line, title = 192, buttons = 0, huddle = pill))
         // The same font, title and buttons on a 412 dp phone keep the word: measured width decides, never the font scale.
         assertTrue("Library with Search off the bar, 412 dp", huddleWord(380, title = 161, buttons = 48, huddle = pill))
-        // The header asks with the title whole (its widest), the page's buttons as measured and the pill with its word.
+        // The header asks with the title whole (its widest), the page's buttons as measured and the pill with its word, then
+        // draws the one form that fits. The pill with its word is measured from a copy never shown, so it runs no clocks of
+        // its own while a friend plays (Grok, hh2): only the Huddle on screen moves.
         val header = mainHeader()
-        assertTrue(header, "huddleWord(constraints.maxWidth, titlePart.sumOf { it.maxIntrinsicWidth(constraints.maxHeight) }, buttons, huddles.getValue(true).sumOf { it.width })" in header)
-        assertTrue(header, "val huddle = huddles?.getValue(word).orEmpty()" in header)
+        assertTrue(header, "subcompose(\"huddle width\") { CompositionLocalProvider(LocalLayerHeaded provides false) { HuddleButton(word = true) {} } }" in header)
+        assertTrue(header, "huddleWord(constraints.maxWidth, titlePart.sumOf { it.maxIntrinsicWidth(constraints.maxHeight) }, buttons, withWord)" in header)
+        assertTrue(header, header.indexOf("huddleWord(") < header.indexOf("subcompose(\"huddle\") {"))
+        assertEquals(1, Regex("HuddleButton\\(word\\)").findAll(header).count())
+        assertTrue("internal fun huddleMoves(): Boolean = !LocalReducedMotion.current && LocalLayerHeaded.current" in java.io.File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText())
         assertFalse(header, "fontScale" in header)
         // The glyph alone keeps the chip's tap of at least 48 dp.
         val chip = java.io.File("src/main/java/app/lyrify/ui/Controls.kt").readText().substringAfter("fun LyrifyChip(").substringBefore("\n}\n")
@@ -447,8 +452,11 @@ class ChromeTest {
         assertTrue(chip, ".minimumInteractiveComponentSize()\n            .then(capsule)\n            .indication(" in chip)
         // The glyph's two paths, parsed once and drawn by name: the friends, then the note in front of them.
         assertTrue(button, "drawPath(friends, ink)" in button && "drawPath(note, ink, shown)" in button && "getValue(" !in button)
-        assertTrue(button, "AnimatedVisibility(live.joined && live.playing.size > 1" in button && "CountBadge(count.value)" in button)
+        assertTrue(button, "AnimatedVisibility(live.joined && live.playing.size > 1" in button && "CountBadge(count.value, ring = ground)" in button)
         assertTrue(button, "AnimatedVisibility(!live.joined" in button && "R.drawable.ic_add" in button && "chrome.action" in button)
+        // The count is cut out of the pill as the plus is (Grok, hh2); the bar's and Tools' counts keep the glass round them.
+        val badge = chrome.substringAfter("fun CountBadge(").substringBefore("\n}\n")
+        assertTrue(badge, badge.startsWith("count: Int, modifier: Modifier = Modifier, ring: Color = MaterialTheme.colorScheme.surfaceContainer)") && ".background(ring, CircleShape)" in badge)
         assertFalse(parts, "CubicBezierEasing(" in parts)
         assertTrue("internal fun Equaliser(color: Color, modifier: Modifier = Modifier, count: Int = EQ_MS.size, gap: Color? = null)" in parts)
         // One state for the bar's dot and every header: the shell's, never a second clock that could disagree with the bar.

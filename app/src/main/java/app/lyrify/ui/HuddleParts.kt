@@ -370,7 +370,7 @@ internal fun HuddleButton(word: Boolean, onClick: () -> Unit) {
             }
         }
         AnimatedVisibility(live.joined && live.playing.size > 1, Modifier.align(Alignment.TopEnd).offset(x = 5.dp, y = (-2).dp), enter = badgeIn(reduced), exit = badgeOut(reduced)) {
-            CountBadge(count.value)
+            CountBadge(count.value, ring = ground)
         }
     }
 }

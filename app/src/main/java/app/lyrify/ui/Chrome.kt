@@ -473,15 +473,18 @@ private fun DockItem(tab: DockTab, label: String, selected: Boolean, dot: Boolea
 /** A bar item's icon's test tag: it is no TalkBack stop of its own, so device tests find it by this. */
 const val DOCK_ICON_TAG: String = "dock icon"
 
-/** A count on a row or a dock item: a coral capsule ringed in the glass colour, so it reads as cut out of it. Decorative. */
+/**
+ * A count on a row or a dock item: a coral capsule ringed in [ring], the glass colour unless it sits on something else
+ * (the headers' Huddle pill), so it reads as cut out of it. Decorative.
+ */
 @Composable
-fun CountBadge(count: Int, modifier: Modifier = Modifier) {
+fun CountBadge(count: Int, modifier: Modifier = Modifier, ring: Color = MaterialTheme.colorScheme.surfaceContainer) {
     val brand = LocalBrandColors.current
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .clearAndSetSemantics {}
-            .background(MaterialTheme.colorScheme.surfaceContainer, CircleShape)
+            .background(ring, CircleShape)
             .padding(2.dp)
             .background(brand.highlight, CircleShape)
             .defaultMinSize(minWidth = 18.dp, minHeight = 18.dp)
@@ -563,16 +566,17 @@ fun MainTopBar(tab: DockTab, under: Boolean, backdrop: GlassBackdrop?, actions: 
                     }
                 }
                 val own = subcompose("actions") { Row(verticalAlignment = Alignment.CenterVertically, content = actions) }.map { it.measure(loose) }
-                val huddles = if (tab == DockTab.HUDDLE) null else listOf(true, false).associateWith { word ->
-                    subcompose("huddle $word") {
+                val buttons = own.sumOf { it.width }
+                val huddle = if (tab == DockTab.HUDDLE) emptyList() else {
+                    // Huddle with its word, measured only for its width: a copy never shown, so it runs no clocks of its own.
+                    val withWord = subcompose("huddle width") { CompositionLocalProvider(LocalLayerHeaded provides false) { HuddleButton(word = true) {} } }.sumOf { it.measure(loose).width }
+                    val word = huddleWord(constraints.maxWidth, titlePart.sumOf { it.maxIntrinsicWidth(constraints.maxHeight) }, buttons, withWord)
+                    subcompose("huddle") {
                         // Opened as Tools' Huddle row opens it (so on its name step until one is picked); Back comes back here.
                         val nav = LocalNavigator.current
                         HuddleButton(word) { nav.open(Page.Huddle, keepOrigin = true) }
                     }.map { it.measure(loose) }
                 }
-                val buttons = own.sumOf { it.width }
-                val word = huddles != null && huddleWord(constraints.maxWidth, titlePart.sumOf { it.maxIntrinsicWidth(constraints.maxHeight) }, buttons, huddles.getValue(true).sumOf { it.width })
-                val huddle = huddles?.getValue(word).orEmpty()
                 val end = buttons + huddle.sumOf { it.width }
                 // The title shortens (ending in "...") only once Huddle is down to its glyph and the line is still too short.
                 val shownTitle = titlePart.map { it.measure(loose.copy(maxWidth = (constraints.maxWidth - end).coerceAtLeast(0))) }
