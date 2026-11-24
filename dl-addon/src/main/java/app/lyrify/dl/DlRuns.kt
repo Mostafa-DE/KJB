@@ -8,6 +8,7 @@ import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlFile
 import app.lyrify.dl.api.DlInfo
 import app.lyrify.dl.api.DlMeta
+import app.lyrify.dl.api.DlPlaylist
 import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlRequest
 import app.lyrify.dl.api.DlSearch
@@ -17,6 +18,7 @@ import app.lyrify.dl.api.DlUpdate
 import app.lyrify.dl.api.PublicAddresses
 import app.lyrify.dl.api.isDownloadKey
 import app.lyrify.dl.api.isWebLink
+import app.lyrify.dl.api.playlistId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +40,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.InetAddress
+import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -442,7 +445,9 @@ class DlRuns(
 
     /**
      * Looks up [url] and returns the lookup's id at once: the quick info from [quickInfo] while yt-dlp gets the full info,
-     * which the quick one never follows.
+     * which the quick one never follows. A playlist's link has its songs listed, none of them opened; a song's link that
+     * names a playlist too (&list=, a Mix started from it) is the song, its playlist listed first and told with the quick
+     * info (a partial info) before the song's full info, which has it too.
      */
     fun info(url: String, events: InfoEvents): Long = lookup { id -> lookUp(id, url, events) }
 
@@ -484,18 +489,45 @@ class DlRuns(
         }
         val told = Any()
         var full = false
+        // The quick info and the playlist a song's link names, each told with the other once both are in.
+        var said: DlInfo? = null
+        var listed: DlPlaylist? = null
         val quick = launch {
             val info = quickInfo(url) ?: return@launch
-            synchronized(told) { if (!full) events.onInfo(info) }
+            synchronized(told) {
+                said = info
+                if (!full) events.onInfo(info.copy(playlist = listed ?: info.playlist))
+            }
         }
         if (!ytdlp.ready()) {
             quick.join()
             events.onFailed(DlEnd.Failed(DlFailure.ENGINE))
             return@coroutineScope
         }
-        val exit = answer(id, DlArgs::info, url)
+        val list = playlistId(url)
+        val songs = if (Info.isMix(list)) DlArgs.MIX_SONGS else DlArgs.PLAYLIST_SONGS
+        // A song's link that names a playlist too (watch?v=...&list=, youtu.be/<id>?list=, a Mix started from it) has the
+        // playlist listed first, so KJB can ask which is meant while the song's own info comes. One that cannot be listed (a
+        // private one, Liked music) leaves the song as it is, logged by its kind; a Mix yt-dlp cannot list answers with the
+        // song's own info. A link with a list and no song (/playlist, watch?list=, embed/videoseries) is the playlist's own.
+        var found: DlInfo? = null
+        if (list != null && URI(url).let { it.host?.lowercase() == "youtu.be" || it.rawQuery.orEmpty().split('&').any { field -> field.startsWith("v=") } }) {
+            val listing = answer(id, { DlArgs.info(it, songs, playlist = true) }, url)
+            if (listing is YtdlpExit.Failed) failure("lookup $id", listing)
+            val out = (listing as? YtdlpExit.Done)?.out
+            val playlist = out?.let(Info::playlist)?.copy(withSong = true)
+            if (playlist == null) {
+                found = out?.let { Info.full(url, it) }
+            } else {
+                synchronized(told) {
+                    listed = playlist
+                    events.onInfo((said ?: DlInfo(url, "", "", partial = true)).copy(playlist = playlist))
+                }
+            }
+        }
+        val exit = if (found == null) answer(id, { DlArgs.info(it, songs) }, url) else null
         quick.cancel()
-        val info = (exit as? YtdlpExit.Done)?.let { Info.full(url, it.out) }
+        val info = (found ?: (exit as? YtdlpExit.Done)?.let { Info.full(url, it.out) })?.let { it.copy(playlist = it.playlist ?: listed) }
         synchronized(told) {
             full = true
             when {

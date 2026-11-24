@@ -29,10 +29,16 @@ class DlLookupTest {
     private val calls = mutableListOf<String>()
 
     /**
-     * The add-on as KJB calls it: [dead] when its process went before the call; a search it takes is answered at once
-     * unless not [answers]; [asked] runs while KJB's call is under way (the main thread acting meanwhile).
+     * The add-on as KJB calls it: [dead] when its process went before the call; a lookup it takes tells [told] at once; a
+     * search it takes is answered at once unless not [answers]; [asked] runs while KJB's call is under way (the main
+     * thread acting meanwhile).
      */
-    private inner class FakePort(private val dead: Boolean = false, private val answers: Boolean = true, private val asked: () -> Unit = {}) : DlPort {
+    private inner class FakePort(
+        private val dead: Boolean = false,
+        private val told: List<DlInfo> = emptyList(),
+        private val answers: Boolean = true,
+        private val asked: () -> Unit = {},
+    ) : DlPort {
         override fun apiVersion(): Int = 1
 
         override fun status(): DlStatus = DlStatus()
@@ -40,6 +46,7 @@ class DlLookupTest {
         override fun info(url: String, events: DlLookupEvents): Long {
             if (dead) throw AddonDiedException()
             calls += "info"
+            told.forEach(events::onInfo)
             return 3
         }
 
@@ -124,6 +131,27 @@ class DlLookupTest {
 
         assertEquals(listOf(DlFailure.ENGINE), failures)
         assertEquals(listOf("unbind", "stopService"), calls)
+    }
+
+    @Test
+    fun `an add-on that dies before the full info fails the lookup as the engine, and one that told it first is not failed after`() = runTest {
+        val quick = DlInfo("https://video.example.com/w?v=abc123def45&list=PLq7", "Paper Lantern", "The Quiet Hours", partial = true)
+        val death = CompletableDeferred<Unit>()
+        val lookup = DlLookup { DlConnection.Open(session(FakePort(told = listOf(quick)), death = death)) }
+
+        assertEquals(AddonState.Ready, lookup.start(quick.url, events))
+        assertEquals(emptyList<DlFailure>(), failures)
+        // Its full info would have come through a callback that died with it: the sheet would say it looks it up for good,
+        // and a link that names a playlist, which waits for the add-on's answer, could never be saved.
+        death.complete(Unit)
+        assertEquals(listOf(DlFailure.ENGINE), failures)
+
+        val toldDeath = CompletableDeferred<Unit>()
+        val told = DlLookup { DlConnection.Open(session(FakePort(told = listOf(quick, quick.copy(partial = false))), death = toldDeath)) }
+        told.start(quick.url, events)
+        toldDeath.complete(Unit)
+
+        assertEquals("the full info is the lookup's answer", listOf(DlFailure.ENGINE), failures)
     }
 
     // The add-on's service, stopped only by the last of KJB's sessions to let go of it

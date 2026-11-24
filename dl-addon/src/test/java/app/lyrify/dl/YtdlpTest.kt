@@ -7,6 +7,7 @@ import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlRequest
 import app.lyrify.dl.api.DlStage
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -143,6 +144,31 @@ class YtdlpTest {
         assertEquals("--", video.last())
     }
 
+    @Test
+    fun `a run is one video, so a playlist's link downloads at most its first song, under its own name`() {
+        listOf(DlRequest("k1", "https://www.youtube.com/playlist?list=PLq7", DlKind.AUDIO), DlRequest("k2", "https://www.youtube.com/playlist?list=PLq7", DlKind.VIDEO)).forEach { request ->
+            val args = DlArgs.forRun(request, File("/data/dl/${request.key}"))
+            // A song's link with &list= is the song; any list (a playlist's link, a post of several videos on any site) gives
+            // its first item only, so one file is made and its tags are its own. KJB saves a playlist song by song.
+            assertTrue(args.toString(), "--no-playlist" in args)
+            assertEquals("1", args[args.indexOf("--playlist-items") + 1])
+            assertFalse(args.toString(), "--flat-playlist" in args)
+            assertEquals("--", args.last())
+        }
+    }
+
+    @Test
+    fun `a lookup lists a playlist's songs without opening them, at most as many as asked, and a song's link is the song or its playlist`() {
+        assertEquals(
+            listOf("-J", "--no-playlist", "--flat-playlist", "--playlist-items", ":200", "--socket-timeout", "30", "-o", "/data/lookup/4/%(id)s", "--"),
+            DlArgs.info("/data/lookup/4/", DlArgs.PLAYLIST_SONGS),
+        )
+        assertEquals(
+            listOf("-J", "--yes-playlist", "--flat-playlist", "--playlist-items", ":50", "--socket-timeout", "30", "-o", "/data/lookup/4/%(id)s", "--"),
+            DlArgs.info("/data/lookup/4/", DlArgs.MIX_SONGS, playlist = true),
+        )
+    }
+
     // Its lines
 
     @Test
@@ -194,6 +220,21 @@ class YtdlpTest {
             "ERROR: [youtube] Zq9kXw3Lm0A: nsig extraction failed: You may experience throttling" to YtdlpError(DlFailure.SITE_CHANGED, "nsig", "youtube"),
             "ERROR: Unsupported URL: https://made-up.example.test/page" to YtdlpError(DlFailure.NOT_FOUND, "unsupported-url", null),
             "ERROR: [generic] something new" to YtdlpError(DlFailure.UNKNOWN, null, "generic"),
+        ).forEach { (err, error) -> assertEquals(err, error, YtdlpLines.diagnose(err)) }
+    }
+
+    @Test
+    fun `a playlist no one but its owner can list is told apart from a video that is gone`() {
+        mapOf(
+            // Liked music, a private playlist and a deleted one: yt-dlp 2026.11.23's words, YouTube's after "YouTube said".
+            "ERROR: [youtube:tab] LM: YouTube said: The playlist does not exist." to YtdlpError(DlFailure.PRIVATE_PLAYLIST, "playlist-missing", "youtube:tab"),
+            "ERROR: [youtube:tab] PLq7: YouTube said: This playlist is private." to YtdlpError(DlFailure.PRIVATE_PLAYLIST, "playlist-private", "youtube:tab"),
+            "ERROR: [youtube:tab] RDabc123def45: YouTube said: This playlist type is unviewable." to YtdlpError(DlFailure.PRIVATE_PLAYLIST, "playlist-unviewable", "youtube:tab"),
+            "ERROR: [youtube:tab] PLq7: The channel/playlist does not exist and the URL redirected to youtube.com home page" to
+                YtdlpError(DlFailure.PRIVATE_PLAYLIST, "playlist-missing", "youtube:tab"),
+            // A video, still.
+            "ERROR: [youtube] abc123def45: Video unavailable. This video does not exist" to YtdlpError(DlFailure.NOT_FOUND, "unavailable", "youtube"),
+            "ERROR: [soundcloud] 1234: This track does not exist" to YtdlpError(DlFailure.NOT_FOUND, "not-exist", "soundcloud"),
         ).forEach { (err, error) -> assertEquals(err, error, YtdlpLines.diagnose(err)) }
     }
 

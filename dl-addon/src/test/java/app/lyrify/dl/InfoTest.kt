@@ -1,6 +1,7 @@
 package app.lyrify.dl
 
 import app.lyrify.dl.api.DlInfo
+import app.lyrify.dl.api.DlPlaylist
 import app.lyrify.dl.api.DlSearchResult
 import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.VideoChoice
@@ -197,5 +198,102 @@ class InfoTest {
         assertEquals("https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fmusic.youtube.com%2Fwatch%3Fv%3Dabc", Info.oembedUrl("https://music.youtube.com/watch?v=abc"))
         assertNull(Info.oembedUrl("https://video.example.com/watch?v=abc"))
         assertNull(Info.oembedUrl("https://notyoutube.com.example.org/v"))
+    }
+
+    // Playlists (IDlAddon VERSION 2)
+
+    /**
+     * yt-dlp 2026.11.23's answer to a lookup of a public playlist's link (`-J --no-playlist --flat-playlist
+     * --playlist-items :200`), recorded on 2026-11-24, every name, id and address in it then made up (test resources
+     * ytdlp/flat-*.json): the album and the Mix recorded with `--playlist-items :3`, so they stay small.
+     */
+    private fun recorded(name: String): String = javaClass.getResource("/ytdlp/flat-$name-2026.11.23.json")!!.readText()
+
+    private fun cover(id: String, made: Int) = "https://i.ytimg.com/vi/$id/hqdefault.jpg?sqp=madeup$made"
+
+    private val quickChoices = listOf(VideoChoice(null, ""), VideoChoice(1080, "1080p"), VideoChoice(720, "720p"), VideoChoice(480, "480p"))
+
+    @Test
+    fun `a playlist's link is the playlist, its songs listed in its order and none of them opened`() {
+        val url = "https://www.youtube.com/playlist?list=PLq7LanternHarbourQuietHours3xYzW"
+        val songs = listOf(
+            DlSearchResult("https://www.youtube.com/watch?v=ghi789jkl01", "Paper Lantern", "Paper Harbour", 517, cover("ghi789jkl01", 8)),
+            DlSearchResult("https://www.youtube.com/watch?v=mno234pqr56", "Low Tide Lights", "Paper Harbour", 363, cover("mno234pqr56", 12)),
+            DlSearchResult("https://www.youtube.com/watch?v=stu567vwx89", "Glass Tide", "Paper Harbour", 163, cover("stu567vwx89", 16)),
+            DlSearchResult("https://www.youtube.com/watch?v=yza890bcd12", "Neon Orchard", "Paper Harbour", 154, cover("yza890bcd12", 20)),
+        )
+
+        assertEquals(
+            // Its name and owner, its own cover (the smallest at least 320 wide), its songs' length together, and the quick
+            // video choices: no video was opened, so there are no sizes.
+            DlInfo(url, "Harbour Nights", "Paper Harbour", 1197, cover("ghi789jkl01", 4), partial = false, choices = quickChoices, playlist = DlPlaylist("Harbour Nights", songs)),
+            Info.full(url, recorded("playlist")),
+        )
+    }
+
+    @Test
+    fun `an album longer than what was listed says how many more songs it has, and one with no owner has none`() {
+        val url = "https://music.youtube.com/playlist?list=OLAK5uy_m4dEuPpAperHarbourAlbum000000000"
+
+        val album = Info.full(url, recorded("album"))!!
+
+        assertEquals("Album - Paper Harbour (50 Songs)", album.title)
+        assertEquals("", album.artist)
+        assertEquals(268 + 227 + 239, album.durationSec)
+        assertEquals("https://i9.ytimg.com/s_p/OLAK5uy_m4dEuPpAperHarbourAlbum000000000/sddefault.jpg?sqp=madeup2", album.thumbnail)
+        val playlist = album.playlist!!
+        assertEquals(47, playlist.more)
+        assertFalse(playlist.mix)
+        // YouTube Music's own links, and the channel as YouTube names it.
+        assertEquals(
+            listOf(
+                DlSearchResult("https://music.youtube.com/watch?v=klm678nop90", "Paper Lantern", "The Quiet Hours - Topic", 268, cover("klm678nop90", 6)),
+                DlSearchResult("https://music.youtube.com/watch?v=qrs901tuv23", "Low Tide Lights", "The Quiet Hours - Topic", 227, cover("qrs901tuv23", 10)),
+                DlSearchResult("https://music.youtube.com/watch?v=wxy234zab56", "Glass Tide", "The Quiet Hours - Topic", 239, cover("wxy234zab56", 14)),
+            ),
+            playlist.songs,
+        )
+    }
+
+    @Test
+    fun `a Mix is a playlist with no end, its cover its first song's`() {
+        val songs = listOf(
+            DlSearchResult("https://www.youtube.com/watch?v=abc123def45", "The Quiet Hours - Paper Lantern (Official Video)", "The Quiet Hours", 214, cover("abc123def45", 4)),
+            DlSearchResult("https://www.youtube.com/watch?v=efg345hij67", "Mira Solen - Paper Harbour (Live at Glass Hall, 1985)", "Mira Solen Official", 198, cover("efg345hij67", 8)),
+            DlSearchResult("https://www.youtube.com/watch?v=cde456fgh78", "Saffron Coast - Low Tide Lights (Harbour Festival 1979)", "Saffron Coast", 270, cover("cde456fgh78", 12)),
+        )
+
+        // No count of its own: nothing more to say than its songs.
+        assertEquals(DlPlaylist("Mix - The Quiet Hours - Paper Lantern (Official Video)", songs, more = 0, mix = true), Info.playlist(recorded("mix")))
+        assertEquals(cover("abc123def45", 4), Info.full("https://www.youtube.com/watch?v=abc123def45&list=RDabc123def45", recorded("mix"))!!.thumbnail)
+    }
+
+    @Test
+    fun `a video's own info is no playlist`() {
+        val video = json("title" to "Paper Lantern", "uploader" to "The Quiet Hours", "duration" to 214)
+        assertNull(Info.playlist(video))
+        assertNull(Info.full("https://www.youtube.com/watch?v=abc123def45&list=PLq7", video)!!.playlist)
+        assertNull(Info.playlist("not json"))
+    }
+
+    @Test
+    fun `a playlist's own link has quick info that says so, its songs still to come, and a song's link has none`() {
+        val answer = json("title" to "Album - Paper Harbour", "author_name" to "The Quiet Hours - Topic", "thumbnail_url" to "https://i.ytimg.com/vi/klm678nop90/hqdefault.jpg")
+
+        val album = Info.oembed("https://music.youtube.com/playlist?list=OLAK5uy_m4dEuPpAperHarbourAlbum000000000&si=x9", answer)!!
+        val song = Info.oembed("https://www.youtube.com/watch?v=abc123def45&list=PLq7LanternHarbourQuietHours3xYzW", answer)!!
+
+        assertTrue(album.partial)
+        assertEquals(DlPlaylist("Album - Paper Harbour"), album.playlist)
+        assertNull(song.playlist)
+    }
+
+    @Test
+    fun `a Mix's list starts with RD, but YouTube Music's own playlists, which end`() {
+        assertTrue(Info.isMix("RDabc123def45"))
+        assertTrue(Info.isMix("RDAMVMabc123def45"))
+        assertFalse(Info.isMix("RDCLAK5uy_m4dEuPpAperHarbourPlaylist00"))
+        assertFalse(Info.isMix("PLq7"))
+        assertFalse(Info.isMix(null))
     }
 }

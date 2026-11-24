@@ -1,0 +1,160 @@
+{
+ "id": "RDabc123def45",
+ "title": "Mix - The Quiet Hours - Paper Lantern (Official Video)",
+ "_type": "playlist",
+ "entries": [
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "abc123def45",
+   "url": "https://www.youtube.com/watch?v=abc123def45",
+   "title": "The Quiet Hours - Paper Lantern (Official Video)",
+   "description": null,
+   "duration": 214,
+   "channel_id": "UCcccccccccccccccccccccc",
+   "channel": "The Quiet Hours",
+   "channel_url": "https://www.youtube.com/channel/UCcccccccccccccccccccccc",
+   "uploader": "The Quiet Hours",
+   "uploader_id": null,
+   "uploader_url": null,
+   "thumbnails": [
+    {
+     "url": "https://i.ytimg.com/vi/abc123def45/hqdefault.jpg?sqp=madeup1",
+     "height": 94,
+     "width": 168
+    },
+    {
+     "url": "https://i.ytimg.com/vi/abc123def45/hqdefault.jpg?sqp=madeup2",
+     "height": 110,
+     "width": 196
+    },
+    {
+     "url": "https://i.ytimg.com/vi/abc123def45/hqdefault.jpg?sqp=madeup3",
+     "height": 138,
+     "width": 246
+    },
+    {
+     "url": "https://i.ytimg.com/vi/abc123def45/hqdefault.jpg?sqp=madeup4",
+     "height": 188,
+     "width": 336
+    }
+   ],
+   "timestamp": null,
+   "release_timestamp": null,
+   "availability": null,
+   "view_count": null,
+   "live_status": null,
+   "channel_is_verified": null,
+   "__x_forwarded_for_ip": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "efg345hij67",
+   "url": "https://www.youtube.com/watch?v=efg345hij67",
+   "title": "Mira Solen - Paper Harbour (Live at Glass Hall, 1985)",
+   "description": null,
+   "duration": 198,
+   "channel_id": "UCdddddddddddddddddddddd",
+   "channel": "Mira Solen Official",
+   "channel_url": "https://www.youtube.com/channel/UCdddddddddddddddddddddd",
+   "uploader": "Mira Solen Official",
+   "uploader_id": null,
+   "uploader_url": null,
+   "thumbnails": [
+    {
+     "url": "https://i.ytimg.com/vi/efg345hij67/hqdefault.jpg?sqp=madeup5",
+     "height": 94,
+     "width": 168
+    },
+    {
+     "url": "https://i.ytimg.com/vi/efg345hij67/hqdefault.jpg?sqp=madeup6",
+     "height": 110,
+     "width": 196
+    },
+    {
+     "url": "https://i.ytimg.com/vi/efg345hij67/hqdefault.jpg?sqp=madeup7",
+     "height": 138,
+     "width": 246
+    },
+    {
+     "url": "https://i.ytimg.com/vi/efg345hij67/hqdefault.jpg?sqp=madeup8",
+     "height": 188,
+     "width": 336
+    }
+   ],
+   "timestamp": null,
+   "release_timestamp": null,
+   "availability": null,
+   "view_count": null,
+   "live_status": null,
+   "channel_is_verified": null,
+   "__x_forwarded_for_ip": null
+  },
+  {
+   "_type": "url",
+   "ie_key": "Youtube",
+   "id": "cde456fgh78",
+   "url": "https://www.youtube.com/watch?v=cde456fgh78",
+   "title": "Saffron Coast - Low Tide Lights (Harbour Festival 1979)",
+   "description": null,
+   "duration": 270,
+   "channel_id": "UCeeeeeeeeeeeeeeeeeeeeee",
+   "channel": "Saffron Coast",
+   "channel_url": "https://www.youtube.com/channel/UCeeeeeeeeeeeeeeeeeeeeee",
+   "uploader": "Saffron Coast",
+   "uploader_id": null,
+   "uploader_url": null,
+   "thumbnails": [
+    {
+     "url": "https://i.ytimg.com/vi/cde456fgh78/hqdefault.jpg?sqp=madeup9",
+     "height": 94,
+     "width": 168
+    },
+    {
+     "url": "https://i.ytimg.com/vi/cde456fgh78/hqdefault.jpg?sqp=madeup10",
+     "height": 110,
+     "width": 196
+    },
+    {
+     "url": "https://i.ytimg.com/vi/cde456fgh78/hqdefault.jpg?sqp=madeup11",
+     "height": 138,
+     "width": 246
+    },
+    {
+     "url": "https://i.ytimg.com/vi/cde456fgh78/hqdefault.jpg?sqp=madeup12",
+     "height": 188,
+     "width": 336
+    }
+   ],
+   "timestamp": null,
+   "release_timestamp": null,
+   "availability": null,
+   "view_count": null,
+   "live_status": null,
+   "channel_is_verified": null,
+   "__x_forwarded_for_ip": null
+  }
+ ],
+ "webpage_url": "https://www.youtube.com/watch?v=abc123def45&list=RDabc123def45",
+ "original_url": "https://www.youtube.com/watch?v=abc123def45&list=RDabc123def45",
+ "webpage_url_basename": "watch",
+ "webpage_url_domain": "youtube.com",
+ "extractor": "youtube:tab",
+ "extractor_key": "YoutubeTab",
+ "release_year": null,
+ "requested_entries": [
+  1,
+  2,
+  3
+ ],
+ "playlist_count": null,
+ "epoch": 1795524572,
+ "__files_to_move": {},
+ "_version": {
+  "version": "2026.11.23",
+  "current_git_head": null,
+  "release_git_head": "696c0673e9e06bf50514a11e6796644771ce330e",
+  "repository": "yt-dlp/yt-dlp"
+ }
+}

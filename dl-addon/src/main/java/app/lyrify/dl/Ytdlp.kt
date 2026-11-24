@@ -204,18 +204,41 @@ object DlArgs {
 
     /**
      * A run's arguments: [request]'s, writing into [dir] (the key's own folder, also the marker [Ytdlp.kill] finds its
-     * processes by). An audio run keeps its cover (the cropped JPG) and prints its tags into [META_FILE] for KJB. "--" ends
+     * processes by). An audio run keeps its cover (the cropped JPG) and prints its tags into [META_FILE] for KJB. A run is
+     * one video: of any list (a playlist's link, a post of several videos) only its first item, so it makes one file with
+     * its own tags, never one song under another's name (KJB saves a playlist song by song, each its own run). "--" ends
      * the options, so the link can never be read as one.
      */
     fun forRun(request: DlRequest, dir: File): List<String> {
         val base = if (request.kind == DlKind.AUDIO) audio(request.audio, request.originalLanguage) else video(request.height, request.originalLanguage)
         val named = base.mapIndexed { index, arg -> if (index > 0 && base[index - 1] == "-o") "${dir.path}/$arg" else arg }
         val kept = if (request.kind == DlKind.AUDIO) listOf("--write-thumbnail", "--print-to-file", "after_move:$META", "${dir.path}/$META_FILE") else emptyList()
-        return named + listOf("--no-mtime", "--newline", "--socket-timeout", SOCKET_TIMEOUT) + kept + "--"
+        return named + listOf("--playlist-items", "1", "--no-mtime", "--newline", "--socket-timeout", SOCKET_TIMEOUT) + kept + "--"
     }
 
-    /** A lookup's arguments: the full info as JSON. [marker] (in its -o, which -J never writes) names its process. */
-    fun info(marker: String): List<String> = listOf("-J", "--no-playlist", "--socket-timeout", SOCKET_TIMEOUT, "-o", "$marker%(id)s", "--")
+    /**
+     * A lookup's arguments: the full info as JSON, a playlist's songs listed and none of them opened (--flat-playlist), at
+     * most [songs] of them. A song's link that names a playlist too (&list=) is the song, or with [playlist] the
+     * playlist. [marker] (in its -o, which -J never writes) names its process.
+     */
+    fun info(marker: String, songs: Int, playlist: Boolean = false): List<String> = listOf(
+        "-J",
+        if (playlist) "--yes-playlist" else "--no-playlist",
+        "--flat-playlist",
+        "--playlist-items",
+        ":$songs",
+        "--socket-timeout",
+        SOCKET_TIMEOUT,
+        "-o",
+        "$marker%(id)s",
+        "--",
+    )
+
+    /** The songs a lookup lists of a playlist: about 10 hours of music, and at most what KJB's list of downloads keeps. */
+    const val PLAYLIST_SONGS: Int = 200
+
+    /** Of a Mix, which has no end: a few hours of music. */
+    const val MIX_SONGS: Int = 50
 
     /**
      * A search's arguments: YouTube's list as JSON, its videos never opened (--flat-playlist), so only the search itself is
@@ -264,8 +287,9 @@ object YtdlpLines {
     private fun patterns(vararg pairs: Pair<String, String>): List<Pattern> = pairs.map { (key, text) -> Pattern(key, text) }
 
     /**
-     * Each kind's patterns, in the order the kinds are read: a full phone first, then no network, then no video, then a
-     * site that refuses this network or client (a VPN's address), then a site that changed.
+     * Each kind's patterns, in the order the kinds are read: a full phone first, then no network, then a playlist no one
+     * but its owner can list (before no video: both say "does not exist"), then no video, then a site that refuses this
+     * network or client (a VPN's address), then a site that changed.
      */
     private val KINDS: List<Pair<DlFailure, List<Pattern>>> = listOf(
         DlFailure.NO_ROOM to patterns("no-space" to "no space left", "enospc" to "enospc", "errno-28" to "errno 28"),
@@ -273,6 +297,9 @@ object YtdlpLines {
             "errno-7" to "errno 7]", "errno-101" to "errno 101]", "errno-110" to "errno 110]", "errno-111" to "errno 111]",
             "unreachable" to "network is unreachable", "no-address" to "no address associated", "name-resolution" to "temporary failure in name resolution",
             "timed-out" to "timed out", "resolve" to "failed to resolve", "reset" to "connection reset", "closed" to "remote end closed connection",
+        ),
+        DlFailure.PRIVATE_PLAYLIST to patterns(
+            "playlist-missing" to "playlist does not exist", "playlist-private" to "playlist is private", "playlist-unviewable" to "playlist type is unviewable",
         ),
         DlFailure.NOT_FOUND to patterns(
             "unavailable" to "video unavailable", "private" to "private video", "unsupported-url" to "unsupported url", "unavailable" to "this video is unavailable",

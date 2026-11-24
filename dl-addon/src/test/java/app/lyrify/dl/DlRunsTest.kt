@@ -9,6 +9,7 @@ import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlFile
 import app.lyrify.dl.api.DlInfo
 import app.lyrify.dl.api.DlKind
+import app.lyrify.dl.api.DlPlaylist
 import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlRequest
 import app.lyrify.dl.api.DlSearch
@@ -839,6 +840,178 @@ class DlRunsTest {
 
         assertTrue(ytdlp.calls.last().startsWith("kill "))
         assertTrue(ytdlp.live.isEmpty())
+    }
+
+    // A playlist's link (IDlAddon VERSION 2)
+
+    /** yt-dlp's -J of a flat playlist (InfoTest has a recorded one): two songs of a list, named [id]. */
+    private fun listed(id: String) = """{"id":"$id","title":"Harbour Nights","_type":"playlist","playlist_count":2,"uploader":"Paper Harbour","entries":[""" +
+        """{"_type":"url","ie_key":"Youtube","id":"abc123def45","url":"https://www.youtube.com/watch?v=abc123def45","title":"Paper Lantern","duration":214,"channel":"Paper Harbour"},""" +
+        """{"_type":"url","ie_key":"Youtube","id":"ghi789jkl01","url":"https://www.youtube.com/watch?v=ghi789jkl01","title":"Glass Tide","duration":163,"channel":"Paper Harbour"}],"extractor":"youtube:tab"}"""
+
+    private val twoSongs = listOf(
+        DlSearchResult("https://www.youtube.com/watch?v=abc123def45", "Paper Lantern", "Paper Harbour", 214),
+        DlSearchResult("https://www.youtube.com/watch?v=ghi789jkl01", "Glass Tide", "Paper Harbour", 163),
+    )
+
+    @Test
+    fun `a playlist's link is looked up once, its songs listed and none of them opened`() = runTest {
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        val looked = Looked()
+
+        runs().info("https://www.youtube.com/playlist?list=PLq7", looked)
+        runCurrent()
+
+        assertEquals(DlPlaylist("Harbour Nights", twoSongs), looked.infos.single().playlist)
+        assertEquals(377, looked.infos.single().durationSec)
+        val args = ytdlp.argLists.single()
+        assertTrue(args.toString(), args.containsAll(listOf("-J", "--no-playlist", "--flat-playlist")))
+        assertEquals(":200", args[args.indexOf("--playlist-items") + 1])
+        // A lookup never updates yt-dlp, more than a day old here.
+        assertEquals(listOf("run"), ytdlp.calls)
+    }
+
+    @Test
+    fun `a link that names a list and no song is the playlist's own, looked up once and never asked about`() = runTest {
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        val runs = runs()
+        val watch = Looked()
+        val embed = Looked()
+
+        runs.info("https://www.youtube.com/watch?list=PLq7", watch)
+        runCurrent()
+        runs.info("https://www.youtube.com/embed/videoseries?list=PLq7", embed)
+        runCurrent()
+
+        // No "Just this song" for a link with no song: it would save the playlist's link as one download.
+        listOf(watch, embed).forEach { looked -> assertEquals(listOf(DlPlaylist("Harbour Nights", twoSongs)), looked.infos.map { it.playlist }) }
+        assertEquals(2, ytdlp.argLists.size)
+        assertTrue(ytdlp.argLists.toString(), ytdlp.argLists.all { "--no-playlist" in it })
+    }
+
+    @Test
+    fun `a song's short link that names a playlist is the song, its playlist listed first`() = runTest {
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        ytdlp.scripts += Script.Hang()
+        val looked = Looked()
+
+        runs().info("https://youtu.be/abc123def45?list=PLq7&si=x9", looked)
+        runCurrent()
+
+        assertEquals(listOf(DlPlaylist("Harbour Nights", twoSongs, withSong = true)), looked.infos.map { it.playlist })
+        assertTrue(ytdlp.argLists.first().toString(), "--yes-playlist" in ytdlp.argLists.first())
+    }
+
+    @Test
+    fun `a song's link that names a playlist has it listed first, told with the quick info while the song is looked up`() = runTest {
+        quick = { DlInfo(it, "Paper Lantern", "The Quiet Hours", partial = true) }
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        ytdlp.scripts += Script.Hang()
+        val looked = Looked()
+        val url = "https://www.youtube.com/watch?v=abc123def45&list=PLq7&index=2"
+
+        runs().info(url, looked)
+        runCurrent()
+
+        // KJB can ask which is meant before the song's own info is in.
+        val playlist = DlPlaylist("Harbour Nights", twoSongs, withSong = true)
+        assertEquals(listOf(null, playlist), looked.infos.map { it.playlist })
+        assertEquals("Paper Lantern", looked.infos.last().title)
+        assertTrue(looked.infos.all { it.partial })
+        val list = ytdlp.argLists.first()
+        assertTrue(list.toString(), "--yes-playlist" in list && "--flat-playlist" in list)
+        assertEquals(":200", list[list.indexOf("--playlist-items") + 1])
+
+        ytdlp.live.values.single().complete(YtdlpExit.Done(fullInfo))
+        runCurrent()
+
+        val info = looked.infos.last()
+        assertEquals("The Quiet Hours" to "Paper Lantern", info.artist to info.title)
+        assertEquals(214, info.durationSec)
+        assertFalse(info.partial)
+        assertEquals(playlist, info.playlist)
+        assertTrue(ytdlp.argLists.last().toString(), "--no-playlist" in ytdlp.argLists.last())
+        assertEquals(listOf(url, url), ytdlp.targets)
+    }
+
+    @Test
+    fun `a song's playlist listed before any quick info is told with the link alone, and quick info after it keeps it`() = runTest {
+        val late = CompletableDeferred<Unit>()
+        quick = {
+            late.await()
+            DlInfo(it, "Paper Lantern", "The Quiet Hours", partial = true)
+        }
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        ytdlp.scripts += Script.Hang()
+        val looked = Looked()
+
+        runs().info("https://www.youtube.com/watch?v=abc123def45&list=PLq7", looked)
+        runCurrent()
+        late.complete(Unit)
+        runCurrent()
+
+        val playlist = DlPlaylist("Harbour Nights", twoSongs, withSong = true)
+        assertEquals(listOf(playlist, playlist), looked.infos.map { it.playlist })
+        assertEquals(listOf("", "Paper Lantern"), looked.infos.map { it.title })
+        assertTrue(looked.infos.all { it.partial })
+    }
+
+    @Test
+    fun `a Mix is listed to its first 50 songs, from a song's link or its own`() = runTest {
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("RDabc123def45")))
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(fullInfo))
+        // YouTube today calls a Mix's own link "unviewable" (a private playlist's sentence); one listed is a Mix all the same.
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("RDabc123def45")))
+        val runs = runs()
+        val looked = Looked()
+        val own = Looked()
+
+        runs.info("https://music.youtube.com/watch?v=abc123def45&list=RDAMVMabc123def45", looked)
+        runCurrent()
+        runs.info("https://www.youtube.com/playlist?list=RDabc123def45", own)
+        runCurrent()
+
+        assertEquals(DlPlaylist("Harbour Nights", twoSongs, mix = true, withSong = true), looked.infos.last().playlist)
+        assertEquals(DlPlaylist("Harbour Nights", twoSongs, mix = true), own.infos.single().playlist)
+        assertEquals(listOf(":50", ":50", ":50"), ytdlp.argLists.map { it[it.indexOf("--playlist-items") + 1] })
+    }
+
+    @Test
+    fun `a song's playlist that cannot be listed leaves the song as it is, and the log names only why`() = runTest {
+        ytdlp.scripts += Script.Fail("ERROR: [youtube:tab] PLq7secret: YouTube said: The playlist does not exist.")
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(fullInfo))
+        // yt-dlp's own way with a Mix it cannot list on a song's link: the song's own info, so it is looked up once.
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(fullInfo))
+        val runs = runs()
+        val failed = Looked()
+        val song = Looked()
+
+        val lookup = runs.info("https://www.youtube.com/watch?v=abc123def45&list=PLq7secret", failed)
+        runCurrent()
+        runs.info("https://www.youtube.com/watch?v=abc123def45&list=RDabc123def45", song)
+        runCurrent()
+
+        listOf(failed, song).forEach { looked ->
+            assertNull(looked.failed)
+            assertEquals(214, looked.infos.single().durationSec)
+            assertNull(looked.infos.single().playlist)
+        }
+        assertEquals(3, ytdlp.argLists.size)
+        assertTrue(logs.toString(), "lookup $lookup: yt-dlp failed (PRIVATE_PLAYLIST, matched playlist-missing, extractor youtube:tab)" in logs)
+        assertTrue(logs.toString(), logs.none { "PLq7secret" in it || "abc123def45" in it })
+    }
+
+    @Test
+    fun `a playlist's own link that no one but its owner can list fails as such, with no update or second look`() = runTest {
+        ytdlp.scripts += Script.Fail("ERROR: [youtube:tab] LM: YouTube said: The playlist does not exist.")
+        val looked = Looked()
+
+        runs().info("https://music.youtube.com/playlist?list=LM", looked)
+        runCurrent()
+
+        assertEquals(DlEnd.Failed(DlFailure.PRIVATE_PLAYLIST), looked.failed)
+        assertEquals(listOf("run"), ytdlp.calls)
     }
 
     // Searching YouTube (IDlAddon VERSION 2)

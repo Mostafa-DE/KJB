@@ -8,6 +8,7 @@ import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlFile
 import app.lyrify.dl.api.DlKind
+import app.lyrify.dl.api.DlSearchResult
 import app.lyrify.dl.api.isWebLink
 import app.lyrify.dupes.AudioFile
 import app.lyrify.dupes.Confidence
@@ -95,6 +96,9 @@ enum class DownloadFailure {
             DlFailure.OFFLINE -> OFFLINE
             DlFailure.NOT_FOUND -> NOT_FOUND
             DlFailure.SITE_CHANGED -> if (end.updated) SITE_CHANGED else SITE_CHANGED_NEWEST
+            // Only a playlist's own link queued as one download meets it in a run: one an older KJB queued, or one saved
+            // before its lookup said it is a playlist.
+            DlFailure.PRIVATE_PLAYLIST -> NOT_FOUND
             DlFailure.BLOCKED -> BLOCKED
             DlFailure.NO_ROOM -> NO_ROOM
             DlFailure.HAND_OFF -> HAND_OFF
@@ -130,6 +134,7 @@ sealed interface DownloadState {
 /**
  * One download: what was asked ([url], audio at [audio] quality or video up to [height], the original language), what
  * the sheet showed of it, and where it stands. [key] is its id here and in the add-on, the same for every try.
+ * [playlist]: the playlist it was saved from, song by song; null for a song saved alone, as every download was before.
  */
 @Serializable
 data class DownloadItem(
@@ -145,8 +150,31 @@ data class DownloadItem(
     val durationSec: Int,
     val addedAt: Long,
     val state: DownloadState,
+    val playlist: DownloadPlaylist? = null,
 ) {
     val active: Boolean get() = state == DownloadState.Queued || state == DownloadState.Running
+}
+
+/**
+ * A playlist saved song by song (the save sheet's Save all), each song a download of its own that names it: its [key],
+ * one for each save, and its [title] as YouTube names it.
+ */
+@Serializable
+data class DownloadPlaylist(val key: String, val title: String) {
+    /** How far its songs on the list got: [saved], not saved ([failed]), of all of them ([total]). */
+    data class Count(val saved: Int, val failed: Int, val total: Int) {
+        /** Still to come: waiting, or under way. */
+        val active: Int get() = total - saved - failed
+    }
+
+    /** Its songs among [items], counted. */
+    fun count(items: List<DownloadItem>): Count {
+        val songs = items.filter { it.playlist?.key == key }
+        return Count(songs.count { it.state is DownloadState.Done }, songs.count { it.state is DownloadState.Failed }, songs.size)
+    }
+
+    /** The keys of its songs among [items] still to come, which its Cancel stops: never one saved, nor one not saved. */
+    fun rest(items: List<DownloadItem>): List<String> = items.filter { it.active && it.playlist?.key == key }.map { it.key }
 }
 
 /** Settings > Downloads (VidGrab's settings that still mean something in KJB). */
@@ -168,6 +196,31 @@ data class DownloadSettings(
 
 /** What `downloads.json` holds: the settings and the downloads, newest first. */
 data class DownloadsMemory(val settings: DownloadSettings = DownloadSettings(), val items: List<DownloadItem> = emptyList()) {
+    /**
+     * [songs] queued as downloads of [kind] (audio at [audio], else Settings' quality; a video up to [height]), each one of
+     * its own with its own [key], added [now], of [playlist] when they are one's. The queue runs the oldest first, so they
+     * run after those waiting already, in their order.
+     */
+    fun queue(songs: List<DlSearchResult>, kind: DlKind, height: Int?, audio: AudioQuality?, playlist: DownloadPlaylist?, now: Long, key: () -> String): DownloadsMemory {
+        val added = songs.map { song ->
+            DownloadItem(key(), song.url, kind, audio ?: settings.audioQuality, height, settings.originalLanguage, song.title, song.channel, song.thumbnail, song.durationSec, now, DownloadState.Queued, playlist)
+        }
+        return copy(items = added + items)
+    }
+
+    /** The queued download to run next: the oldest, and of songs added together the first. Null when none waits. */
+    fun next(): DownloadItem? = items.filter { it.state == DownloadState.Queued }.minByOrNull { it.addedAt }
+
+    /**
+     * What Cancel on [key] stops: that download while it is still to come, and with [rest] its playlist's songs still to
+     * come (the playlist's Cancel, and the notification's, which may still name a song that just ended). Never one that
+     * ended: saved or not, it stays on the list.
+     */
+    fun cancelling(key: String, rest: Boolean): Set<String> {
+        val playlist = items.firstOrNull { it.key == key }?.playlist?.takeIf { rest }
+        return items.filter { it.key == key && it.active }.map { it.key }.toSet() + playlist?.rest(items).orEmpty()
+    }
+
     /** Every download under way, and the newest [HISTORY] of the rest (VidGrab kept 200 in its Finished list). */
     fun capped(): DownloadsMemory {
         val kept = items.filterNot { it.active }.sortedByDescending { it.addedAt }.take(HISTORY).toSet()

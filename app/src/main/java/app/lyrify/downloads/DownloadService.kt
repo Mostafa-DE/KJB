@@ -28,6 +28,7 @@ import app.lyrify.addon.KjbAddons
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlKind
 import app.lyrify.dl.api.DlProgress
+import app.lyrify.dl.api.DlSearchResult
 import app.lyrify.dl.api.DlStage
 import app.lyrify.dupes.AudioFile
 import app.lyrify.dupes.LibraryRead
@@ -136,32 +137,38 @@ object Downloads {
     }
 
     /**
-     * A new download, queued and started from KJB's foreground service; its key. [audio] is the quality the sheet picked,
-     * else Settings' ([DownloadSettings.audioQuality]).
+     * New downloads, one for each of [songs] (a song, or the songs of a playlist the sheet ticked), queued and started from
+     * KJB's foreground service. [audio] is the quality the sheet picked, else Settings' ([DownloadSettings.audioQuality]).
+     * [playlist]: the playlist's title, when they are its songs, counted together ([DownloadPlaylist]).
      */
-    fun add(context: Context, url: String, kind: DlKind, height: Int?, title: String, artist: String, thumbnail: String?, durationSec: Int, audio: AudioQuality? = null): String {
+    fun add(context: Context, songs: List<DlSearchResult>, kind: DlKind, height: Int?, audio: AudioQuality? = null, playlist: String? = null) {
         val app = context.applicationContext
-        val key = "d" + UUID.randomUUID().toString().replace("-", "").take(KEY_CHARS)
         scope.launch {
-            change(app) { memory ->
-                val settings = memory.settings
-                val item = DownloadItem(key, url, kind, audio ?: settings.audioQuality, height, settings.originalLanguage, title, artist, thumbnail, durationSec, System.currentTimeMillis(), DownloadState.Queued)
-                memory.copy(items = listOf(item) + memory.items)
-            }
+            change(app) { it.queue(songs, kind, height, audio, playlist?.let { title -> DownloadPlaylist(key(), title) }, System.currentTimeMillis(), ::key) }
             DownloadService.start(app)
         }
-        return key
     }
 
-    /** Cancel: stops it if it runs (its processes killed), takes it off the list, and lets the add-on delete its parts. */
-    fun cancel(context: Context, key: String) {
+    private fun key(): String = "d" + UUID.randomUUID().toString().replace("-", "").take(KEY_CHARS)
+
+    /**
+     * Cancel: stops it if it runs (its processes killed), takes it off the list, and lets the add-on delete its parts.
+     * [rest]: the songs of its playlist still to come go with it (the playlist's Cancel, the notification's).
+     */
+    fun cancel(context: Context, key: String, rest: Boolean = false) {
         val app = context.applicationContext
-        cancelled += key
-        current?.takeIf { it.first == key }?.second?.cancel()
         scope.launch {
-            change(app) { memory -> memory.copy(items = memory.items.filterNot { it.key == key }) }
+            // Chosen holding the store's lock ([DownloadsMemory.cancelling]): one that ended meanwhile stays on the list.
+            var keys = emptySet<String>()
+            change(app) { memory ->
+                keys = memory.cancelling(key, rest)
+                memory.copy(items = memory.items.filterNot { it.key in keys })
+            }
+            cancelled += keys
+            current?.takeIf { it.first in keys }?.second?.cancel()
             // The one that ran is discarded by the service once it has stopped.
-            if (current?.first != key) DlAddon.withPort(app) { it.discard(key) }
+            val gone = keys - setOfNotNull(current?.first)
+            if (gone.isNotEmpty()) DlAddon.withPort(app) { port -> gone.forEach(port::discard) }
         }
     }
 
@@ -203,11 +210,11 @@ object Downloads {
 
     // The service's side
 
-    /** The oldest queued download, now marked as running; null when none is left. */
+    /** The queued download to run next ([DownloadsMemory.next]), now marked as running; null when none is left. */
     internal suspend fun next(context: Context): DownloadItem? {
         var picked: DownloadItem? = null
         change(context) { memory ->
-            picked = memory.items.lastOrNull { it.state == DownloadState.Queued }
+            picked = memory.next()
             memory.copy(items = memory.items.map { if (it.key == picked?.key) it.copy(state = DownloadState.Running) else it })
         }
         return picked
@@ -422,10 +429,10 @@ class DownloadService : Service() {
     }
 }
 
-/** The notification's Cancel (not exported; KJB's own pending intent reaches it): stops that download. */
+/** The notification's Cancel (not exported; KJB's own pending intent reaches it): stops that download, and the rest of its playlist. */
 class DownloadCancelReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        intent.getStringExtra(EXTRA_KEY)?.let { Downloads.cancel(context, it) }
+        intent.getStringExtra(EXTRA_KEY)?.let { Downloads.cancel(context, it, rest = true) }
     }
 
     companion object {
@@ -452,7 +459,10 @@ internal object DownloadNotices {
         PendingIntent.FLAG_IMMUTABLE,
     )
 
-    /** "Paper Lantern", "42% · 2.1MiB/s · 0:31 left" over a bar, and Cancel; getting ready while [item] is null. */
+    /**
+     * "Paper Lantern", "42% · 2.1MiB/s · 0:31 left" over a bar, and Cancel; getting ready while [item] is null. A
+     * playlist's song says how far its playlist got too, and its Cancel stops the rest of it.
+     */
     fun working(context: Context, item: DownloadItem?, progress: DlProgress?): Notification {
         channel(context)
         val percent = progress?.percent?.toInt()
@@ -464,6 +474,7 @@ internal object DownloadNotices {
             .setContentIntent(page(context))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+        item?.playlist?.let { builder.setSubText(playlistText(context, it.count(Downloads.state.value.items))) }
         if (item != null) {
             val cancel = PendingIntent.getBroadcast(
                 context,
@@ -471,7 +482,7 @@ internal object DownloadNotices {
                 Intent(context, DownloadCancelReceiver::class.java).putExtra(DownloadCancelReceiver.EXTRA_KEY, item.key),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
-            builder.addAction(Notification.Action.Builder(null, context.getString(R.string.dl_cancel), cancel).build())
+            builder.addAction(Notification.Action.Builder(null, context.getString(if (item.playlist == null) R.string.dl_cancel else R.string.dl_cancel_rest), cancel).build())
         }
         return builder.build()
     }
@@ -507,20 +518,31 @@ internal object DownloadNotices {
         runCatching { channel(context).notify(WORKING_ID, notification) }
     }
 
-    /** "Saved" or "Not saved" with the reason, once per download, under the song's title. */
+    /**
+     * "Saved" or "Not saved" with the reason, once per download, under the song's title. A playlist's songs share one,
+     * under the playlist's name, changed as each ends: how many were saved, and how many could not be.
+     */
     fun ended(context: Context, item: DownloadItem, outcome: DownloadOutcome) {
-        val text = when (outcome) {
+        val playlist = item.playlist
+        val text = playlist?.let { playlistText(context, it.count(Downloads.state.value.items)) } ?: when (outcome) {
             is DownloadOutcome.Saved -> context.getString(R.string.dl_saved)
             is DownloadOutcome.Failed -> context.getString(R.string.dl_not_saved, context.getString(failureLabel(outcome.reason)))
         }
         val notification = Notification.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_kjb)
-            .setContentTitle(item.title.ifBlank { context.getString(R.string.dl_title) })
+            .setContentTitle(playlist?.title ?: item.title.ifBlank { context.getString(R.string.dl_title) })
             .setContentText(text)
             .setContentIntent(page(context))
             .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
             .build()
-        runCatching { channel(context).notify(item.key.hashCode(), notification) }
+        runCatching { channel(context).notify((playlist?.key ?: item.key).hashCode(), notification) }
+    }
+
+    /** "3 of 24 saved", and "2 songs couldn't be saved" after it once some could not be. */
+    fun playlistText(context: Context, count: DownloadPlaylist.Count): String {
+        val saved = context.resources.getQuantityString(R.plurals.dl_playlist_saved, count.total, count.saved, count.total)
+        return if (count.failed == 0) saved else saved + " · " + context.resources.getQuantityString(R.plurals.dl_playlist_failed, count.failed, count.failed)
     }
 
     fun failureLabel(reason: DownloadFailure): Int = when (reason) {
