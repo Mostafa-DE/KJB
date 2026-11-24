@@ -24,6 +24,7 @@ import coil3.request.ImageRequest
 import coil3.request.Options
 import coil3.request.transformations
 import coil3.size.Precision
+import coil3.size.Scale
 import coil3.size.pxOrElse
 import coil3.size.Size as ImageSize
 import kotlinx.coroutines.CoroutineScope
@@ -468,6 +469,10 @@ class PlayerCloseTest {
         // Inexact, as AsyncImage asks for the screens (AsyncImagePainter.updateRequest): a larger bitmap of the song
         // already in memory is a hit, never read again.
         assertEquals(listOf(Precision.INEXACT, Precision.INEXACT, Precision.INEXACT), requests.map { it.precision })
+        // Fit, every song's request: SongArtFetcher sizes a cover by its longer side (MediaStore samples by it), so
+        // Coil's memory check measures that side too; the screens still crop it (ContentScale.Crop draws).
+        val screens = listOf(songCoverRequest(context, shown, CoverAt.PLAYER), songCoverRequest(context, shown, CoverAt.BAR), songCoverRequest(context, shown), backdropRequest(context, shown))
+        assertEquals(List(7) { Scale.FIT }, (requests + screens).map { it.defined.scale })
     }
 
     @Test
@@ -485,34 +490,57 @@ class PlayerCloseTest {
     }
 
     @Test
-    fun `after a Next or a Previous every cover the screens draw for the new song is already in memory`() {
+    fun `after a Next or a Previous every cover the screens draw for the new song is already in memory, whatever its shape`() {
         // Counted on Coil's keys and sizes: the read ahead while each song plays, then what the player's cover, its
-        // backdrop and the Now bar look up for the song a skip brings, each at the size it draws (the player's cover
-        // inside its margins, smaller than the window-wide size read ahead). AsyncImage asks inexact, and Coil hands an
-        // inexact request a cut-down bitmap at least its size (MemoryCacheService.isCacheValueValidForSize): a bitmap
-        // read at a size is at least that size, or the whole cover. Before PW3 each of them missed and loaded, then
-        // faded in.
+        // backdrop and the Now bar look up for the song a skip brings, each at the size it draws. The songs' covers are
+        // large, smaller than the player's, wide and tall in turn, read as MediaStore cuts them down ([thumbnail]) and
+        // marked as SongArtFetcher marks them ([coverSampled]). Before PW3 each of them missed and loaded, then faded
+        // in.
         val context = object : ContextWrapper(null) {}
         val queue = Queue("q", QueueSource(SourceKind.ALBUM, "album:x", "Paper Harbour"), (0 until 30).map { QueueItem(uid = it.toLong(), song = SongRef("/Music/Paper Harbour/made-up-$it.mp3")) })
-        val read = mutableMapOf<MemoryCache.Key, Int>()
+        val shapes = listOf(2_000 to 2_000, 600 to 600, 1_600 to 800, 800 to 1_200)
+        val read = mutableMapOf<MemoryCache.Key, Kept>()
         var misses = 0
         val steps = List(12) { SkipWay.NEXT } + List(8) { SkipWay.PREVIOUS }
         steps.fold(queue) { now, way ->
             val ui = PlayerUi(QueueBook(), now, now.current!!, song = null, playing = true, positionMs = 0, at = 0, speed = 1f, durationMs = 200_000, repeat = Repeat.OFF, library = null)
             val before = read.size
-            coversAhead(ui, emptyMap()).flatMap { coverAheadRequests(context, it, playerPx = 945, barPx = 100) }.forEach { read[storedUnder(it)] = runBlocking { it.sizeResolver.size() }.width.pxOrElse { 0 } }
+            for (request in coversAhead(ui, emptyMap()).flatMap { coverAheadRequests(context, it, playerPx = 945, barPx = 100) }) {
+                val (width, height) = shapes[now.items.indexOfFirst { it.song.path == (request.data as SongArt).path } % shapes.size]
+                val px = runBlocking { request.sizeResolver.size() }.width.pxOrElse { 0 }
+                val (keptWidth, keptHeight) = thumbnail(width, height, px)
+                read[storedUnder(request)] = Kept(keptWidth, keptHeight, coverSampled(keptWidth, keptHeight, px))
+            }
             // Memory: one song's three covers at most are new while a song plays (the next one; the previous one played).
             if (now !== queue) assertTrue(read.size - before <= 3)
             val next = now.copy(index = now.items.indexOf(incoming(now, way, Repeat.OFF, positionMs = 0)))
             val art = SongArt(next.current!!.song.path)
-            // A 1080 px wide phone at 2.625: the player's cover is 945 px less its 24 dp margins either side.
-            val drawn = listOf(songCoverRequest(context, art, CoverAt.PLAYER) to 819, backdropRequest(context, art) to BACKDROP_PX, songCoverRequest(context, art, CoverAt.BAR) to 100)
-            misses += drawn.count { (request, px) -> (read[storedUnder(request)] ?: 0) < px }
+            // A 1080 px wide phone at 2.625: the player's cover is its 411 dp less the 24 dp margins and 8 dp, 933 px.
+            val drawn = listOf(songCoverRequest(context, art, CoverAt.PLAYER) to 933, backdropRequest(context, art) to BACKDROP_PX, songCoverRequest(context, art, CoverAt.BAR) to 100)
+            misses += drawn.count { (request, px) -> read[storedUnder(request)]?.let { found(request, it, px) } != true }
             next
         }
         println("PW3 measure: ${steps.size} skips, ${read.size} covers read ahead, $misses covers the screens loaded after a skip")
         assertEquals("covers the screens had to load after 20 skips", 0, misses)
     }
+
+    /** A cover's MediaStore thumbnail asked at [px]: cut down by a whole sample, never grown (loadThumbnail). */
+    private fun thumbnail(width: Int, height: Int, px: Int): Pair<Int, Int> = maxOf(1, maxOf(width / px, height / px)).let { width / it to height / it }
+
+    /**
+     * Whether Coil hands a [kept] bitmap to [request] drawn at [px] (Coil 3.6.3,
+     * MemoryCacheService.isCacheValueValidForSize, inexact as AsyncImage asks): one not cut down at once; else when its
+     * side reaches [px], within a pixel, the longer side for a request that fits, the shorter for one that fills
+     * (AsyncImage's for ContentScale.Crop when the request sets no scale).
+     */
+    private fun found(request: ImageRequest, kept: Kept, px: Int): Boolean {
+        if (!kept.sampled) return true
+        val side = if (request.defined.scale == Scale.FIT) maxOf(kept.width, kept.height) else minOf(kept.width, kept.height)
+        return side >= px - 1
+    }
+
+    /** A bitmap in the memory cache: its size, and whether it was cut down from more. */
+    private data class Kept(val width: Int, val height: Int, val sampled: Boolean)
 
     /**
      * The key Coil keeps [request]'s image under (Coil 3.6.3, MemoryCacheService.newCacheKey): the request's own key

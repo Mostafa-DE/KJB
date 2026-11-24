@@ -136,6 +136,7 @@ import coil3.request.ImageRequest
 import coil3.request.Options
 import coil3.request.crossfade
 import coil3.size.Precision
+import coil3.size.Scale
 import coil3.size.pxOrElse
 import java.io.IOException
 import java.text.NumberFormat
@@ -900,7 +901,9 @@ fun barCoverKey(art: SongArt): MemoryCache.Key = MemoryCache.Key(coverKey(art), 
  * A [SongCover]'s request for [model], drawn [at] the bar, in the player or elsewhere. Coil keeps a cover under its own
  * key for the song at the size it was loaded at, and a smaller one in memory never stands in for a larger request; the
  * bar's is kept apart ([barCoverKey]). A size not loaded yet starts on one already there, never on the default: the
- * player's on the bar's (as it grows out of the bar), any other on the song's own key.
+ * player's on the bar's (as it grows out of the bar), any other on the song's own key. A song's cover is asked to fit:
+ * [SongArtFetcher] sizes it by its longer side, as MediaStore cuts it down, so Coil's memory check measures that side
+ * too and a wide or tall cover is found by every size up to the one read; the screen still crops it (PW3).
  */
 fun songCoverRequest(context: Context, model: Any, at: CoverAt = CoverAt.ELSEWHERE): ImageRequest {
     val request = ImageRequest.Builder(context).data(model)
@@ -910,7 +913,7 @@ fun songCoverRequest(context: Context, model: Any, at: CoverAt = CoverAt.ELSEWHE
         CoverAt.BAR -> request.memoryCacheKey(barCoverKey(art)).placeholderMemoryCacheKey(own)
         CoverAt.PLAYER -> request.placeholderMemoryCacheKey(barCoverKey(art))
         CoverAt.ELSEWHERE -> request.placeholderMemoryCacheKey(own)
-    }.build()
+    }.scale(Scale.FIT).build()
 }
 
 /** The extra on [barCoverKey] that sets the bar's bitmap apart. */
@@ -936,11 +939,12 @@ fun backdropCoverKey(art: SongArt): MemoryCache.Key = MemoryCache.Key(coverKey(a
 /**
  * The player's backdrop's request for [art]: [BACKDROP_PX] square (blurred, a larger one would only cost decoding),
  * kept under its own key ([backdropCoverKey]), and starting on whatever size of the song's cover is already in memory
- * while it loads: the blur hides the size.
+ * while it loads: the blur hides the size. Asked to fit, as [songCoverRequest] asks.
  */
 fun backdropRequest(context: Context, art: SongArt): ImageRequest = ImageRequest.Builder(context)
     .data(art)
     .size(BACKDROP_PX)
+    .scale(Scale.FIT)
     .memoryCacheKey(backdropCoverKey(art))
     .placeholderMemoryCacheKey(MemoryCache.Key(coverKey(art)))
     .build()

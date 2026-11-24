@@ -59,13 +59,14 @@ class CoversAheadDeviceTest {
     private val density = Density(context)
     private val reads = AtomicInteger()
 
-    /** The made-up songs' embedded covers, in px on a side. */
-    private var artPx = 2_000
+    /** The made-up songs' embedded covers, in px: square, smaller than the player's, wide or tall. */
+    private var artWidth = 2_000
+    private var artHeight = 2_000
 
     /**
      * KJB's keys ([SongArtKeyer]) and cross-fade, the covers made up and counted instead of read from MediaStore: as its
-     * thumbnail, never larger than the song's cover, cut down by a whole sample to at least the size asked, and marked as
-     * SongArtFetcher marks it ([coverSampled]).
+     * thumbnail, never larger than the song's cover, cut down by a whole sample of its longer side to at least the size
+     * asked (ContentResolver.loadThumbnail), and marked as SongArtFetcher marks it ([coverSampled]).
      */
     private val loader = ImageLoader.Builder(context)
         .components {
@@ -75,8 +76,9 @@ class CoversAheadDeviceTest {
                     Fetcher {
                         reads.incrementAndGet()
                         val px = options.size.width.pxOrElse { 256 }
-                        val side = artPx / maxOf(1, artPx / px)
-                        ImageFetchResult(Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888).apply { eraseColor(COLOURS.getValue(art.path)) }.asImage(), isSampled = coverSampled(side, side, px), dataSource = DataSource.DISK)
+                        val sample = maxOf(1, artWidth / px, artHeight / px)
+                        val bitmap = Bitmap.createBitmap(artWidth / sample, artHeight / sample, Bitmap.Config.ARGB_8888).apply { eraseColor(COLOURS.getValue(art.path)) }
+                        ImageFetchResult(bitmap.asImage(), isSampled = coverSampled(bitmap.width, bitmap.height, px), dataSource = DataSource.DISK)
                     }
                 },
             )
@@ -91,36 +93,49 @@ class CoversAheadDeviceTest {
     fun resetLoader() = SingletonImageLoader.reset()
 
     @Test
-    fun aSongReadAheadShowsItsCoverInThePlayerAndTheNowBarInTheFirstFrameReadOnceOnly() = readAheadThenDrawn(artPx = 2_000)
+    fun aSongReadAheadShowsItsCoverInThePlayerAndTheNowBarInTheFirstFrameReadOnceOnly() = readAheadThenDrawn(2_000, 2_000)
 
     @Test
-    fun aCoverSmallerThanThePlayersReadAheadShowsInTheFirstFrameTooNotReadAgain() = readAheadThenDrawn(artPx = 300)
+    fun aCoverSmallerThanThePlayersReadAheadShowsInTheFirstFrameTooNotReadAgain() = readAheadThenDrawn(300, 300)
+
+    @Test
+    fun aWideCoverReadAheadShowsInTheFirstFrameTooNotReadAgain() = readAheadThenDrawn(1_600, 800)
+
+    @Test
+    fun aTallCoverReadAheadShowsInTheFirstFrameTooNotReadAgain() = readAheadThenDrawn(800, 1_200)
 
     @Test
     fun aBackdropReadAheadShowsAtOnceAndOneNotReadAheadStillCrossFadesIn() {
+        // PATH's and NEXT's covers read ahead whole; OTHER's only at the player's size: its backdrop is not in memory,
+        // but it starts on that cover at once (placeholderMemoryCacheKey): its colour shows from its first frame too.
+        readAhead(PATH)
         readAhead(NEXT)
+        runBlocking { loader.execute(coverAheadRequests(context, SongArt(OTHER), with(density) { COVER_MAX.roundToPx() }, with(density) { ORB_COVER.roundToPx() }).first()) }
         var path by mutableStateOf(PATH)
+        compose.mainClock.autoAdvance = false
         compose.setContent {
             LyrifyTheme { Box(Modifier.size(GLOW).testTag(BACKDROP_TAG)) { Backdrop(path, mediaStoreId = null) } }
         }
-        compose.waitForIdle()
-        // The song read ahead: whole one frame on (Crossfade's snap lands at the next frame), as it is once settled.
-        compose.mainClock.autoAdvance = false
+        compose.mainClock.advanceTimeBy(SETTLED_MS)
+        val first = glow()
+        // The song read ahead: whole one frame on (Crossfade's snap lands at the next frame), as it is once settled,
+        // and not the glow before it.
         path = NEXT
         compose.mainClock.advanceTimeByFrame()
         compose.mainClock.advanceTimeByFrame()
         val snapped = glow()
         compose.mainClock.advanceTimeBy(SETTLED_MS)
         assertEquals(glow(), snapped)
-        // A song not read ahead: two frames on, the glow before it still shows nearly whole, fading out over 300 ms (a
-        // snap would show the new song's colour, or no glow while it is read).
-        val reading = reads.get()
+        assertTrue("$snapped against $first", !near(snapped, first))
+        // A song not read ahead: four frames into its 300 ms cross-fade it has moved off the glow before it, but only a
+        // little; settled, it is far from it (a snap would be there at once, a glow that never changed never).
         path = OTHER
-        compose.mainClock.advanceTimeByFrame()
-        compose.waitUntil(TIMEOUT_MS) { reads.get() > reading }
-        compose.mainClock.advanceTimeByFrame()
+        repeat(4) { compose.mainClock.advanceTimeByFrame() }
         val fading = glow()
-        assertTrue("$fading against $snapped", listOf(24, 16, 8, 0).all { shift -> abs((fading shr shift and 0xFF) - (snapped shr shift and 0xFF)) <= NEAR })
+        compose.mainClock.advanceTimeBy(SETTLED_MS)
+        val settled = glow()
+        assertTrue("$fading against $snapped", fading != snapped && near(fading, snapped))
+        assertTrue("$settled against $snapped", !near(settled, snapped))
     }
 
     /** Reads [path]'s covers ahead, as the shell does while the song before it plays: three reads. */
@@ -130,8 +145,9 @@ class CoversAheadDeviceTest {
         assertEquals(before + 3, reads.get())
     }
 
-    private fun readAheadThenDrawn(artPx: Int) {
-        this.artPx = artPx
+    private fun readAheadThenDrawn(artWidth: Int, artHeight: Int) {
+        this.artWidth = artWidth
+        this.artHeight = artHeight
         readAhead(PATH)
         // No frame moves on by itself: a fade would show part way, a cover still loading would show the default.
         compose.mainClock.autoAdvance = false
@@ -156,11 +172,14 @@ class CoversAheadDeviceTest {
     /** The backdrop's colour at its middle now. */
     private fun glow(): Int = compose.onNodeWithTag(BACKDROP_TAG).captureToImage().toPixelMap().let { it[it.width / 2, it.height / 4].toArgb() }
 
+    /** Whether two colours are within [NEAR] on every channel. */
+    private fun near(one: Int, other: Int): Boolean = listOf(24, 16, 8, 0).all { shift -> abs((one shr shift and 0xFF) - (other shr shift and 0xFF)) <= NEAR }
+
     private companion object {
         const val PATH = "/storage/emulated/0/Music/Paper Harbour/made-up.mp3"
         const val NEXT = "/storage/emulated/0/Music/Paper Harbour/made-up-next.mp3"
         const val OTHER = "/storage/emulated/0/Music/Glass Rooms/made-up-other.mp3"
-        val COLOURS = mapOf(PATH to 0xFFC8285A.toInt(), NEXT to 0xFFE53935.toInt(), OTHER to 0xFF1E88E5.toInt())
+        val COLOURS = mapOf(PATH to 0xFF43A047.toInt(), NEXT to 0xFFE53935.toInt(), OTHER to 0xFF1E88E5.toInt())
         const val PLAYER_TAG = "player cover"
         const val BAR_TAG = "bar cover"
         const val BACKDROP_TAG = "backdrop"
@@ -169,6 +188,5 @@ class CoversAheadDeviceTest {
 
         /** How far a channel of the glow may be from the one before, a few frames into its 300 ms fade out. */
         const val NEAR = 48
-        const val TIMEOUT_MS = 5_000L
     }
 }
