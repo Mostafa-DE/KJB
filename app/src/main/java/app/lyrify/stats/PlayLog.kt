@@ -192,8 +192,8 @@ object PlaysSchema {
      * ways, one row per message id with the card as Huddle's JSON, and friends' plays, one row each. Never in the plays
      * section of a backup: only in Huddle's, sealed with its passphrase.
      * Version 7: where each play was heard ([PlayStart.output], a kind of output by its code, never a device) and the
-     * playlist it came from ([PlayStart.playlistId]), for Insights' Where you listen and Top playlists (KJB v4); the
-     * plays from before keep NULL there.
+     * playlist it came from ([PlayStart.playlistId]), kept from KJB v4 on for Insights' Where you listen and Top
+     * playlists, whose cards come in a later version; the plays from before keep NULL there.
      */
     val STEPS: List<List<String>> = listOf(
         listOf(
