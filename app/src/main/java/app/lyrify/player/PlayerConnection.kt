@@ -15,10 +15,12 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import app.lyrify.LOG_TAG
 import app.lyrify.R
+import app.lyrify.books.BookNow
 import app.lyrify.books.BookState
 import app.lyrify.books.BookStore
 import app.lyrify.books.asBook
 import app.lyrify.books.resumeIntoBook
+import app.lyrify.books.toChapter
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryRepository
@@ -335,6 +337,15 @@ class PlayerConnection(
     /** A tap on a song of a queue's list: that queue plays from it (a book's file in another queue: its book). */
     fun jump(queueId: String, index: Int) {
         switchAsBook { it.jump(queueId, index, core.now()) }
+        send { it.play() }
+    }
+
+    /**
+     * Chapter Next or Previous, a chapter's tap or the cover's swipe into another part of the book playing ([book]):
+     * chapter [index] plays from its start, its part put back first when it was taken out of the queue ([toChapter]).
+     */
+    fun toChapter(book: BookNow, index: Int) {
+        core.switch { it.toChapter(book, index, core.now()) }
         send { it.play() }
     }
 

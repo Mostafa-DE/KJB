@@ -124,6 +124,13 @@ fun QueueBook.toBookmark(path: String, positionMs: Long, library: Library?, now:
 }
 
 /**
+ * Chapter [index] of the book playing ([book]) from its start ([chapterPlace]), for the player's chapter Next and
+ * Previous, a chapter's tap and the cover's swipe: the book's own queue goes there ([playBookAt]), its part put back
+ * first when it was taken out of the queue, so no chapter is ever out of reach (BC1).
+ */
+fun QueueBook.toChapter(book: BookNow, index: Int, now: Long): Switched = playBookAt(BookStart(book.book, chapterPlace(book, index)), now)
+
+/**
  * [switched], what a list's tap or a queue's song, Resume or Play from start made of this book of queues; or, when the song
  * it starts is a book's part ([bookStart], by [library] and [state]) in a queue that is not that book's, the book's own
  * queue instead ([playBook]). A change that changed nothing starts nothing either.
