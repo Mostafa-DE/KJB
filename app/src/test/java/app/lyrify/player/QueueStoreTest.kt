@@ -213,6 +213,15 @@ class QueueStoreTest {
     }
 
     @Test
+    fun `Recent reads back at most its 25 queues, the newest`() {
+        val queues = (1..30).map { n -> Queue("q$n", folderSource, listOf(QueueItem(n.toLong(), song("Rips $n"), sourceIndex = 0)), updatedAt = n.toLong()) }
+        val text = QueuesJson.encode(QueueBook(queues, currentId = "q30", recent = (29 downTo 1).map { "q$it" }, nextId = 31, nextUid = 31))
+        val book = QueuesJson.decode(text)!!
+        assertEquals((29 downTo 5).map { "q$it" }, book.recent)
+        assertEquals(26, book.queues.size)
+    }
+
+    @Test
     fun `a current queue that is gone reads as nothing playing`() {
         val text = """{"current":"q8","queues":[{"id":"q1","source":{"kind":"SONGS","key":"songs","name":""},"items":[{"uid":1,"path":"/storage/emulated/0/a.mp3"}]}],"recent":["q1"]}"""
         val book = QueuesJson.decode(text)!!

@@ -89,9 +89,16 @@ fun QueueBook.playBook(start: BookStart, now: Long): Switched {
     return playBookAt(start, now)
 }
 
-/** [start]'s book plays from [BookStart.place] exactly: its own queue too, when that plays already, goes there. */
+/**
+ * [start]'s book plays from [BookStart.place] exactly: its own queue too, when that plays already and holds the part,
+ * goes there ([QueueBook.jump]); else a new queue of its parts ([QueueBook.play]).
+ */
 private fun QueueBook.playBookAt(start: BookStart, now: Long): Switched {
-    val played = play(start.book.parts.map { it.ref }, start.place.partIndex, bookSource(start.book), now)
+    val source = bookSource(start.book)
+    val path = start.book.parts[start.place.partIndex].path
+    val own = current?.takeIf { it.from(source) }
+    val at = own?.items?.indexOfFirst { it.song.path == path } ?: -1
+    val played = if (own != null && at >= 0) jump(own.id, at, now) else play(start.book.parts.map { it.ref }, start.place.partIndex, source, now)
     val index = played.book.current?.index ?: return played
     return played.copy(book = played.book.place(index, start.place.positionMs))
 }

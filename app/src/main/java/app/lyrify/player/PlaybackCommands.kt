@@ -14,9 +14,8 @@ import kotlinx.serialization.Serializable
 enum class SourceKind { SONGS, ALBUM, ARTIST, FOLDER, GENRE, PLAYLIST, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, SEARCH, PICKED, OPENED, BOOK, SUGGESTIONS, HUDDLE, NOT_PLAYED }
 
 /**
- * The place in the app a queue was made from. [kind] and [key] tell one place from another: Recent keeps one queue per
- * place, and a tap there jumps inside the current queue while the place still shows the same list ([Queue.madeFrom]).
- * [name] is shown after the kind ("Album · Harbour Glass").
+ * The place in the app a queue was made from. [kind] and [key] tell one place from another ([Queue.from]: a book's own
+ * queue, the car's lists as the app's). [name] is shown after the kind ("Album · Harbour Glass").
  */
 @Serializable
 data class QueueSource(val kind: SourceKind, val key: String, val name: String)
@@ -47,9 +46,9 @@ interface PlaybackCommands {
     val queues: StateFlow<List<QueueTarget>>
 
     /**
-     * A tap on the song at [start] in [songs]: inside the current queue when that came from [source] and is not saved
-     * (songs added with Play next stay), else in a new queue from [source] (an album's always, wrapped round from the song:
-     * [QueueBook.play]), the old one kept in Recent (a saved one stays in Saved, at its place). A book's file plays its book's own queue instead (books/BookPlayback.kt, asBook).
+     * A tap on the song at [start] in [songs]: a new queue from [source] starting there, every time (an album's wrapped
+     * round from the song: [QueueBook.play]), the old one kept in Recent with its place (a saved one stays in Saved, at its
+     * place). A book's file plays its book's own queue instead (books/BookPlayback.kt, asBook).
      */
     fun play(songs: List<SongRef>, start: Int, source: QueueSource)
 

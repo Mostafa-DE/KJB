@@ -246,7 +246,7 @@ class QueueBridgeTest {
         bridge.sync(book, find)
         book = book.rename(book.currentId!!, "Evening Set")
         bridge.sync(book, find)
-        book = book.play(refs, 5, playlistSource, now = 2).book
+        book = book.jump(book.currentId!!, 5, now = 2).book
         bridge.sync(book, find)
         assertEquals(emptyList<Int>(), port.batches)
         assertEquals(listOf("load", "seek"), port.calls)
@@ -257,7 +257,7 @@ class QueueBridgeTest {
         var book = QueueBook().play(refs, 0, playlistSource, now = 1).book
         bridge.sync(book, find)
         port.positionMs = 9_000
-        book = book.play(refs, 5, playlistSource, now = 2).book
+        book = book.jump(book.currentId!!, 5, now = 2).book
         bridge.sync(book, find)
         assertEquals(book.current!!.items[5].uid, port.current)
         assertEquals(0L, port.positionMs)
