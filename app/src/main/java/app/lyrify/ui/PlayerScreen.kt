@@ -458,8 +458,9 @@ fun clock(ms: Long): String {
 fun shownTitle(ui: PlayerUi, settings: LibrarySettings): String = ui.named?.let { displayTitle(it, settings) } ?: ui.item.song.path.substringAfterLast('/')
 
 /**
- * KJB's own song for the Now bar: as every surface names it ([displayTitle]), and its cover. How far it is goes to the
- * ring alone ([OwnNowSource.progress]), so this stays one value while the song plays.
+ * KJB's own song for the Now bar: as every surface names it ([displayTitle]), and its cover, by the library's MediaStore
+ * id when it has one, so it is read with one MediaStore call (PW3). How far it is goes to the ring alone
+ * ([OwnNowSource.progress]), so this stays one value while the song plays.
  */
 fun ownNow(ui: PlayerUi?, settings: LibrarySettings): OwnNow? {
     if (ui == null) return null
@@ -468,7 +469,7 @@ fun ownNow(ui: PlayerUi?, settings: LibrarySettings): OwnNow? {
         title = shownTitle(ui, settings),
         artist = ui.named?.artist,
         album = ui.named?.album,
-        cover = SongArt(path),
+        cover = SongArt(path, ui.song?.ref?.mediaStoreId),
         playing = ui.playing,
         path = path,
     )
@@ -1228,7 +1229,7 @@ internal fun CoverFace(
                 .semantics { contentDescription = label },
         ) {
             // Its corners follow its size, so growing out of the Now bar's orb or shrinking into it, it rounds smoothly.
-            SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = remember(side) { CoverShape(COVER_CORNER, side) }, at = CoverAt.PLAYER)
+            SongCover(SongArt(ui.item.song.path, ui.song?.ref?.mediaStoreId), containerCover(LocalContainer.current), size = side, shape = remember(side) { CoverShape(COVER_CORNER, side) }, at = CoverAt.PLAYER)
         }
         if (onFlip != null) FlipChip(Modifier.align(Alignment.BottomEnd).padding(12.dp), enabled, onFlip)
     }

@@ -273,6 +273,9 @@ class PlayerScreenTest {
         assertEquals("01 Paper Lantern.mp3", ownNow(ui, LibrarySettings(showFileNames = true))!!.title)
         assertEquals("01 Paper Lantern.mp3", ownNow(ui.copy(song = null), LibrarySettings())!!.title)
         assertNull(ownNow(null, LibrarySettings()))
+        // By the library's MediaStore id, so the bar's cover is read with one MediaStore call, no lookup by path (PW3).
+        val known = lantern.copy(ref = SongRef(lantern.path, 12L))
+        assertEquals(SongArt(lantern.path, 12L), ownNow(ui.copy(song = known), LibrarySettings())!!.cover)
     }
 
     /**
