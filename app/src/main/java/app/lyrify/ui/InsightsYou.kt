@@ -285,7 +285,7 @@ internal fun YouAndFriends(friends: FriendsCard, settings: Settings) {
                 ) {
                     Box(
                         contentAlignment = Alignment.Center,
-                        modifier = Modifier.size(60.dp).drawBehind {
+                        modifier = Modifier.size(60.dp).clearAndSetSemantics {}.drawBehind {
                             drawCircle(ring)
                             val filled = 360f * match.percent / 100f * phase(clock.ms(), 0, RING_MS, Motion.Rise)
                             drawArc(color, -90f, filled, true)
@@ -293,8 +293,8 @@ internal fun YouAndFriends(friends: FriendsCard, settings: Settings) {
                     ) {
                         FriendFace(match.name, color, 48.dp, ring = if (match.past) FaceRing.IDLE else FaceRing.NONE)
                     }
-                    Text(match.name, style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(stringResource(R.string.insights_percent, formatCount(match.percent)), style = display(13, 16, weight = 700).tabular(), color = colors.onSurfaceVariant)
+                    Text(match.name, style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.sp, fontWeight = FontWeight.SemiBold), color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {})
+                    Text(stringResource(R.string.insights_percent, formatCount(match.percent)), style = display(13, 16, weight = 700).tabular(), color = colors.onSurfaceVariant, modifier = Modifier.clearAndSetSemantics {})
                 }
             }
         }

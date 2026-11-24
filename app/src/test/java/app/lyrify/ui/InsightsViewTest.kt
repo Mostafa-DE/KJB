@@ -354,6 +354,19 @@ class InsightsViewTest {
     }
 
     @Test
+    fun `a stop with words of its own clears what it shows, so TalkBack never says it twice (read from the source)`() {
+        // A merging node's own words come first and its content is read after them, so the top artists, the albums'
+        // collage, the story rings and the friends' rings clear their content, as NavRow does. The top artist keeps its
+        // loyalty line, which its words do not say.
+        val ui = File("src/main/java/app/lyrify/ui")
+        fun clears(file: String, start: String) = Regex(Regex.escape("clearAndSetSemantics {}")).findAll(File(ui, file).readText().substringAfter(start).substringBefore("\n}\n")).count()
+        assertEquals(6, clears("InsightsTops.kt", "internal fun TopArtists("))
+        assertEquals(2, clears("InsightsTops.kt", "private fun AlbumTile("))
+        assertEquals(2, clears("InsightsStory.kt", "private fun StoryRing("))
+        assertEquals(3, clears("InsightsYou.kt", "internal fun YouAndFriends("))
+    }
+
+    @Test
     fun `every song shown ends the line under its name with its length, which TalkBack says in words (read from the source)`() {
         val ui = File("src/main/java/app/lyrify/ui")
         // The line takes what the length leaves (weighted), the length right after it, so it is never cut or wrapped.

@@ -122,7 +122,7 @@ internal fun TopArtists(card: TopCard<Artist>, period: PagePeriod, onOpen: (Page
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).clickable(onClickLabel = stringResource(R.string.stats_open_artist)) { onOpen(Page.Artist(first.top.item.name)) }.semantics(mergeDescendants = true) { contentDescription = description },
         ) {
-            Box(Modifier.size(112.dp)) {
+            Box(Modifier.size(112.dp).clearAndSetSemantics {}) {
                 Box(Modifier.matchParentSize().padding(5.dp).border(2.dp, HuddleGold.copy(alpha = 0.9f), CircleShape).padding(5.dp)) {
                     SongCover(SongArt(first.cover.path, first.cover.ref.mediaStoreId), Modifier.fillMaxWidth().aspectRatio(1f), size = 92.dp, shape = CircleShape)
                 }
@@ -131,8 +131,8 @@ internal fun TopArtists(card: TopCard<Artist>, period: PagePeriod, onOpen: (Page
                 }
             }
             Column(Modifier.weight(1f)) {
-                Text(first.top.item.name, style = display(26, 30, -0.02, weight = 700), color = colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Counted(first.top.plays.toLong(), MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), colors.onSurfaceVariant) {
+                Text(first.top.item.name, style = display(26, 30, -0.02, weight = 700), color = colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {})
+                Counted(first.top.plays.toLong(), MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), colors.onSurfaceVariant, Modifier.clearAndSetSemantics {}) {
                     AnnotatedString(stringResource(R.string.stats_row_line, playsNote(it.toInt()), listenedText(first.top.heardMs)))
                 }
                 card.loyalty?.let { loyalty ->
@@ -169,9 +169,9 @@ internal fun TopArtists(card: TopCard<Artist>, period: PagePeriod, onOpen: (Page
                         .semantics(mergeDescendants = true) { contentDescription = rowDescription }
                         .heightIn(min = 52.dp),
                 ) {
-                    Text(place.toString(), style = RankStyle, color = colors.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.width(22.dp))
+                    Text(place.toString(), style = RankStyle, color = colors.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.width(22.dp).clearAndSetSemantics {})
                     SongCover(SongArt(row.cover.path, row.cover.ref.mediaStoreId), size = 40.dp, shape = CircleShape)
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Column(Modifier.weight(1f).clearAndSetSemantics {}, verticalArrangement = Arrangement.spacedBy(5.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(row.top.item.name, style = RowTitle, color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             PlaceChange(place, row.before, card.compared)
@@ -182,7 +182,7 @@ internal fun TopArtists(card: TopCard<Artist>, period: PagePeriod, onOpen: (Page
                             drawRoundRect(if (n == 0) insights.series[1] else insights.series[0], size = Size(size.width * share * grown, size.height), cornerRadius = CornerRadius(4.dp.toPx()))
                         }
                     }
-                    Column(horizontalAlignment = Alignment.End) {
+                    Column(horizontalAlignment = Alignment.End, modifier = Modifier.clearAndSetSemantics {}) {
                         Text(formatCount(row.top.plays), style = CountStyle, color = colors.onSurface)
                         Text(pluralStringResource(R.plurals.insights_plays_word, row.top.plays), style = FigureLabel.copy(fontSize = 11.5.sp), color = colors.onSurfaceVariant)
                     }
@@ -346,7 +346,7 @@ private fun AlbumTile(row: Ranked<Album>, place: Int, big: Boolean, modifier: Mo
     ) {
         SongCover(SongArt(row.cover.path, row.cover.ref.mediaStoreId), Modifier.fillMaxWidth().aspectRatio(1f), size = if (big) 220.dp else 104.dp, shape = androidx.compose.ui.graphics.RectangleShape)
         if (big) {
-            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, HuddleCardShade.copy(alpha = 0.78f)))).padding(start = 12.dp, end = 12.dp, top = 26.dp, bottom = 10.dp)) {
+            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent, HuddleCardShade.copy(alpha = 0.78f)))).padding(start = 12.dp, end = 12.dp, top = 26.dp, bottom = 10.dp).clearAndSetSemantics {}) {
                 Text(album.title, style = display(18, 22, weight = 700), color = BrandLilac, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 album.artist?.let { Text(it, style = FigureLabel.copy(fontSize = 12.5.sp), color = BrandLilac.copy(alpha = 0.9f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }
@@ -357,7 +357,8 @@ private fun AlbumTile(row: Ranked<Album>, place: Int, big: Boolean, modifier: Mo
                 .padding(if (big) 10.dp else 6.dp)
                 .sizeIn(minWidth = if (big) 30.dp else 24.dp, minHeight = if (big) 30.dp else 24.dp)
                 .background(if (big) HuddleGold else HuddleCardShade.copy(alpha = 0.62f), CircleShape)
-                .padding(horizontal = 6.dp),
+                .padding(horizontal = 6.dp)
+                .clearAndSetSemantics {},
         ) {
             Text(place.toString(), style = display(if (big) 15 else 13, 15, weight = 700), color = if (big) OnHuddleGold else BrandLilac)
         }

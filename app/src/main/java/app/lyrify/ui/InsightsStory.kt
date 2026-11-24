@@ -412,7 +412,7 @@ private fun StoryRing(label: String, new: Boolean, covers: List<Song>, name: Str
     ) {
         Box(
             contentAlignment = Alignment.Center,
-            modifier = Modifier.size(68.dp).drawBehind {
+            modifier = Modifier.size(68.dp).clearAndSetSemantics {}.drawBehind {
                 if (new) {
                     rotate(turn?.value ?: 0f) { drawCircle(Brush.sweepGradient(listOf(brand.highlight, HuddleGold, FriendColors[2], brand.highlight))) }
                 } else {
@@ -449,6 +449,7 @@ private fun StoryRing(label: String, new: Boolean, covers: List<Song>, name: Str
             color = if (new) colors.onSurface else colors.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.clearAndSetSemantics {},
         )
     }
 }
