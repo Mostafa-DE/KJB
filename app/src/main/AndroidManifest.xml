@@ -180,16 +180,17 @@
                 <data android:mimeType="application/x-flac" />
             </intent-filter>
             <!-- huddle -->
-            <!-- Huddle's invite links (huddle/Invites.kt, ui/Launches.kt): https on Huddle's Railway address and the user's own
-                 domain (plan Q3.2, app/build.gradle.kts), path /i, the invite's code after the # (a browser never sends it).
-                 Checked as KJB's own (App Links): each host serves /.well-known/assetlinks.json with KJB's signing key. -->
+            <!-- Huddle's invite links (huddle/Invites.kt, ui/Launches.kt): https on Huddle's Railway address
+                 (app/build.gradle.kts), path /i, the invite's code after the # (a browser never sends it). Checked as KJB's
+                 own (App Links): the host serves /.well-known/assetlinks.json with KJB's signing key. The user's own domain
+                 (plan Q3.2) comes back here in 4.1, once it is live: on Android 11 one host that fails the check takes App
+                 Links from every host in the manifest. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" />
                 <data android:host="${huddleHost}" />
-                <data android:host="${huddleDomain}" />
                 <data android:path="/i" />
             </intent-filter>
             <!-- shortcuts -->

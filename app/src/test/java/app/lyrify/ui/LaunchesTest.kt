@@ -47,8 +47,10 @@ class LaunchesTest {
     }
 
     @Test
-    fun `the manifest opens invite links of both of Huddle's hosts in one checked https filter`() {
-        val root = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(File("src/main/AndroidManifest.xml")).documentElement
+    fun `the manifest opens invite links of Huddle's live host only, in one checked https filter`() {
+        val manifest = File("src/main/AndroidManifest.xml")
+        assertFalse("Android 11 checks every https host in the manifest: one that fails takes App Links from all", manifest.readText().contains("\${huddleDomain}"))
+        val root = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(manifest).documentElement
         val filters = root.getElementsByTagName("intent-filter").let { list -> (0 until list.length).map { list.item(it) as Element } }
         val links = filters.single { it.getAttribute("android:autoVerify") == "true" }
         assertEquals("app.lyrify.ui.MainActivity".removePrefix("app.lyrify"), (links.parentNode as Element).getAttribute("android:name"))
@@ -56,7 +58,7 @@ class LaunchesTest {
         assertEquals(listOf("android.intent.action.VIEW"), values("action", "android:name"))
         assertEquals(setOf("android.intent.category.DEFAULT", "android.intent.category.BROWSABLE"), values("category", "android:name").toSet())
         assertEquals(listOf("https"), values("data", "android:scheme"))
-        assertEquals(listOf("\${huddleHost}", "\${huddleDomain}"), values("data", "android:host"))
+        assertEquals(listOf("\${huddleHost}"), values("data", "android:host"))
         assertEquals(listOf("/i"), values("data", "android:path"))
     }
 

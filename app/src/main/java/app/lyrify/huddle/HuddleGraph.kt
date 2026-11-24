@@ -118,7 +118,7 @@ object HuddleGraph {
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
     private var huddle: Huddle? = null
 
-    /** The hosts KJB opens invite links of (AndroidManifest.xml): Huddle's Railway address and the user's own domain (plan Q3.2). */
+    /** The hosts KJB reads invite links of: Huddle's Railway address (AndroidManifest.xml) and the user's own domain (plan Q3.2), pasted only until 4.1. */
     val hosts: List<String> = listOf(BuildConfig.HUDDLE_HOST, BuildConfig.HUDDLE_DOMAIN)
 
     /**
