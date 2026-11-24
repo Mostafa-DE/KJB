@@ -355,6 +355,27 @@ class QueuesTest {
     }
 
     @Test
+    fun `Recent keeps at most 20,000 songs in all, its oldest queues going first, the newest always kept`() {
+        assertEquals(20_000, QueueBook.MAX_RECENT_SONGS)
+        val shelf = (1..7_000).map { song("Long Shelf $it") }
+        var book = QueueBook()
+        (1..4).forEach { n -> book = book.play(shelf, n, SongsTabSource, now = n.toLong()).book }
+        // Three left: 21,000 songs, so the first goes; the playing queue does not count.
+        assertEquals(listOf("q3", "q2"), book.recent)
+        assertEquals(listOf("q2", "q3", "q4"), book.queues.map { it.id })
+        // A queue over the budget on its own stays while it is the newest, and goes once another follows it.
+        book = book.play(shelf + (1..14_000).map { song("Far Shelf $it") }, 0, SongsTabSource, now = 5).book.play(album, 0, albumSource, now = 6).book
+        assertEquals(listOf("q5"), book.recent)
+        book = book.play(folder, 0, folderSource, now = 7).book
+        assertEquals(listOf("q6"), book.recent)
+        // A saved queue does not count either: a kept 7,000-song queue stays, and Recent still holds two of them.
+        book = book.play(shelf, 0, SongsTabSource, now = 8).book.let { it.keep(it.currentId!!) }
+        (9..12).forEach { n -> book = book.play(shelf, 1, SongsTabSource, now = n.toLong()).book }
+        assertEquals(listOf("q8"), book.saved)
+        assertEquals(listOf("q11", "q10"), book.recent)
+    }
+
+    @Test
     fun `a book's queue left for music or another book is never kept in Recent, the music queue before it is`() {
         val parts = (1..3).map { song("Lantern Road $it") }
         val lanternRoad = QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Lantern Road/|Lantern Road", "Lantern Road")

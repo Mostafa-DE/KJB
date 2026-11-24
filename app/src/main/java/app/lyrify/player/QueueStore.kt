@@ -128,7 +128,7 @@ object QueuesJson {
         val ids = read.map { it.id }.toSet()
         val currentId = root[CURRENT_KEY]?.text()?.takeIf { it in ids }
         val saved = strings(root[SAVED_KEY]).filter { it in ids }.distinct()
-        val recent = strings(root[RECENT_KEY]).filter { it in ids && it !in saved && it != currentId }.distinct().take(QueueBook.MAX_RECENT)
+        val recent = recentKept(strings(root[RECENT_KEY]).filter { it in ids && it !in saved && it != currentId }.distinct()) { id -> read.first { it.id == id }.items.size }
         val listed = saved.toSet() + recent + listOfNotNull(currentId)
         val queues = read.filter { it.id in listed }
         dropped += read.size - queues.size

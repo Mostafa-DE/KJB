@@ -482,8 +482,9 @@ data class QueueBook(
 
     /**
      * [queueId] plays: the queue left goes to Recent at the front with its place (a saved one stays in Saved), whatever
-     * list it came from (user 2026-11-24: two queues from one list both stay); Recent keeps [MAX_RECENT], the oldest going
-     * first. A book's queue left goes: `books.json` keeps its place, and the Books tab's Continue row goes back to it.
+     * list it came from (user 2026-11-24: two queues from one list both stay); Recent keeps what [recentKept] keeps, the
+     * oldest going first. A book's queue left goes: `books.json` keeps its place, and the Books tab's Continue row goes
+     * back to it.
      */
     private fun switchTo(queueId: String, now: Long): Switched {
         if (queue(queueId) == null) return Switched(this, toRecent = false)
@@ -499,11 +500,9 @@ data class QueueBook(
                 recent = listOf(old.id) + (recent - old.id)
             }
         }
-        recent = recent - queueId
-        if (recent.size > MAX_RECENT) {
-            drop += recent.drop(MAX_RECENT)
-            recent = recent.take(MAX_RECENT)
-        }
+        val kept = recentKept(recent - queueId) { queue(it)?.items?.size ?: 0 }
+        drop += recent - kept.toSet()
+        recent = kept
         book = book.copy(currentId = queueId, recent = recent).edit(queueId) { it.copy(updatedAt = now) }
         val toRecent = old != null && old.id != queueId && old.id in recent
         return Switched(book.dropped(drop - queueId, evenCurrent = false), toRecent)
@@ -533,7 +532,20 @@ data class QueueBook(
     companion object {
         /** Recent keeps this many queues, the newest first (user 2026-11-24). */
         const val MAX_RECENT: Int = 25
+
+        /** Recent keeps this many songs in all, its newest queue whatever its size (2026-11-24: queues.json stays small). */
+        const val MAX_RECENT_SONGS: Int = 20_000
     }
+}
+
+/**
+ * Of [recent] (queue ids, the newest first), the ones Recent keeps: at most [QueueBook.MAX_RECENT] queues and
+ * [QueueBook.MAX_RECENT_SONGS] songs in all ([songs] of each), the oldest going first; the newest always stays. The
+ * queue playing and the saved ones are not in it, so they never count. The same rule for a switch and for a read.
+ */
+internal fun recentKept(recent: List<String>, songs: (String) -> Int): List<String> {
+    val total = recent.runningFold(0) { sum, id -> sum + songs(id) }.drop(1)
+    return recent.take(minOf(QueueBook.MAX_RECENT, total.count { it <= QueueBook.MAX_RECENT_SONGS }.coerceAtLeast(1)))
 }
 
 /**
