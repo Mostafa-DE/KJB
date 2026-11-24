@@ -180,7 +180,11 @@ class LyrifyPlayer(
      */
     private var discontinuity: Int? = null
 
-    /** A controller's seek is going on: Media3 tells of it itself. */
+    /**
+     * A controller's seek is going on: Media3 tells of it itself, and reads the state as the seek returns ([handleSeek]).
+     * Whatever changes meanwhile (the queue following the song starting, Crossfade's second player) waits for that read:
+     * the session reads the state once in a Next's own turn.
+     */
     private var seeking = false
 
     /** The timeline last handed to the session ([getState]), handed again while the songs and lengths it was made of stay. */
@@ -188,7 +192,7 @@ class LyrifyPlayer(
 
     init {
         engine.addListener(object : EngineListener {
-            override fun onChanged() = invalidateState()
+            override fun onChanged() = changed()
 
             override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
                 discontinuity = startedDiscontinuity(lap, natural) ?: return
@@ -203,8 +207,10 @@ class LyrifyPlayer(
         })
     }
 
-    /** The queue model or the settings changed: the session reads the state again. */
-    fun changed() = invalidateState()
+    /** The queue model, the settings or the engine changed: the session reads the state again, once a seek going on returns. */
+    fun changed() {
+        if (!seeking) invalidateState()
+    }
 
     override fun getState(): State {
         val view = sessionView(engine, engine.isPlaying, core.book.value, core.repeat.value)

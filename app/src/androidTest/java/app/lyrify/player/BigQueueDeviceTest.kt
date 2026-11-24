@@ -4,6 +4,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
@@ -20,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -348,6 +350,62 @@ class BigQueueDeviceTest {
         Log.i(TAG, "PW2 measure: a skip in a $QUEUED-song queue reached the controller in ${times.sorted()[SKIPS / 2]} ms (median of $SKIPS), $timelines new timelines")
         assertEquals("new timelines the controller heard", 0, timelines)
         assertSame("the engine's songs were read again", held, onMain { stack.engine.items })
+    }
+
+    /**
+     * A Next asks the session for its state once in its own turn (PW2), as Media3 reads it when the seek returns, even
+     * when the song starting changes the queue and that change asks for it too, as the service's queue collector does.
+     * Before PW2 that was one more state built over the whole queue before the new song could be drawn, two with
+     * Crossfade on.
+     */
+    @Test
+    fun aNextAsksTheSessionForItsStateOnceInItsOwnTurn() {
+        val songs = library(seconds = 20)
+        val byPath = songs.associateBy { it.path }
+        val find: (SongRef) -> Song? = { ref -> byPath[ref.path] }
+        val core = onMain { PlayerCore(KeptStorage(), scope, System::currentTimeMillis) }
+        val engine = onMain {
+            GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.uris(context)) }.apply {
+                setFocusHandled(false)
+                volume = 0f
+            }
+        }
+        val bridge = QueueBridge(engine)
+        // The session reads the engine's songs once for each state it asks for (LyrifyPlayer.getState).
+        var states = 0
+        val counted = object : PlaybackEngine by engine {
+            override val items: List<MediaItem>
+                get() = engine.items.also { states++ }
+        }
+        val player = onMain { LyrifyPlayer(Looper.getMainLooper(), counted, core, { SkipAmounts(30_000, 10_000) }, { bridge.sync(core.book.value, find) }) }
+        cleanups += {
+            player.release()
+            engine.release()
+        }
+        assertTrue(waitFor(2_000) { core.ready.value })
+        onMain {
+            // As the service: the queue follows the song starting, and each change of the queue asks the session again.
+            engine.addListener(object : EngineListener {
+                override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+                    if (!lap) core.change { it.at(uid, System.currentTimeMillis()) }
+                }
+            })
+            scope.launch {
+                core.book.collect { book ->
+                    bridge.sync(book, find)
+                    player.changed()
+                }
+            }
+            core.switch { it.play(songs.map(Song::ref), START, QueueSource(SourceKind.SONGS, "songs", "Songs"), System.currentTimeMillis()) }
+        }
+        assertTrue("the queue never loaded", waitFor(5_000) { engine.loaded.size == QUEUED && player.currentMediaItemIndex == START })
+        val asked = onMain {
+            states = 0
+            player.seekToNextMediaItem()
+            states
+        }
+        assertEquals("the song after", START + 1, onMain { player.currentMediaItemIndex })
+        assertEquals("states asked for in the Next's own turn", 1, asked)
     }
 
     private companion object {
