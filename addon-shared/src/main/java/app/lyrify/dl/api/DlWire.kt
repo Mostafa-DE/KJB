@@ -81,6 +81,16 @@ fun isWebLink(text: String): Boolean {
 
 private const val MAX_LINK = 4_096
 
+/** The playlist a link names: its `list` (YouTube's lists, albums and Mixes); null when it names none. */
+fun playlistId(url: String): String? {
+    val query = try {
+        URI(url).rawQuery
+    } catch (_: URISyntaxException) {
+        null
+    } ?: return null
+    return query.split('&').firstNotNullOfOrNull { field -> field.removePrefix("list=").takeIf { it != field && it.isNotEmpty() } }
+}
+
 /**
  * Whether a link's host is out on the internet, so a shared link never makes the add-on (or KJB, for a cover) reach this
  * phone, the home or office network, or a cloud's metadata address: not loopback, unspecified, private (10/8, 172.16/12,

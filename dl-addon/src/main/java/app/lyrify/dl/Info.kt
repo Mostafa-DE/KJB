@@ -6,6 +6,7 @@ import app.lyrify.dl.api.DlSearchResult
 import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.VideoChoice
 import app.lyrify.dl.api.isWebLink
+import app.lyrify.dl.api.playlistId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
@@ -155,18 +156,11 @@ object Info {
         DlSearchResult(url, title, channel, video.number("duration")?.roundToInt() ?: 0, thumbnail(video))
     }
 
-    /** The playlist a link names: its `list` (YouTube's lists, albums and Mixes); null when it names none. */
-    fun playlistId(url: String): String? {
-        val query = try {
-            URI(url).rawQuery
-        } catch (_: URISyntaxException) {
-            null
-        } ?: return null
-        return query.split('&').firstNotNullOfOrNull { field -> field.removePrefix("list=").takeIf { it != field && it.isNotEmpty() } }
-    }
-
-    /** Whether [playlistId] is a Mix's, which has no end: YouTube starts those with RD (a song's RD<id>, YouTube Music's RDAMVM<id>). */
-    fun isMix(playlistId: String?): Boolean = playlistId?.startsWith("RD") == true
+    /**
+     * Whether [playlistId] is a Mix's, which has no end: YouTube starts those with RD (a song's RD<id>, YouTube Music's
+     * RDAMVM<id>), but for YouTube Music's own playlists (RDCLAK...), which end as any list does.
+     */
+    fun isMix(playlistId: String?): Boolean = playlistId?.startsWith("RD") == true && !playlistId.startsWith("RDCLAK")
 
     /** A video's or a playlist's thumbnail ([SMALL_THUMBNAIL]): the smallest at least that wide, else the widest; null without one. */
     private fun thumbnail(video: JsonObject): String? {

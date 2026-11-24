@@ -118,6 +118,15 @@ class DlWireTest {
     }
 
     @Test
+    fun `the playlist a link names is its list`() {
+        assertEquals("PLq7", playlistId("https://www.youtube.com/watch?v=abc123def45&list=PLq7&index=3"))
+        assertEquals("RDabc123def45", playlistId("https://youtu.be/abc123def45?si=x9&list=RDabc123def45"))
+        assertEquals("OLAK5uy_m4dE", playlistId("https://music.youtube.com/playlist?list=OLAK5uy_m4dE"))
+        listOf("https://www.youtube.com/watch?v=abc123def45", "https://www.youtube.com/watch?v=abc123def45&list=", "https://video.example.com/v?playlist=3&alist=x", "not a link")
+            .forEach { assertNull(it, playlistId(it)) }
+    }
+
+    @Test
     fun `a link to this phone or a literal private address is never a web link`() {
         listOf(
             "http://localhost/x",

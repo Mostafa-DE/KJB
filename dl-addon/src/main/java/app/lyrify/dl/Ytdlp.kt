@@ -205,15 +205,15 @@ object DlArgs {
     /**
      * A run's arguments: [request]'s, writing into [dir] (the key's own folder, also the marker [Ytdlp.kill] finds its
      * processes by). An audio run keeps its cover (the cropped JPG) and prints its tags into [META_FILE] for KJB. A run is
-     * one video: a playlist's link has its songs listed only (--flat-playlist), so it downloads nothing and fails, never
-     * one song under another's name (KJB saves a playlist song by song, each its own run). "--" ends the options, so the
-     * link can never be read as one.
+     * one video: of any list (a playlist's link, a post of several videos) only its first item, so it makes one file with
+     * its own tags, never one song under another's name (KJB saves a playlist song by song, each its own run). "--" ends
+     * the options, so the link can never be read as one.
      */
     fun forRun(request: DlRequest, dir: File): List<String> {
         val base = if (request.kind == DlKind.AUDIO) audio(request.audio, request.originalLanguage) else video(request.height, request.originalLanguage)
         val named = base.mapIndexed { index, arg -> if (index > 0 && base[index - 1] == "-o") "${dir.path}/$arg" else arg }
         val kept = if (request.kind == DlKind.AUDIO) listOf("--write-thumbnail", "--print-to-file", "after_move:$META", "${dir.path}/$META_FILE") else emptyList()
-        return named + listOf("--flat-playlist", "--no-mtime", "--newline", "--socket-timeout", SOCKET_TIMEOUT) + kept + "--"
+        return named + listOf("--playlist-items", "1", "--no-mtime", "--newline", "--socket-timeout", SOCKET_TIMEOUT) + kept + "--"
     }
 
     /**

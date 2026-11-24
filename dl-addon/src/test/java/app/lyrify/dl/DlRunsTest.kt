@@ -872,45 +872,81 @@ class DlRunsTest {
     }
 
     @Test
-    fun `a song's link that names a playlist is the song, its playlist listed after it, in one full info`() = runTest {
-        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(fullInfo))
+    fun `a song's link that names a playlist has it listed first, told with the quick info while the song is looked up`() = runTest {
+        quick = { DlInfo(it, "Paper Lantern", "The Quiet Hours", partial = true) }
         ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        ytdlp.scripts += Script.Hang()
         val looked = Looked()
+        val url = "https://www.youtube.com/watch?v=abc123def45&list=PLq7&index=2"
 
-        runs().info("https://www.youtube.com/watch?v=abc123def45&list=PLq7&index=2", looked)
+        runs().info(url, looked)
         runCurrent()
 
-        val info = looked.infos.single()
-        assertEquals("The Quiet Hours" to "Paper Lantern", info.artist to info.title)
-        assertEquals(214, info.durationSec)
-        assertEquals(DlPlaylist("Harbour Nights", twoSongs, withSong = true), info.playlist)
-        val (song, list) = ytdlp.argLists
-        assertTrue(song.toString(), "--no-playlist" in song)
+        // KJB can ask which is meant before the song's own info is in.
+        val playlist = DlPlaylist("Harbour Nights", twoSongs, withSong = true)
+        assertEquals(listOf(null, playlist), looked.infos.map { it.playlist })
+        assertEquals("Paper Lantern", looked.infos.last().title)
+        assertTrue(looked.infos.all { it.partial })
+        val list = ytdlp.argLists.first()
         assertTrue(list.toString(), "--yes-playlist" in list && "--flat-playlist" in list)
         assertEquals(":200", list[list.indexOf("--playlist-items") + 1])
-        assertEquals(listOf("https://www.youtube.com/watch?v=abc123def45&list=PLq7&index=2", "https://www.youtube.com/watch?v=abc123def45&list=PLq7&index=2"), ytdlp.targets)
+
+        ytdlp.live.values.single().complete(YtdlpExit.Done(fullInfo))
+        runCurrent()
+
+        val info = looked.infos.last()
+        assertEquals("The Quiet Hours" to "Paper Lantern", info.artist to info.title)
+        assertEquals(214, info.durationSec)
+        assertFalse(info.partial)
+        assertEquals(playlist, info.playlist)
+        assertTrue(ytdlp.argLists.last().toString(), "--no-playlist" in ytdlp.argLists.last())
+        assertEquals(listOf(url, url), ytdlp.targets)
     }
 
     @Test
-    fun `a Mix started from a song is listed to its first 50 songs`() = runTest {
-        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(fullInfo))
-        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("RDabc123def45")))
+    fun `a song's playlist listed before any quick info is told with the link alone, and quick info after it keeps it`() = runTest {
+        val late = CompletableDeferred<Unit>()
+        quick = {
+            late.await()
+            DlInfo(it, "Paper Lantern", "The Quiet Hours", partial = true)
+        }
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        ytdlp.scripts += Script.Hang()
         val looked = Looked()
 
-        runs().info("https://music.youtube.com/watch?v=abc123def45&list=RDAMVMabc123def45", looked)
+        runs().info("https://www.youtube.com/watch?v=abc123def45&list=PLq7", looked)
+        runCurrent()
+        late.complete(Unit)
         runCurrent()
 
-        val list = ytdlp.argLists.last()
-        assertEquals(":50", list[list.indexOf("--playlist-items") + 1])
-        assertEquals(DlPlaylist("Harbour Nights", twoSongs, mix = true, withSong = true), looked.infos.single().playlist)
+        val playlist = DlPlaylist("Harbour Nights", twoSongs, withSong = true)
+        assertEquals(listOf(playlist, playlist), looked.infos.map { it.playlist })
+        assertEquals(listOf("", "Paper Lantern"), looked.infos.map { it.title })
+        assertTrue(looked.infos.all { it.partial })
+    }
+
+    @Test
+    fun `a Mix is listed to its first 50 songs, from a song's link or its own`() = runTest {
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("RDabc123def45")))
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(fullInfo))
+        ytdlp.scripts += Script.Fail("ERROR: [youtube:tab] RDabc123def45: YouTube said: This playlist type is unviewable.")
+        val runs = runs()
+        val looked = Looked()
+
+        runs.info("https://music.youtube.com/watch?v=abc123def45&list=RDAMVMabc123def45", looked)
+        runCurrent()
+        runs.info("https://www.youtube.com/playlist?list=RDabc123def45", Looked())
+        runCurrent()
+
+        assertEquals(DlPlaylist("Harbour Nights", twoSongs, mix = true, withSong = true), looked.infos.last().playlist)
+        assertEquals(listOf(":50", ":50", ":50"), ytdlp.argLists.map { it[it.indexOf("--playlist-items") + 1] })
     }
 
     @Test
     fun `a song's playlist that cannot be listed leaves the song as it is, and the log names only why`() = runTest {
-        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(fullInfo))
         ytdlp.scripts += Script.Fail("ERROR: [youtube:tab] PLq7secret: YouTube said: The playlist does not exist.")
-        // yt-dlp's own way with a list it cannot read on a song's link: the song.
         ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(fullInfo))
+        // yt-dlp's own way with a Mix it cannot list on a song's link: the song's own info, so it is looked up once.
         ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(fullInfo))
         val runs = runs()
         val failed = Looked()
@@ -918,7 +954,7 @@ class DlRunsTest {
 
         val lookup = runs.info("https://www.youtube.com/watch?v=abc123def45&list=PLq7secret", failed)
         runCurrent()
-        runs.info("https://www.youtube.com/watch?v=abc123def45&list=LM", song)
+        runs.info("https://www.youtube.com/watch?v=abc123def45&list=RDabc123def45", song)
         runCurrent()
 
         listOf(failed, song).forEach { looked ->
@@ -926,6 +962,7 @@ class DlRunsTest {
             assertEquals(214, looked.infos.single().durationSec)
             assertNull(looked.infos.single().playlist)
         }
+        assertEquals(3, ytdlp.argLists.size)
         assertTrue(logs.toString(), "lookup $lookup: yt-dlp failed (PRIVATE_PLAYLIST, matched playlist-missing, extractor youtube:tab)" in logs)
         assertTrue(logs.toString(), logs.none { "PLq7secret" in it || "abc123def45" in it })
     }

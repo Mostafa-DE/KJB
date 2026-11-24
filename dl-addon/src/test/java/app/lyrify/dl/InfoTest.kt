@@ -289,14 +289,10 @@ class InfoTest {
     }
 
     @Test
-    fun `the playlist a link names is its list, and a Mix's starts with RD`() {
-        assertEquals("PLq7", Info.playlistId("https://www.youtube.com/watch?v=abc123def45&list=PLq7&index=3"))
-        assertEquals("RDabc123def45", Info.playlistId("https://youtu.be/abc123def45?si=x9&list=RDabc123def45"))
-        assertEquals("OLAK5uy_m4dE", Info.playlistId("https://music.youtube.com/playlist?list=OLAK5uy_m4dE"))
-        listOf("https://www.youtube.com/watch?v=abc123def45", "https://www.youtube.com/watch?v=abc123def45&list=", "https://video.example.com/v?playlist=3&alist=x", "not a link")
-            .forEach { assertNull(it, Info.playlistId(it)) }
+    fun `a Mix's list starts with RD, but YouTube Music's own playlists, which end`() {
         assertTrue(Info.isMix("RDabc123def45"))
         assertTrue(Info.isMix("RDAMVMabc123def45"))
+        assertFalse(Info.isMix("RDCLAK5uy_m4dEuPpAperHarbourPlaylist00"))
         assertFalse(Info.isMix("PLq7"))
         assertFalse(Info.isMix(null))
     }

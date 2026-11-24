@@ -7,6 +7,7 @@ import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlRequest
 import app.lyrify.dl.api.DlStage
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -144,12 +145,14 @@ class YtdlpTest {
     }
 
     @Test
-    fun `a run is one video, so a playlist's link downloads none of its songs, as KJB saves them one by one`() {
+    fun `a run is one video, so a playlist's link downloads at most its first song, under its own name`() {
         listOf(DlRequest("k1", "https://www.youtube.com/playlist?list=PLq7", DlKind.AUDIO), DlRequest("k2", "https://www.youtube.com/playlist?list=PLq7", DlKind.VIDEO)).forEach { request ->
             val args = DlArgs.forRun(request, File("/data/dl/${request.key}"))
-            // yt-dlp lists a playlist's songs and opens none; a video's link is downloaded as before.
-            assertTrue(args.toString(), "--flat-playlist" in args)
+            // A song's link with &list= is the song; any list (a playlist's link, a post of several videos on any site) gives
+            // its first item only, so one file is made and its tags are its own. KJB saves a playlist song by song.
             assertTrue(args.toString(), "--no-playlist" in args)
+            assertEquals("1", args[args.indexOf("--playlist-items") + 1])
+            assertFalse(args.toString(), "--flat-playlist" in args)
             assertEquals("--", args.last())
         }
     }

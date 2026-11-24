@@ -24,7 +24,8 @@ interface IDlAddon {
     // Looks up a link and returns the lookup's id at once. The callback hears the quick info first when the site has it
     // (YouTube's oEmbed, a partial DlInfo), then the full info, or why it failed. A lookup stops when its caller goes away.
     // VERSION 2: a playlist's link (a list, an album, a Mix) has its songs listed in the full info's playlist, none of them
-    // opened, and a song's link that names a playlist too has that playlist listed after the song.
+    // opened, and a song's link that names a playlist too has that playlist in a partial info as soon as it is listed, then
+    // in the song's full info.
     long info(String url, IDlInfoCallback callback) = 3;
 
     // Stops a lookup, or a search (VERSION 2): its yt-dlp process is killed.
