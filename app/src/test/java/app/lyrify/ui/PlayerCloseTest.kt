@@ -23,6 +23,7 @@ import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 import coil3.request.Options
 import coil3.request.transformations
+import coil3.size.Precision
 import coil3.size.Size as ImageSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.plus
@@ -463,6 +464,23 @@ class PlayerCloseTest {
         // Three bitmaps, none taking another's place; each read by the library's id, so MediaStore is asked once.
         assertEquals(3, setOf(storedUnder(player), storedUnder(bar), storedUnder(backdrop)).size)
         assertEquals(listOf(read, read, read), listOf(player.data, bar.data, backdrop.data))
+        // Inexact, as AsyncImage asks for the screens (AsyncImagePainter.updateRequest): a larger bitmap of the song
+        // already in memory is a hit, never read again.
+        assertEquals(listOf(Precision.INEXACT, Precision.INEXACT, Precision.INEXACT), requests.map { it.precision })
+    }
+
+    @Test
+    fun `a cover smaller than asked is the whole picture, so any larger size of the song finds it in memory`() {
+        // MediaStore's thumbnail never grows a cover and cuts one down only to at least the size asked, as an opened
+        // copy's does (coverSample): one that came back smaller on both sides is all there is. Coil hands a cover it
+        // was told is not cut down to every inexact request (MemoryCacheService.isCacheValueValidForSize), so the
+        // player's cover finds a 600 px cover read ahead at 945 px instead of reading the same 600 px again.
+        assertEquals(false, coverSampled(600, 600, px = 945))
+        assertEquals(false, coverSampled(944, 500, px = 945))
+        // Cut down, or exactly the size asked: a larger request may get more, so it reads.
+        assertEquals(true, coverSampled(1_170, 1_170, px = 945))
+        assertEquals(true, coverSampled(945, 500, px = 945))
+        assertEquals(true, coverSampled(500, 1_000, px = 945))
     }
 
     @Test

@@ -135,6 +135,7 @@ import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 import coil3.request.Options
 import coil3.request.crossfade
+import coil3.size.Precision
 import coil3.size.pxOrElse
 import java.io.IOException
 import java.text.NumberFormat
@@ -841,14 +842,14 @@ class SongArtFetcher(private val art: SongArt, private val options: Options) : F
         val context = options.context
         val px = options.size.width.pxOrElse { DEFAULT_PX }
         val uri = art.mediaStoreId?.let { ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, it) } ?: audioUri(context, art.path)
-            ?: return OpenedFiles.cover(context, art.path, px)?.let { ImageFetchResult(it.asImage(), isSampled = true, dataSource = DataSource.DISK) }
+            ?: return OpenedFiles.cover(context, art.path, px)?.let { ImageFetchResult(it.asImage(), isSampled = coverSampled(it.width, it.height, px), dataSource = DataSource.DISK) }
         val bitmap = try {
             context.contentResolver.loadThumbnail(uri, android.util.Size(px, px), null)
         } catch (e: IOException) {
             // No embedded cover: the default cover shows.
             return null
         }
-        return ImageFetchResult(bitmap.asImage(), isSampled = true, dataSource = DataSource.DISK)
+        return ImageFetchResult(bitmap.asImage(), isSampled = coverSampled(bitmap.width, bitmap.height, px), dataSource = DataSource.DISK)
     }
 
     class Factory : Fetcher.Factory<SongArt> {
@@ -859,6 +860,15 @@ class SongArtFetcher(private val art: SongArt, private val options: Options) : F
         const val DEFAULT_PX = 256
     }
 }
+
+/**
+ * Whether a cover read for a [px] request, [width] by [height], was cut down from more (Coil's isSampled): only when
+ * its longer side reached [px]. MediaStore's thumbnail never grows a cover and cuts one down only to at least the size
+ * asked, as an opened copy's does ([OpenedFiles.cover]), so a smaller one is all there is: Coil then hands it to any
+ * larger request of the song from memory (MemoryCacheService.isCacheValueValidForSize) instead of reading the same
+ * picture again, and a cover read ahead at the player's size is found after the skip whatever its size (PW3).
+ */
+fun coverSampled(width: Int, height: Int, px: Int): Boolean = maxOf(width, height) >= px
 
 class SongArtKeyer : Keyer<SongArt> {
     override fun key(data: SongArt, options: Options): String = coverKey(data)
@@ -936,14 +946,14 @@ fun backdropRequest(context: Context, art: SongArt): ImageRequest = ImageRequest
  * The requests that read [art]'s cover into memory ahead of a skip, as the screens will ask for it, so each finds its
  * own key at a size it takes and draws it in its first frame, with no fade (Coil fades no memory hit): the player's
  * cover and the swipe's neighbour at [playerPx] (Coil's own key for the song), the Now bar's at [barPx]
- * ([barCoverKey]), and the backdrop's ([backdropRequest]). [playerPx] is never smaller than the player draws its cover
- * (PW3).
+ * ([barCoverKey]), and the backdrop's ([backdropRequest]). [playerPx] is never smaller than the player draws its cover;
+ * inexact, as AsyncImage asks for theirs, so a larger bitmap of the song already in memory is not read again (PW3).
  */
 fun coverAheadRequests(context: Context, art: SongArt, playerPx: Int, barPx: Int): List<ImageRequest> = listOf(
-    songCoverRequest(context, art, CoverAt.PLAYER).newBuilder().size(playerPx).build(),
-    songCoverRequest(context, art, CoverAt.BAR).newBuilder().size(barPx).build(),
-    backdropRequest(context, art),
-)
+    songCoverRequest(context, art, CoverAt.PLAYER).newBuilder().size(playerPx),
+    songCoverRequest(context, art, CoverAt.BAR).newBuilder().size(barPx),
+    backdropRequest(context, art).newBuilder(),
+).map { it.precision(Precision.INEXACT).build() }
 
 /** The extra on [backdropCoverKey] that sets the backdrop's bitmap apart. */
 private const val BACKDROP_EXTRA = "kjb#backdrop"
