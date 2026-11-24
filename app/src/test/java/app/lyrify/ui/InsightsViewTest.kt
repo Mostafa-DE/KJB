@@ -295,6 +295,16 @@ class InsightsViewTest {
     }
 
     @Test
+    fun `the page reads the phone's language as Compose gives it, so its names, hours and numbers follow a change of language`() {
+        val ui = File("src/main/java/app/lyrify/ui")
+        // Locale.getDefault() in a composable is read once and never again (lint's NonObservableLocale).
+        ui.listFiles { f -> f.name.startsWith("Insights") }.orEmpty().forEach { assertFalse(it.name, it.readText().contains("Locale.getDefault()")) }
+        listOf("InsightsMilestones.kt", "InsightsSlides.kt", "InsightsTime.kt", "InsightsTops.kt").forEach { name ->
+            assertTrue(name, File(ui, name).readText().contains("LocalLocale.current.platformLocale"))
+        }
+    }
+
+    @Test
     fun `no helper is used in one place only, no small bit sits in a vague variable, and existing pieces are reused`() {
         val ui = File("src/main/java/app/lyrify/ui")
         val text = ui.listFiles { f -> f.name.startsWith("Insights") }.orEmpty().joinToString("\n") { it.readText() }
@@ -388,7 +398,7 @@ class InsightsViewTest {
         ).forEach { assertTrue(it, songs.contains(it)) }
         val top = File(ui, "ListeningScreen.kt").readText().substringAfter("internal fun TopRowView(").substringBefore("\n}\n")
         listOf("Column(Modifier.weight(1f).clearAndSetSemantics {})", "modifier = Modifier.padding(end = 8.dp).clearAndSetSemantics {})").forEach { assertTrue(it, top.contains(it)) }
-        ends(tops, "Text(stringResource(R.string.insights_most_skipped_line, skipped.early, skipped.plays), ", "SongLength(skipped.song.durationMs, Modifier.padding(start = 8.dp))")
+        ends(tops, "Text(pluralStringResource(R.plurals.insights_most_skipped_line, skipped.plays, skipped.early, skipped.plays), ", "SongLength(skipped.song.durationMs, Modifier.padding(start = 8.dp))")
         val you = File(ui, "InsightsYou.kt").readText()
         // Back again's songs after their quiet days (below them when a narrow tile has no room for both), and the song a
         // friend sent that you kept playing under its name.

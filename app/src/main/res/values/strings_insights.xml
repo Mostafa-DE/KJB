@@ -178,7 +178,10 @@
         <item quantity="one">Your number 1 for %1$d month running</item>
         <item quantity="other">Your number 1 for %1$d months running</item>
     </plurals>
-    <string name="insights_loyal_months">Your number 1 in %1$d of %2$d months</string>
+    <plurals name="insights_loyal_months">
+        <item quantity="one">Your number 1 in %1$d of %2$d month</item>
+        <item quantity="other">Your number 1 in %1$d of %2$d months</item>
+    </plurals>
     <string name="insights_loyal_since">Your number 1 since %1$s</string>
     <string name="insights_top_song">Your top song</string>
     <string name="insights_play_song">Play %1$s</string>
@@ -209,7 +212,10 @@
     <string name="insights_shuffle_skips">Songs from Shuffle were skipped early %1$s times as often as songs in order.</string>
     <string name="insights_times">%1$s times</string>
     <string name="insights_most_skipped">Most skipped: %1$s</string>
-    <string name="insights_most_skipped_line">Skipped early %1$d of %2$d times. Quick skips never count as plays.</string>
+    <plurals name="insights_most_skipped_line">
+        <item quantity="one">Skipped early %1$d of %2$d time. Quick skips never count as plays.</item>
+        <item quantity="other">Skipped early %1$d of %2$d times. Quick skips never count as plays.</item>
+    </plurals>
 
     <!-- Moments. -->
     <string name="insights_moments_title">Moments</string>
@@ -307,7 +313,10 @@
         <item quantity="one">time you opened lyrics</item>
         <item quantity="other">times you opened lyrics</item>
     </plurals>
-    <string name="insights_lyrics_most">Most: %1$s, %2$d times · %3$d%% of plays had synced lyrics</string>
+    <plurals name="insights_lyrics_most">
+        <item quantity="one">Most: %1$s, %2$d time · %3$d%% of plays had synced lyrics</item>
+        <item quantity="other">Most: %1$s, %2$d times · %3$d%% of plays had synced lyrics</item>
+    </plurals>
     <string name="insights_new_favourites">New favourites</string>
     <plurals name="insights_favourites_new">
         <item quantity="one">song you hearted</item>
@@ -358,7 +367,10 @@
     <string name="insights_last_30_days">in the last 30 days</string>
     <string name="insights_never_line">The newest added first. Shuffle them into a queue.</string>
     <string name="insights_dig_album">Dig deeper: %1$s</string>
-    <string name="insights_dig_line">You played %1$d of its %2$d songs</string>
+    <plurals name="insights_dig_line">
+        <item quantity="one">You played %1$d of its %2$d song</item>
+        <item quantity="other">You played %1$d of its %2$d songs</item>
+    </plurals>
 
     <!-- Your listening type. -->
     <string name="insights_listen_like">You listen like a</string>
@@ -438,7 +450,10 @@
 
     <!-- The pictures to share. -->
     <string name="insights_picture_album_top">%1$s by %2$s, played most</string>
-    <string name="insights_picture_albums_of">%1$d of %2$d albums</string>
+    <plurals name="insights_picture_albums_of">
+        <item quantity="one">%1$d of %2$d album</item>
+        <item quantity="other">%1$d of %2$d albums</item>
+    </plurals>
     <string name="insights_picture_owl">%1$d%% of my listening was after 9 pm</string>
     <string name="insights_picture_busiest">Busiest at %1$s</string>
 </resources>

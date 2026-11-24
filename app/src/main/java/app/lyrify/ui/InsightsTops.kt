@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -146,7 +147,7 @@ internal fun TopArtists(card: TopCard<Artist>, period: PagePeriod, onOpen: (Page
                         Text(
                             when (loyalty) {
                                 is Loyalty.Running -> pluralStringResource(if (period.kind == ListeningPeriod.WEEK) R.plurals.insights_loyal_weeks else R.plurals.insights_loyal_months_running, loyalty.periods, loyalty.periods)
-                                is Loyalty.MonthsOf -> stringResource(R.string.insights_loyal_months, loyalty.months, loyalty.of)
+                                is Loyalty.MonthsOf -> pluralStringResource(R.plurals.insights_loyal_months, loyalty.of, loyalty.months, loyalty.of)
                                 is Loyalty.Since -> stringResource(R.string.insights_loyal_since, monthText(loyalty.month, java.time.YearMonth.of(0, 1)))
                             },
                             style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold), color = insights.goldInk)
@@ -582,7 +583,7 @@ internal fun HowYouListen(how: HowCard, settings: Settings, onSong: (SongRef) ->
         }
         skipRatio(how.shuffled, how.inOrder)?.let { ratio ->
             Text(
-                boldIn(stringResource(R.string.insights_shuffle_skips, String.format(Locale.getDefault(), "%.1f", ratio)), stringResource(R.string.insights_times, String.format(Locale.getDefault(), "%.1f", ratio))),
+                boldIn(stringResource(R.string.insights_shuffle_skips, String.format(LocalLocale.current.platformLocale, "%.1f", ratio)), stringResource(R.string.insights_times, String.format(LocalLocale.current.platformLocale, "%.1f", ratio))),
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.padding(top = 12.dp),
@@ -606,7 +607,7 @@ internal fun HowYouListen(how: HowCard, settings: Settings, onSong: (SongRef) ->
                 Column(Modifier.weight(1f)) {
                     Text(stringResource(R.string.insights_most_skipped, title), style = MaterialTheme.typography.titleSmall, color = colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.insights_most_skipped_line, skipped.early, skipped.plays), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
+                        Text(pluralStringResource(R.plurals.insights_most_skipped_line, skipped.plays, skipped.early, skipped.plays), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
                         SongLength(skipped.song.durationMs, Modifier.padding(start = 8.dp))
                     }
                 }

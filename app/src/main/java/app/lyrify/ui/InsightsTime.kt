@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -83,7 +84,6 @@ import java.time.YearMonth
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.time.temporal.WeekFields
-import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
@@ -282,7 +282,7 @@ private fun HeroBars(time: TimeCard, period: PagePeriod, modifier: Modifier) {
                     Canvas(Modifier.size(14.dp, 8.dp)) {
                         drawLine(BrandLilac.copy(alpha = 0.8f), Offset(0f, size.height / 2), Offset(size.width, size.height / 2), 2.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 2.dp.toPx())))
                     }
-                    Text(beforeName(period).replaceFirstChar { it.titlecase(Locale.getDefault()) }, style = AxisLabel, color = BrandLilac.copy(alpha = 0.8f))
+                    Text(beforeName(period).replaceFirstChar { it.titlecase(LocalLocale.current.platformLocale) }, style = AxisLabel, color = BrandLilac.copy(alpha = 0.8f))
                 }
             }
         }
@@ -392,7 +392,7 @@ private fun DayFact(@DrawableRes icon: Int, kicker: String, days: Int, line: Str
     val colors = MaterialTheme.colorScheme
     val word = pluralStringResource(R.plurals.insights_days_word, days)
     Column(modifier.background(colors.surface, RoundedCornerShape(18.dp)).padding(10.dp).semantics(mergeDescendants = true) {}) {
-        FactKicker(icon, kicker, LocalBrandColors.current.highlight, iconMotion)
+        FactKicker(icon, kicker, LocalBrandColors.current.highlight, iconMotion = iconMotion)
         Counted(days.toLong(), FigureValue, colors.onSurface) {
             buildAnnotatedString {
                 append(formatCount(it.toInt()))
@@ -404,8 +404,8 @@ private fun DayFact(@DrawableRes icon: Int, kicker: String, days: Int, line: Str
 }
 
 @Composable
-private fun FactKicker(@DrawableRes icon: Int, text: String, color: Color, iconMotion: Modifier = Modifier) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+private fun FactKicker(@DrawableRes icon: Int, text: String, color: Color, modifier: Modifier = Modifier, iconMotion: Modifier = Modifier) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = modifier) {
         Icon(painterResource(icon), contentDescription = null, tint = color, modifier = iconMotion.size(16.dp))
         Text(text, style = FigureLabel.copy(fontWeight = FontWeight(650)), color = color)
     }
@@ -457,7 +457,7 @@ private fun WeekColumns(days: DaysCard, period: PagePeriod, heat: List<Color>) {
                     when {
                         ms == null -> ""
                         ms < HOUR -> heardText(ms)
-                        else -> stringResource(R.string.insights_hours_short, String.format(Locale.getDefault(), "%.1f", ms / HOUR.toDouble()))
+                        else -> stringResource(R.string.insights_hours_short, String.format(LocalLocale.current.platformLocale, "%.1f", ms / HOUR.toDouble()))
                     },
                     style = AxisLabel.copy(fontWeight = FontWeight.SemiBold).tabular(), color = colors.onSurfaceVariant, maxLines = 1, autoSize = TextAutoSize.StepBased(minFontSize = SMALLEST_LABEL, maxFontSize = AxisLabel.fontSize))
             }
@@ -472,10 +472,10 @@ private fun WeekColumns(days: DaysCard, period: PagePeriod, heat: List<Color>) {
 @Composable
 private fun MonthCalendar(days: DaysCard, period: PagePeriod, heat: List<Color>) {
     val colors = MaterialTheme.colorScheme
-    val firstDayOfWeek = WeekFields.of(Locale.getDefault()).firstDayOfWeek
+    val firstDayOfWeek = WeekFields.of(LocalLocale.current.platformLocale).firstDayOfWeek
     val first = days.heard.first
     val lead = ((first.dayOfWeek.value - firstDayOfWeek.value) + 7) % 7
-    val weekdays = (0 until 7).map { firstDayOfWeek.plus(it.toLong()).getDisplayName(java.time.format.TextStyle.NARROW, Locale.getDefault()) }
+    val weekdays = (0 until 7).map { firstDayOfWeek.plus(it.toLong()).getDisplayName(java.time.format.TextStyle.NARROW, LocalLocale.current.platformLocale) }
     val cells = List(lead) { null } + days.heard.heardMs.indices.map { it }
     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.clearAndSetSemantics {}) {
@@ -533,7 +533,7 @@ private fun MonthCalendar(days: DaysCard, period: PagePeriod, heat: List<Color>)
 @Composable
 private fun YearSquares(days: DaysCard, heat: List<Color>) {
     val colors = MaterialTheme.colorScheme
-    val firstDayOfWeek = WeekFields.of(Locale.getDefault()).firstDayOfWeek
+    val firstDayOfWeek = WeekFields.of(LocalLocale.current.platformLocale).firstDayOfWeek
     val first = days.heard.first
     val lead = ((first.dayOfWeek.value - firstDayOfWeek.value) + 7) % 7
     val total = first.lengthOfYear()
@@ -545,7 +545,7 @@ private fun YearSquares(days: DaysCard, heat: List<Color>) {
             (1..MONTHS_IN_YEAR).forEach { month ->
                 val at = lead + ChronoUnit.DAYS.between(first, first.withMonth(month)).toInt()
                 Text(
-                    java.time.Month.of(month).getDisplayName(java.time.format.TextStyle.NARROW, Locale.getDefault()),
+                    java.time.Month.of(month).getDisplayName(java.time.format.TextStyle.NARROW, LocalLocale.current.platformLocale),
                     style = AxisLabel.copy(fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold),
                     color = colors.onSurfaceVariant,
                     modifier = Modifier.offset(x = cell * (at / 7)).clearAndSetSemantics {},
@@ -574,7 +574,7 @@ private fun MonthHours(days: DaysCard, heat: List<Color>) {
         Row(horizontalArrangement = Arrangement.spacedBy(3.dp), modifier = Modifier.clearAndSetSemantics {}) {
             Spacer(Modifier.width(36.dp))
             (1..MONTHS_IN_YEAR).forEach {
-                Text(java.time.Month.of(it).getDisplayName(java.time.format.TextStyle.NARROW, Locale.getDefault()), style = AxisLabel.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold), color = colors.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
+                Text(java.time.Month.of(it).getDisplayName(java.time.format.TextStyle.NARROW, LocalLocale.current.platformLocale), style = AxisLabel.copy(fontSize = 10.sp, fontWeight = FontWeight.SemiBold), color = colors.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.weight(1f))
             }
         }
         byYear.forEach { (year, steps) ->
@@ -727,12 +727,12 @@ internal fun Dial(
 /** An hour as the phone says a short time: "10 pm", or "22" where the day has 24 hours. */
 @Composable
 internal fun hourLabel(hour: Int): String {
-    val pattern = android.text.format.DateFormat.getBestDateTimePattern(Locale.getDefault(), if (android.text.format.DateFormat.is24HourFormat(LocalContext.current)) "H" else "ha")
+    val pattern = android.text.format.DateFormat.getBestDateTimePattern(LocalLocale.current.platformLocale, if (android.text.format.DateFormat.is24HourFormat(LocalContext.current)) "H" else "ha")
     val at = java.util.Calendar.getInstance().apply {
         set(java.util.Calendar.HOUR_OF_DAY, hour)
         set(java.util.Calendar.MINUTE, 0)
     }
-    return java.text.SimpleDateFormat(pattern, Locale.getDefault()).format(at.time).lowercase(Locale.getDefault())
+    return java.text.SimpleDateFormat(pattern, LocalLocale.current.platformLocale).format(at.time).lowercase(LocalLocale.current.platformLocale)
 }
 
 private val HeroTime = display(64, 64, -0.04, weight = 700)

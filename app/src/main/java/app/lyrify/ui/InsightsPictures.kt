@@ -213,7 +213,7 @@ internal fun SharePicture(picture: Picture, page: InsightsPage, settings: Settin
                 Text(stringResource(R.string.insights_picture_footer), style = body(11f, 14, 600), color = BrandLilac.copy(alpha = 0.78f), modifier = Modifier.weight(1f))
                 when (picture) {
                     Picture.SUMMARY -> cards.artists?.rows?.firstOrNull()?.let { stringResource(R.string.insights_top_artist, it.top.item.name) }
-                    Picture.ALBUMS -> cards.time?.let { stringResource(R.string.insights_picture_albums_of, COLLAGE, it.totals.albums) }
+                    Picture.ALBUMS -> cards.time?.let { pluralStringResource(R.plurals.insights_picture_albums_of, it.totals.albums, COLLAGE, it.totals.albums) }
                     Picture.CLOCK -> cards.clock?.let { stringResource(R.string.insights_picture_busiest, hourLabel(it.peak)) }
                 }?.let { Text(it, style = body(11f, 14, 600), color = BrandLilac.copy(alpha = 0.78f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
             }

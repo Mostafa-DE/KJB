@@ -91,7 +91,6 @@
     <string name="suggest_for_you">For you</string>
     <string name="suggest_for_you_card">%1$s and %2$d more. New every morning.</string>
     <string name="suggest_for_you_card_few">%1$s. New every morning.</string>
-    <string name="suggest_for_you_new_today">New today</string>
     <string name="suggest_hide">Hide</string>
     <string name="suggest_hidden_till_tomorrow">Hidden until tomorrow\'s mix</string>
     <string name="suggest_for_you_more">More for For you</string>

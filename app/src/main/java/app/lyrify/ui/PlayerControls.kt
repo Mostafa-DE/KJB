@@ -413,9 +413,9 @@ private fun repeatLabel(repeat: Repeat): Int = when (repeat) {
 internal fun RoundButton(
     @DrawableRes icon: Int,
     label: String,
+    modifier: Modifier = Modifier,
     size: Dp = TOUCH,
     iconSize: Dp = 26.dp,
-    modifier: Modifier = Modifier,
     container: Color = Color.Transparent,
     tint: Color = LocalContentColor.current,
     onClick: () -> Unit,

@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -234,7 +235,7 @@ internal fun YourLibrary(library: LibraryCard, period: PagePeriod, settings: Set
             LibraryRow(
                 lead = { SongCover(songs.firstOrNull()?.let { SongArt(it.path, it.ref.mediaStoreId) }, size = 48.dp) },
                 title = stringResource(R.string.insights_dig_album, dig.album.title),
-                line = stringResource(R.string.insights_dig_line, songs.size - dig.unplayed.size, songs.size),
+                line = pluralStringResource(R.plurals.insights_dig_line, songs.size, songs.size - dig.unplayed.size, songs.size),
                 dots = songs.map { it !in dig.unplayed },
             ) { onOpen(Page.Album(dig.album.key)) }
         }
@@ -341,7 +342,7 @@ internal fun ListeningType(traits: List<Trait>) {
             buildAnnotatedString {
                 names.forEachIndexed { i, name ->
                     if (i > 0) append(", ")
-                    val word = if (i == 0) name else name.lowercase(Locale.getDefault())
+                    val word = if (i == 0) name else name.lowercase(LocalLocale.current.platformLocale)
                     if (i == 1) withStyle(SpanStyle(color = StoryKicker)) { append(word) } else append(word)
                 }
             },

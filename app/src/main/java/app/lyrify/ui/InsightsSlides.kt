@@ -57,6 +57,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalLocale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -85,7 +86,6 @@ import app.lyrify.stats.Ranked
 import app.lyrify.stats.TraitKind
 import java.time.YearMonth
 import java.time.temporal.ChronoUnit
-import java.util.Locale
 import kotlin.math.abs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -296,7 +296,7 @@ internal fun Slide(slide: StorySlide, page: InsightsPage, settings: Settings, st
                 StorySlide.TYPE -> {
                     val names = cards.traits.map { traitName(it.kind) }
                     Text(stringResource(R.string.insights_story_type).uppercase(), style = SlideKicker, color = StoryKicker, modifier = Modifier.rise(clock))
-                    Text(names.mapIndexed { i, name -> if (i == 0) name else name.lowercase(Locale.getDefault()) }.joinToString(", "), style = SlideTitle, color = BrandLilac, modifier = Modifier.padding(top = 8.dp).rise(clock, 100))
+                    Text(names.mapIndexed { i, name -> if (i == 0) name else name.lowercase(LocalLocale.current.platformLocale) }.joinToString(", "), style = SlideTitle, color = BrandLilac, modifier = Modifier.padding(top = 8.dp).rise(clock, 100))
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 20.dp)) {
                         cards.traits.forEachIndexed { i, trait ->
                             Row(

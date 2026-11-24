@@ -425,7 +425,7 @@ private fun ReadAlong(lyrics: LyricsCard, settings: Settings, modifier: Modifier
         lyrics.most?.let { most ->
             val title = displayTitle(most, settings.library)
             Text(
-                boldIn(stringResource(R.string.insights_lyrics_most, title, lyrics.mostTimes, percentOf(lyrics.syncedPlays.toLong(), lyrics.plays.toLong())), title),
+                boldIn(pluralStringResource(R.plurals.insights_lyrics_most, lyrics.mostTimes, title, lyrics.mostTimes, percentOf(lyrics.syncedPlays.toLong(), lyrics.plays.toLong())), title),
                 style = FigureLabel.copy(fontSize = 13.sp),
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.padding(top = 6.dp),
