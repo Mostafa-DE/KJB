@@ -121,6 +121,7 @@ object StatsGraph {
         val library = LibraryGraph.repository(context).state
         val playlists = LibraryGraph.playlists(context)
         val ledger = LedgerRepository(app)
+        val settings = Lyrify.settings(context)
         PlayStats(
             store(context),
             library = { (library.value as? LibraryState.Ready)?.library },
@@ -145,6 +146,7 @@ object StatsGraph {
                     playlists = lists.playlists,
                 )
             },
+            leftOut = { settings.settings.first().library.leftOutOfInsights },
         )
     }.also { stats = it }
 

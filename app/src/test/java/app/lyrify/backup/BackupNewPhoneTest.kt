@@ -346,6 +346,22 @@ class BackupNewPhoneTest {
     }
 
     @Test
+    fun `songs left out of Insights stay out on their new paths, the new phone's own kept, and none counts as not found`() {
+        val old = oldPhone().apply { this.settings = this.settings.copy(library = this.settings.library.copy(leftOutOfInsights = listOf(steps.ref, moon.ref, VOLUME_GONE))) }
+        val phone = newPhone().apply { this.settings = this.settings.copy(library = LibrarySettings(leftOutOfInsights = listOf(stranger.ref, newMoon.ref))) }
+
+        val result = move(old = old, phone = phone)
+
+        // Glass Steps found by its tags, Copper Moon by its path below the root (left out here too: once); the one gone is let go.
+        assertEquals(listOf(stranger.ref, newMoon.ref, newSteps.ref), phone.settings.library.leftOutOfInsights)
+        assertEquals(0, result.notFound)
+        // The songs file names them, so another phone can find them; the old phone's ids stay behind.
+        val bytes = ByteArrayOutputStream().also { BackupBundle.write(runBlocking { old.snapshot() }, oldLibrary, VERSION, T0, it) }.toByteArray()
+        assertEquals(true, BackupFixtures.contents(bytes).songs.map { it.path }.containsAll(listOf(steps.path, moon.path)))
+        assertEquals(listOf(SongRef(steps.path), SongRef(moon.path), SongRef(VOLUME_GONE.path)), BackupFixtures.contents(bytes).settings?.library?.leftOutOfInsights)
+    }
+
+    @Test
     fun `songs said Never suggest and Not now stay out of suggestions on their new paths, the new phone's own kept, and none counts as not found`() {
         val old = oldPhone().apply {
             this.settings = this.settings.copy(suggestions = SuggestionSettings(never = listOf(HeldSong(steps.ref, T0 - 5), HeldSong(VOLUME_GONE, T0 - 4)), notNow = listOf(HeldSong(moon.ref, T0 + DAY))))

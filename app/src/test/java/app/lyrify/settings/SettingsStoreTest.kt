@@ -75,6 +75,7 @@ class SettingsStoreTest {
             ),
             listPeriods = mapOf(SongList.RECENTLY_ADDED to ListPeriod.ALL_TIME, SongList.RECENTLY_PLAYED to ListPeriod.DAYS_365, SongList.MOST_PLAYED to ListPeriod.DAYS_60),
             hiddenSongs = listOf(SongRef("/storage/emulated/0/Music/Odds/Glass Steps.mp3", 13), SongRef("/storage/emulated/0/Music/Singles/Copper Moon.mp3")),
+            leftOutOfInsights = listOf(SongRef("/storage/emulated/0/Music/Sleep/Rain on Tin.mp3", 21), SongRef("/storage/emulated/0/Music/Kids/Paper Boats.mp3")),
             artistSplit = ArtistSplit(enabled = false, separators = listOf(";", "&", "with"), exceptions = listOf("Rowan & Fennick")),
             opensOn = LibraryTab.ALBUMS,
             findSimilarOnline = false,
@@ -528,6 +529,19 @@ class SettingsStoreTest {
         assertEquals(listOf(SongRef(b, 7), SongRef(a), SongRef("/storage/emulated/0/Music/c.mp3")), SettingsJson.decode(text)?.library?.hiddenSongs)
         assertEquals(emptyList<SongRef>(), SettingsJson.decode("""{"library":{"hiddenSongs":"a.mp3"}}""")?.library?.hiddenSongs)
         assertTrue(""""hiddenSongs":[{"path":"$b","id":7}]""" in SettingsJson.encode(Settings(library = LibrarySettings(hiddenSongs = listOf(SongRef(b, 7))))))
+    }
+
+    @Test
+    fun `the songs left out of Insights keep each path once with its id hint, in the order left out, and only whole entries`() {
+        val b = "/storage/emulated/0/Music/Sleep/b.mp3"
+        val a = "/storage/emulated/0/Music/Sleep/a.mp3"
+        val text = """{"library":{"leftOutOfInsights":[{"path":"$b","id":7},4,{"path":""},{"id":9},"$a",{"path":"$b","id":8},null]}}"""
+
+        assertEquals(listOf(SongRef(b, 7), SongRef(a)), SettingsJson.decode(text)?.library?.leftOutOfInsights)
+        assertEquals(emptyList<SongRef>(), SettingsJson.decode("""{"library":{"leftOutOfInsights":"a.mp3"}}""")?.library?.leftOutOfInsights)
+        // A file from before has none.
+        assertEquals(emptyList<SongRef>(), SettingsJson.decode("""{"library":{"hiddenSongs":["$a"]}}""")?.library?.leftOutOfInsights)
+        assertTrue(""""leftOutOfInsights":[{"path":"$b","id":7}]""" in SettingsJson.encode(Settings(library = LibrarySettings(leftOutOfInsights = listOf(SongRef(b, 7))))))
     }
 
     @Test

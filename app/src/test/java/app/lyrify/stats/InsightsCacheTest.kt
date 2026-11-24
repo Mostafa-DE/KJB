@@ -432,6 +432,9 @@ class InsightsCacheTest {
         assertTrue(graph.contains("WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, name = BOOK_PLAYS, log = log), log = log)) { startedAt -> stats?.booksChanged(startedAt) }"))
         // Seen at once by the threads that write.
         assertTrue(graph.contains("@Volatile\n    private var stats: PlayStats? = null"))
+        // The page names the plays' playlists by the user's playlists, and leaves out the songs Settings say (IN3).
+        assertTrue(graph.contains("playlists = lists.playlists,"))
+        assertTrue(graph.contains("leftOut = { settings.settings.first().library.leftOutOfInsights },"))
     }
 
     private companion object {
