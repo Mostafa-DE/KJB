@@ -6,7 +6,7 @@ import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
@@ -554,13 +554,15 @@ fun edgeStep(info: LazyListLayoutInfo, row: LazyListItemInfo, offset: Float, edg
 }
 
 /**
- * A row's drag handle (a 48 dp target at its end, before "⋯", clear of the system's back gesture): an upright drag on it
- * moves the song, at [place] of [songs], at once, no long press, through [reorder]; a sideways one is left to the tab
- * pages. [row] is the row's height in px. TalkBack has the row's Move up and Move down instead, so the handle is no stop
- * of its own.
+ * A row's drag handle (a 48 dp target at its end, before "⋯", clear of the system's back gesture): held for the phone's
+ * long press, it lifts the song, at [place] of [songs], with a tick, and a drag then moves it through [reorder]; a quick
+ * swipe on it is left to the list's scroll, or a sideways one to the tab pages, so a thumb scrolling by never moves a
+ * song (user feedback 2026-11-22, item 67). [row] is the row's height in px. TalkBack has the row's Move up and Move down
+ * instead, so the handle is no stop of its own.
  */
 @Composable
 fun DragHandle(reorder: SongReorder, songs: List<Song>, place: Int, key: Any, row: () -> Float) {
+    val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val list by rememberUpdatedState(songs)
     val at by rememberUpdatedState(place)
@@ -576,14 +578,14 @@ fun DragHandle(reorder: SongReorder, songs: List<Song>, place: Int, key: Any, ro
                     reorder.drop(list)
                     scope.launch { reorder.settle(motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced)) }
                 }
-                detectVerticalDragGestures(
-                    onDragStart = { reorder.start(list, at, key) },
+                detectDragGesturesAfterLongPress(
+                    onDragStart = {
+                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                        reorder.start(list, at, key)
+                    },
                     onDragEnd = { letGo() },
                     onDragCancel = { letGo() },
-                ) { change, amount ->
-                    change.consume()
-                    reorder.drag(amount, row())
-                }
+                ) { _, amount -> reorder.drag(amount.y, row()) }
             },
     ) {
         Icon(painterResource(R.drawable.ic_drag_indicator), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))

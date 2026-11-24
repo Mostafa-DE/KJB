@@ -32,7 +32,7 @@ import android.content.Context
 import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -84,10 +84,12 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
@@ -775,12 +777,14 @@ internal fun RecentChips(others: List<Queue>, labels: Map<String, String>, onOpe
 
 /**
  * A queue's songs, the place marked: a tap plays the queue from that song once a moment has passed with no second tap
- * ([WaitingTap]), and a double tap only makes the song a favourite ([doubleTapFavourite]); the handle drags a song to
- * another place, the others sliding out of its way ([Reorder]); a swipe to the start, or "Remove from queue" in the
- * row's menu, takes it out (with Undo through [onRemoved]), the rows under it closing up. Songs not on the phone stay
- * listed, quietly marked, and are skipped (and have no double tap; their tap acts at once). In the queue playing, Smart
- * shuffle's card comes first while it is on, and where the queue's own songs end, Autoplay's card with its switch, before
- * the songs Autoplay put after them (or at the end, as the last song comes near) ([autoplayCut]).
+ * ([WaitingTap]), and a double tap only makes the song a favourite ([doubleTapFavourite]); the handle, held for the
+ * phone's long press, lifts a song with a tick and drags it to another place, the others sliding out of its way
+ * ([Reorder]), while a quick swipe on it scrolls as anywhere on the row (user feedback 2026-11-22, item 67); a swipe to
+ * the start, or "Remove from queue" in the row's menu, takes it out (with Undo through [onRemoved]), the rows under it
+ * closing up. Songs not on the phone stay listed, quietly marked, and are skipped (and have no double tap; their tap
+ * acts at once). In the queue playing, Smart shuffle's card comes first while it is on, and where the queue's own songs
+ * end, Autoplay's card with its switch, before the songs Autoplay put after them (or at the end, as the last song comes
+ * near) ([autoplayCut]).
  */
 @Suppress("LongParameterList")
 private fun LazyListScope.queueSongs(
@@ -962,6 +966,7 @@ private fun QueueSongRow(
     val lifted = with(LocalDensity.current) { LIFT.toPx() }
     val latest by rememberUpdatedState(queue)
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
     val remove = { onRemoved(connection.remove(queue.id, item.uid)) }
     val tap = rememberWaitingTap { connection.jump(queue.id, index) }
     val state = rememberSwipeToDismissBoxState()
@@ -1098,14 +1103,14 @@ private fun QueueSongRow(
                     .semantics { contentDescription = resources.getString(R.string.queue_move, title) }
                     .pointerInput(queue.id, item.uid) {
                         val drop = { scope.launch { reorder.drop(latest, connection) } }
-                        detectDragGestures(
-                            onDragStart = { reorder.start(latest, item.uid) },
+                        detectDragGesturesAfterLongPress(
+                            onDragStart = {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                reorder.start(latest, item.uid)
+                            },
                             onDragEnd = { drop() },
                             onDragCancel = { drop() },
-                        ) { change, amount ->
-                            change.consume()
-                            reorder.drag(amount.y, rowPx)
-                        }
+                        ) { _, amount -> reorder.drag(amount.y, rowPx) }
                     },
             ) { Icon(painterResource(R.drawable.ic_drag_indicator), contentDescription = null, tint = muted, modifier = Modifier.size(20.dp)) }
         }
