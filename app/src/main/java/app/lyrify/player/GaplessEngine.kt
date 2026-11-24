@@ -204,11 +204,7 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
             changeSongs { player.clearMediaItems() }
             return
         }
-        loadItems(items.map(itemOf), index, positionMs)
-    }
-
-    override fun loadItems(items: List<MediaItem>, index: Int, positionMs: Long) {
-        changeSongs { player.setMediaItems(items, index, positionMs) }
+        changeSongs { player.setMediaItems(items.map(itemOf), index, positionMs) }
         player.prepare()
     }
 
@@ -228,17 +224,6 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
             // uris are the same (canUpdateMediaItem), so the song playing goes on undisturbed.
             is Edit.Refresh -> player.replaceMediaItems(edit.at, edit.at + edit.items.size, edit.items.map(itemOf))
         }
-    }
-
-    override fun around(before: List<MediaItem>, after: List<MediaItem>) = changeSongs {
-        val at = player.currentMediaItemIndex
-        val count = player.mediaItemCount
-        // The songs after it that stay are kept as they are: the next one may be loaded already, or even playing on
-        // ExoPlayer's thread (CR2). The rest are replaced, the new ones added before the old ones go, so a player gone on
-        // to one of those goes on to them.
-        val kept = (0 until minOf(after.size, count - at - 1)).takeWhile { player.getMediaItemAt(at + 1 + it).mediaId == after[it].mediaId }.size
-        if (kept < after.size || at + 1 + kept < count) player.replaceMediaItems(at + 1 + kept, count, after.subList(kept, after.size))
-        if (at > 0 || before.isNotEmpty()) player.replaceMediaItems(0, at, before)
     }
 
     /** [change] made to ExoPlayer's songs: the kept ones go first, and are read again at the next read. */

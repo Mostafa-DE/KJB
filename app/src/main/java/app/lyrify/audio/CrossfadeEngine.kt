@@ -27,6 +27,7 @@ import app.lyrify.player.SongState
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Speed
 import app.lyrify.player.albumInOrder
+import app.lyrify.player.around
 import app.lyrify.player.resumeAt
 import app.lyrify.settings.RememberPlace
 import app.lyrify.settings.Settings
@@ -55,8 +56,9 @@ const val PREPARE_LEAD_MS: Long = 5_000
 const val NEXT_READY_AFTER_MS: Long = 1_000
 
 /**
- * While crossfade is on, a player holds the song it plays and the next ones, this many in all, never the queue: a Next
- * hands a player a few songs, not thousands, and a song shorter than the main thread's delay still finds the one after it.
+ * While crossfade is on, a player holds the song it plays and the next ones, this many in all, never the queue (a queue
+ * this long or shorter is held whole): a Next hands a player a few songs, not thousands, and a song shorter than the main
+ * thread's delay still finds the one after it.
  */
 const val SONGS_HELD: Int = 3
 
@@ -164,15 +166,6 @@ fun comingInAt(queue: Queue?, uid: Long, durationMs: Long, state: SongState, mod
  * off, a few songs of it ([SONGS_HELD]) while it is on, and what a fade needs.
  */
 interface FadeSlot : PlaybackEngine {
-    /** Loads [items], media items the engine made, as they are. */
-    fun loadItems(items: List<MediaItem>, index: Int, positionMs: Long)
-
-    /**
-     * Holds [before], the song playing, then [after]: the song playing goes on undisturbed, and the songs after it that
-     * stay, in order, are kept as they are, the next one maybe loaded already.
-     */
-    fun around(before: List<MediaItem>, after: List<MediaItem>)
-
     /** The song going out of a fade pauses at its end instead of going on to the next song. */
     fun setPauseAtEndOfItems(pause: Boolean)
 
@@ -246,7 +239,13 @@ class CrossfadeEngine(
     /** The player of the song playing: the one the session sees. */
     private var active: FadeSlot = newSlot().also { it.addListener(SlotEvents(it)) }
 
-    /** The queue while crossfade is on, each player holding a few songs of it; null while off, the one player holding it. */
+    /**
+     * The queue's songs as the bridge hands them, kept on and off: with crossfade on, a player is handed a few of them
+     * ([windowOf]), and turned off, the one player all of them again.
+     */
+    private var songs: List<Projected> = emptyList()
+
+    /** The queue as the session sees it while crossfade is on, each player holding a few songs of it; null while off. */
     private var held: Held? = null
 
     /**
@@ -305,9 +304,9 @@ class CrossfadeEngine(
 
     /**
      * Repeat as a player plays it: while crossfade is on, Repeat all goes round through the songs each player is handed
-     * ([windowOf]), never round a player's own few; a queue of one song laps.
+     * ([windowOf]), never round a player's own few, unless it holds the whole queue.
      */
-    private val slotRepeat: Repeat get() = if (repeat == Repeat.ALL && (held?.uids?.size ?: 0) > 1) Repeat.OFF else repeat
+    private val slotRepeat: Repeat get() = if (held != null && repeat == Repeat.ALL && loaded.size > SONGS_HELD) Repeat.OFF else repeat
 
     /** The music should be heard: wanted and not held by a call. */
     private val sounding: Boolean get() = if (on) wantPlay && !suppressed else active.playWhenReady
@@ -321,7 +320,7 @@ class CrossfadeEngine(
         if (on != wasOn) {
             if (on) {
                 // The engine takes the one player's focus over; offload goes off at once. It holds the queue from now, and
-                // the player its song and the next ones ([fit], at the look below), the song playing on.
+                // the player its song and the next ones (at the look below), the song playing on.
                 offloadAtNextSong = false
                 active.setOffload(false)
                 held = Held(active.items, active.loaded)
@@ -334,13 +333,12 @@ class CrossfadeEngine(
             } else {
                 dropStandby()
                 if (fading) shorten(fromSilence = false)
-                // The one player takes the whole queue back around its song, which plays on. The engine lets the queue go
-                // first: the look the player's news asks for must not take its songs back to a few.
-                held?.let { queue ->
-                    val at = index
-                    held = null
-                    if (at >= 0) active.around(queue.items.subList(0, at), queue.items.subList(at + 1, queue.items.size))
-                }
+                // The one player takes the whole queue back around its song, which plays on, and the song after it too,
+                // which ExoPlayer's thread may be on already (CR2, [around]). The engine lets the queue go first: the look
+                // the player's news asks for must not take its songs back to a few.
+                val playing = active.loaded.getOrNull(active.index)
+                held = null
+                if (playing != null) active.applyAll(around(active.loaded, songs, playing))
                 active.setRepeat(repeat)
                 focus.setHandled(false)
                 obey(focus.update(wantPlay, active.playbackState))
@@ -380,11 +378,12 @@ class CrossfadeEngine(
         }
 
     override fun load(items: List<Projected>, index: Int, positionMs: Long) {
+        songs = if (index < 0) emptyList() else items
         if (!on && !fading) return active.load(items, index, positionMs)
         if (on) {
             // The engine holds the queue (none at -1). The song waiting is the queue before's: its player stays, for this
             // queue's song a Next goes to.
-            held = if (index < 0) Held(emptyList(), emptyList()) else Held(items.map(itemOf), items.map { it.uid })
+            held = Held(songs.map(itemOf), songs.map { it.uid })
             standbyFor = null
         }
         when {
@@ -398,7 +397,7 @@ class CrossfadeEngine(
             else -> {
                 if (fading) shorten(fromSilence = true)
                 // Crossfade on, the player takes the song and the next ones; turned off in a fade, the whole queue.
-                held?.let { queue -> active.loadItems(windowOf(index).map(queue.items::get), 0, positionMs) } ?: active.load(items, index, positionMs)
+                if (on) loadAt(active, index, positionMs) else active.load(items, index, positionMs)
             }
         }
         applyVolumes()
@@ -415,37 +414,41 @@ class CrossfadeEngine(
         val was = looking
         looking = true
         try {
+            // The engine's songs take the edits, and with crossfade on its media items too. Each player then takes a
+            // song's new file, or its new details (a cover Covers & tags changed), in place where it holds that song; the
+            // songs around the one playing come and go at the look.
             val queue = held
-            if (queue == null) {
-                active.applyAll(edits)
-            } else {
-                // The engine's queue takes the edits. Each player takes a song's new file, or its new details (a cover
-                // Covers & tags changed), in place where it holds that song; the songs around the one playing come and go
-                // at the look ([fit]).
-                val items = queue.items.toMutableList()
-                val uids = queue.uids.toMutableList()
-                edits.forEach { edit ->
-                    when (edit) {
-                        is Edit.Remove -> {
-                            items.subList(edit.at, edit.at + edit.count).clear()
-                            uids.subList(edit.at, edit.at + edit.count).clear()
-                        }
-                        is Edit.Insert -> {
-                            items.addAll(edit.at, edit.items.map(itemOf))
-                            uids.addAll(edit.at, edit.items.map { it.uid })
-                        }
-                        is Edit.Move -> {
-                            items.add(edit.to, items.removeAt(edit.from))
-                            uids.add(edit.to, uids.removeAt(edit.from))
-                        }
-                        is Edit.Replace -> {
-                            items[edit.at] = itemOf(edit.item)
-                            uids[edit.at] = edit.item.uid
-                        }
-                        is Edit.Refresh -> edit.items.forEachIndexed { k, item -> items[edit.at + k] = itemOf(item) }
+            val now = songs.toMutableList()
+            val items = queue?.items?.toMutableList()
+            edits.forEach { edit ->
+                when (edit) {
+                    is Edit.Remove -> {
+                        now.subList(edit.at, edit.at + edit.count).clear()
+                        items?.subList(edit.at, edit.at + edit.count)?.clear()
+                    }
+                    is Edit.Insert -> {
+                        now.addAll(edit.at, edit.items)
+                        items?.addAll(edit.at, edit.items.map(itemOf))
+                    }
+                    is Edit.Move -> {
+                        now.add(edit.to, now.removeAt(edit.from))
+                        items?.let { it.add(edit.to, it.removeAt(edit.from)) }
+                    }
+                    is Edit.Replace -> {
+                        now[edit.at] = edit.item
+                        items?.set(edit.at, itemOf(edit.item))
+                    }
+                    is Edit.Refresh -> edit.items.forEachIndexed { k, item ->
+                        now[edit.at + k] = item
+                        items?.set(edit.at + k, itemOf(item))
                     }
                 }
-                held = Held(items, uids)
+            }
+            songs = now
+            if (items == null) {
+                active.applyAll(edits)
+            } else {
+                held = Held(items, now.map { it.uid })
                 listOfNotNull(active, standby).forEach { slot ->
                     edits.forEach { edit ->
                         when (edit) {
@@ -586,7 +589,15 @@ class CrossfadeEngine(
             if (pausedAt == null) pausedAt = now
             heardFrom = null
         }
-        fit()
+        // While crossfade is on, the player playing holds its song and the next ones as the queue and Repeat have them now
+        // ([windowOf]): the songs played go and the songs after it come and go, never the song playing or the one after
+        // it, which ExoPlayer's thread may be on already (CR2, [around]).
+        val at = index
+        val window = if (held == null || at < 0) null else windowOf(at)
+        if (window != null && active.loaded != window.map(loaded::get)) {
+            active.applyAll(around(active.loaded, window.map(songs::get), loaded[at]))
+            active.setRepeat(slotRepeat)
+        }
         if (tailRamp?.done == true || tail?.let(::finished) == true) letTailGo()
         if (activeRamp?.done == true) activeRamp = null
         val paused = pausedAt
@@ -683,7 +694,7 @@ class CrossfadeEngine(
     private fun prepareAhead(index: Int, to: Long, coming: Coming) {
         val slot = standby ?: makeSlot(coming.parameters)
         if (slot.playbackParameters != coming.parameters) slot.setPlaybackParameters(coming.parameters)
-        slot.loadItems(windowOf(index).map(items::get), 0, coming.atMs)
+        loadAt(slot, index, coming.atMs)
         standby = slot
         standbyFor = to
         standbyAt = coming.atMs
@@ -732,7 +743,7 @@ class CrossfadeEngine(
         standby = null
         standbyFor = null
         when {
-            waiting == null -> incoming.loadItems(windowOf(index).map(items::get), 0, positionMs)
+            waiting == null -> loadAt(incoming, index, positionMs)
             standbyAt != positionMs -> incoming.seek(incoming.index, positionMs)
         }
         if (incoming.playbackParameters != parameters) incoming.setPlaybackParameters(parameters)
@@ -780,28 +791,24 @@ class CrossfadeEngine(
         }
     }
 
-    /** The places in the queue of the songs a player holds from the song at [index]: it and the next ones as Repeat goes on. */
-    private fun windowOf(index: Int): List<Int> = generateSequence(index) { nextIndexFor(it, loaded.size, repeat) }.take(SONGS_HELD).distinct().toList()
-
     /**
-     * The player playing holds its song and the next ones as the queue and Repeat have them now ([windowOf]): the songs
-     * played go, the songs after it come and go, and the song playing goes on.
+     * The places in the queue of the songs a player holds for the song at [index]: it and the next ones as the queue goes
+     * on (Repeat one keeps them, so turning it on takes none out), or the whole queue when it is that short.
      */
-    private fun fit() {
-        if (held == null) return
-        val at = index
-        if (at < 0) return
-        val window = windowOf(at)
-        if (active.index == 0 && active.loaded == window.map(loaded::get)) return
-        active.around(emptyList(), window.drop(1).map(items::get))
-        active.setRepeat(slotRepeat)
+    private fun windowOf(index: Int): List<Int> =
+        if (loaded.size <= SONGS_HELD) loaded.indices.toList() else generateSequence(index) { nextIndexFor(it, loaded.size, if (repeat == Repeat.ONE) Repeat.OFF else repeat) }.take(SONGS_HELD).toList()
+
+    /** [slot] loads the queue's song at [index], at [positionMs], with the songs a player holds around it ([windowOf]). */
+    private fun loadAt(slot: FadeSlot, index: Int, positionMs: Long) {
+        val window = windowOf(index)
+        slot.load(window.map(songs::get), window.indexOf(index), positionMs)
     }
 
     /** The player playing goes to the queue's song at [index]: a seek when it holds that song, else it and the next ones loaded there. */
     private fun goTo(index: Int, positionMs: Long) {
         val queue = held ?: return active.seek(index, positionMs)
         val at = active.loaded.indexOf(queue.uids[index])
-        if (at >= 0) active.seek(at, positionMs) else active.loadItems(windowOf(index).map(queue.items::get), 0, positionMs)
+        if (at >= 0) active.seek(at, positionMs) else loadAt(active, index, positionMs)
     }
 
     /** A second player set up as the first: its audio session, the engine's focus, no offload, the same settings. */

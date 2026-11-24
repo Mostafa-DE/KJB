@@ -71,6 +71,19 @@ class FakeSlot(
     var most: Int = 0
         private set
 
+    /**
+     * The song ExoPlayer's playback thread went on to at a song's end before the main thread heard of it (CR2), from
+     * [goOnAhead]; null while the two agree. An edit taking it out makes the thread go on, as Media3 1.11.1 does, with the
+     * first song after it, in the list before that edit, that the edit left, from its start ([restartedAhead]); with
+     * none, playback ends ([endedAhead]). A Replace (another file) starts it again.
+     */
+    var ahead: Long? = null
+        private set
+    var restartedAhead: Boolean = false
+        private set
+    var endedAhead: Boolean = false
+        private set
+
     override var loaded: List<Long> = emptyList()
         private set(value) {
             field = value
@@ -118,19 +131,6 @@ class FakeSlot(
         loadUids(items.map { it.uid }, index, positionMs)
     }
 
-    override fun loadItems(items: List<MediaItem>, index: Int, positionMs: Long) {
-        calls += "loadItems ${items.map { it.mediaId }} $index $positionMs"
-        handed += items.size
-        loadUids(items.map { it.mediaId.toLong() }, index, positionMs)
-    }
-
-    override fun around(before: List<MediaItem>, after: List<MediaItem>) = changing {
-        calls += "around ${before.map { it.mediaId }} ${after.map { it.mediaId }}"
-        handed += before.size + after.size
-        val playing = loaded[index]
-        loaded = before.map { it.mediaId.toLong() } + playing + after.map { it.mediaId.toLong() }
-        index = before.size
-    }
 
     private fun loadUids(uids: List<Long>, at: Int, positionMs: Long) = changing {
         loaded = uids
@@ -148,6 +148,7 @@ class FakeSlot(
     override fun apply(edit: Edit) = changing {
         calls += "apply $edit"
         val playing = uid
+        val before = loaded
         val list = loaded.toMutableList()
         when (edit) {
             is Edit.Remove -> list.subList(edit.at, edit.at + edit.count).clear()
@@ -158,6 +159,30 @@ class FakeSlot(
         }
         loaded = list
         index = list.indexOf(playing)
+        when (edit) {
+            is Edit.Remove -> walkAhead(before, (edit.at until edit.at + edit.count).toSet())
+            is Edit.Replace -> if (before[edit.at] == ahead) restartedAhead = true
+            is Edit.Insert, is Edit.Move, is Edit.Refresh -> Unit
+        }
+    }
+
+    /** The song playing ends on the playback thread, which goes on to the next song held; the main thread hears nothing yet. */
+    fun goOnAhead() {
+        ahead = loaded.getOrNull(index + 1) ?: loaded.firstOrNull()?.takeIf { repeat == Repeat.ALL }
+    }
+
+    /** The songs at [goneAt] of [before] were taken out: the playback thread goes on as Media3 does if its song was one. */
+    private fun walkAhead(before: List<Long>, goneAt: Set<Int>) {
+        val now = ahead ?: return
+        val at = before.indexOf(now)
+        if (at !in goneAt) return
+        restartedAhead = true
+        ahead = (at + 1 until at + before.size).asSequence()
+            .takeWhile { repeat == Repeat.ALL || it < before.size }
+            .map { it % before.size }
+            .firstOrNull { it !in goneAt }
+            ?.let(before::get)
+        if (ahead == null) endedAhead = true
     }
 
     override fun seek(index: Int, positionMs: Long) = changing {

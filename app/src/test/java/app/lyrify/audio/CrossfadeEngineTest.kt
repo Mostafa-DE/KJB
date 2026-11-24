@@ -175,7 +175,7 @@ class CrossfadeEngineTest {
         val waiting = rig.made(2)
         rig.engine.seek(0, 0)
         assertEquals(listOf(second, waiting), rig.live)
-        assertTrue("loadItems ${rig.uids.subList(0, 3)} 0 0" in waiting.calls)
+        assertTrue("load ${rig.uids.subList(0, 3)} 0 0" in waiting.calls)
         rig.run(FakeSlot.BUFFER_MS + SHORT_FADE_MS + 50)
         assertEquals(listOf(waiting, rig.made(3)), rig.live)
         assertEquals(0, rig.engine.index)
@@ -189,7 +189,9 @@ class CrossfadeEngineTest {
         val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(2, lengthMs = 8_000))
         rig.run(500)
         val (first, waiting) = rig.two(rig.slots)
-        assertEquals(listOf(rig.uids[1]), waiting.loaded)
+        // A queue this short is held whole, at the song waiting.
+        assertEquals(rig.uids, waiting.loaded)
+        assertEquals(1, waiting.index)
         assertFalse(waiting.playWhenReady)
         rig.engine.seek(1, 0)
         assertEquals("players made by the Next", 2, rig.slots.size)
@@ -355,12 +357,12 @@ class CrossfadeEngineTest {
         val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(6))
         rig.runToLeft(6_000 + 2_000)
         val waiting = rig.made(1)
-        val loads = waiting.calls.count { it.startsWith("loadItems") }
+        val loads = waiting.calls.count { it.startsWith("load ") }
         rig.engine.applyAll(listOf(Edit.Move(3, 1), Edit.Move(5, 2), Edit.Remove(4)))
         rig.run(0)
         assertFalse(waiting.released)
         assertEquals("players made", 2, rig.slots.size)
-        assertEquals("loads on the waiting player", loads + 1, waiting.calls.count { it.startsWith("loadItems") })
+        assertEquals("loads on the waiting player", loads + 1, waiting.calls.count { it.startsWith("load ") })
         assertEquals(listOf(rig.uids[3], rig.uids[5], rig.uids[1]), waiting.loaded)
         assertEquals(listOf(rig.uids[0], rig.uids[3], rig.uids[5], rig.uids[1], rig.uids[4]), rig.engine.loaded)
         rig.run(3_000)
@@ -647,7 +649,7 @@ class CrossfadeEngineTest {
         rig.runToLeft(8_000)
         val (first, second) = rig.two(rig.slots)
         assertEquals(rig.start(1, natural = true), rig.heard.starts.last())
-        assertTrue("loadItems ${rig.uids.subList(1, 3)} 0 240000" in second.calls)
+        assertTrue("load ${rig.uids} 1 240000" in second.calls)
         rig.run(4_000)
         // Half way through the full 8 s fade, the song 4 s past its place.
         assertEquals(fadeInGain(0.5f), second.volume, 0.02f)
@@ -831,9 +833,9 @@ class CrossfadeEngineTest {
         val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(2))
         rig.engine.setRepeat(Repeat.ONE)
         rig.run(60_000 + 1_000)
-        // It laps on the first player, holding its one song; the second waits for a Next by hand, never heard.
+        // It laps on the first player, holding the whole short queue; the second waits for a Next by hand, never heard.
         val (first, waiting) = rig.two(rig.slots)
-        assertEquals(listOf(rig.uids[0]), first.loaded)
+        assertEquals(rig.uids, first.loaded)
         assertEquals(Repeat.ONE, first.repeat)
         assertFalse("play true" in waiting.calls)
         assertEquals(listOf(rig.start(0), rig.start(0, natural = true, lap = true)), rig.heard.starts)
@@ -1046,18 +1048,60 @@ class CrossfadeEngineTest {
 
     @Test
     fun `with Repeat all the last song goes on into the first, which the player holds after it`() = runTest {
-        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(3, lengthMs = 20_000))
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(5, lengthMs = 20_000))
         rig.mayFade = { _, _ -> false }
         rig.engine.setRepeat(Repeat.ALL)
-        rig.run(41_000)
+        rig.run(81_000)
         val playing = rig.made(0)
-        assertEquals(listOf(rig.uids[2], rig.uids[0], rig.uids[1]), playing.loaded)
+        assertEquals(listOf(rig.uids[4], rig.uids[0], rig.uids[1]), playing.loaded)
         // Repeat all goes round through the queue, so the player itself never goes round its own three songs.
         assertEquals(Repeat.OFF, playing.repeat)
         rig.run(20_000)
-        assertEquals(listOf(rig.start(0), rig.start(1, natural = true), rig.start(2, natural = true), rig.start(0, natural = true)), rig.heard.starts)
+        assertEquals(listOf(rig.start(0)) + (1..4).map { rig.start(it, natural = true) } + rig.start(0, natural = true), rig.heard.starts)
         assertEquals(0, rig.engine.index)
         assertEquals(rig.uids.subList(0, 3), playing.loaded)
+    }
+
+    /** Grok review: a queue of a few songs is held whole, Repeat as it is, so the player goes round by itself, as off. */
+    @Test
+    fun `a queue of two songs with Repeat all is held whole and goes round on its player by itself`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(2, lengthMs = 20_000))
+        rig.mayFade = { _, _ -> false }
+        rig.engine.setRepeat(Repeat.ALL)
+        rig.run(21_000)
+        val playing = rig.made(0)
+        assertEquals(rig.uids, playing.loaded)
+        assertEquals(Repeat.ALL, playing.repeat)
+        rig.run(20_000)
+        assertEquals(listOf(rig.start(0), rig.start(1, natural = true), rig.start(0, natural = true)), rig.heard.starts)
+        assertEquals(rig.uids, playing.loaded)
+        assertEquals(0, rig.engine.index)
+    }
+
+    /**
+     * CR2 for the players crossfade keeps a few songs on (Grok review): at a song's end ExoPlayer's own thread goes on to
+     * the next song before the main thread hears of it, so a queue edit or Repeat one coming in then must never take that
+     * song out from under it. Taken out, it would start another song from its start, or end playback (the service would
+     * then pause and go to the first song).
+     */
+    @Test
+    fun `a queue edit or Repeat one coming just as a song ends never stops or restarts the song the player went on to`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(8))
+        rig.mayFade = { _, _ -> false }
+        rig.run(2_000)
+        val playing = rig.made(0)
+        playing.goOnAhead()
+        assertEquals(rig.uids[1], playing.ahead)
+        // Play next puts song 6 right after the song playing.
+        rig.engine.applyAll(listOf(Edit.Move(5, 1)))
+        rig.run(0)
+        assertEquals(listOf(rig.uids[0], rig.uids[5], rig.uids[1]), playing.loaded)
+        // Repeat one comes on.
+        rig.engine.setRepeat(Repeat.ONE)
+        rig.run(0)
+        assertEquals(rig.uids[1], playing.ahead)
+        assertFalse("started again", playing.restartedAhead)
+        assertFalse("ended", playing.endedAhead)
     }
 
     @Test
@@ -1102,7 +1146,7 @@ class CrossfadeEngineTest {
         val next = rig.made(2)
         rig.engine.seek(0, 0)
         assertEquals("players made by Previous", 3, rig.slots.size)
-        assertTrue("loadItems ${rig.uids.subList(0, 3)} 0 0" in next.calls)
+        assertTrue("load ${rig.uids.subList(0, 3)} 0 0" in next.calls)
         assertEquals(listOf(rig.start(0), rig.start(1), rig.start(0)), rig.heard.starts)
         assertEquals(0, rig.engine.index)
     }
