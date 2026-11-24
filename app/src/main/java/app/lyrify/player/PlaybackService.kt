@@ -5,6 +5,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
@@ -33,8 +34,10 @@ import app.lyrify.R
 import app.lyrify.audio.CrossfadeEngine
 import app.lyrify.audio.LiveEq
 import app.lyrify.audio.MediaFocus
+import app.lyrify.audio.OutputKind
 import app.lyrify.audio.OutputRoutesPart
 import app.lyrify.audio.QueueFadeRules
+import app.lyrify.audio.readOutput
 import app.lyrify.auto.CarBrowse
 import app.lyrify.auto.CarCovers
 import app.lyrify.auto.ControllerAccess
@@ -377,10 +380,16 @@ class PlaybackService : MediaLibraryService() {
             savePlace()
             val song = find(item.song)
             val (ended, by) = playTurn(natural, move, item.playNext, suggested = queue.suggests(item))
-            // A natural crossfade's song going out is left where its fade began (the engine says so only now).
+            // A natural crossfade's song going out is left where its fade began (the engine says so only now). Where it is
+            // heard and the playlist it comes from, for Insights: the kind of output only, and a playlist's id only.
             tracker.start(
                 item.song, song?.durationMs ?: C.TIME_UNSET, engine.positionMs, engine.isPlaying,
-                ended = ended, leftAtMs = engine.fadeFromMs, start = PlayStart(by, queue.source.kind, queue.shuffled, song?.let(::songKey)),
+                ended = ended, leftAtMs = engine.fadeFromMs,
+                start = PlayStart(
+                    by, queue.source.kind, queue.shuffled, song?.let(::songKey),
+                    output = if (browse.inCar) OutputKind.CAR else readOutput(getSystemService(AudioManager::class.java)).kind,
+                    playlistId = queue.source.key.takeIf { queue.source.kind == SourceKind.PLAYLIST },
+                ),
             )
         }
 
