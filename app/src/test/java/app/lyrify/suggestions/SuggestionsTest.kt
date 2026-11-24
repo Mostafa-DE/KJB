@@ -192,7 +192,7 @@ class SuggestionsTest {
 
     // The queue's feed
 
-    private val source = QueueSource(SourceKind.ALBUM, "trip", "Road trip")
+    private val source = QueueSource(SourceKind.PLAYLIST, "trip", "Road trip")
 
     private fun queueOf(vararg n: Int, start: Int = 0) = QueueBook().play(n.map { songs[it].ref }, start, source, now).book
 
@@ -213,6 +213,20 @@ class SuggestionsTest {
         assertTrue(service.feed(book.current!!, Repeat.ALL, autoplay = true).isEmpty())
         assertTrue(service.feed(book.current!!, Repeat.OFF, autoplay = false).isEmpty())
         assertTrue(service.feed(fed.current!!, Repeat.OFF, autoplay = true).isEmpty())
+    }
+
+    @Test
+    fun `Autoplay goes on after an album tapped at a song, once the album's song before that one plays`() = runBlocking {
+        val service = suggestions(file = null)
+        val album = QueueSource(SourceKind.ALBUM, "album:tide", "Tide Lines")
+        // Song 3 tapped: Song 3, Song 4, then round to Song 1 and Song 2, the last.
+        var book = QueueBook().play(listOf(1, 2, 3, 4).map { songs[it].ref }, 2, album, now).book
+        assertTrue(service.feed(book.current!!, Repeat.OFF, autoplay = true).isEmpty())
+        book = book.jump(book.currentId!!, 3, now).book
+        assertEquals(songs[2].path, book.current!!.current!!.song.path)
+        val feed = service.feed(book.current!!, Repeat.OFF, autoplay = true).single()
+        assertEquals(Suggested.AUTOPLAY, feed.by)
+        assertTrue(feed.songs.all { it.first == book.current!!.items.last().uid })
     }
 
     @Test

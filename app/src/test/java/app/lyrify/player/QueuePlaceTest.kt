@@ -442,7 +442,7 @@ class QueuePlaceTest {
     @Test
     fun `a song moved to the trash while it plays gives way to the next one, and the last one stops the player at the queue's first song`() = runTest {
         val kjb = Kjb(this, Files())
-        kjb.tap(songs.take(4), 1, album)
+        kjb.tap(songs.take(4), 1, songsTab)
         kjb.listen(30_000)
 
         kjb.trash(setOf(songs[1].path, songs[2].path))

@@ -142,6 +142,12 @@ class CarBrowse(
         connected.remove(controller)
     }
 
+    /**
+     * Whether a car is connected now (Android Auto, a car's media centre): a play that starts then is heard in the car
+     * (Insights' Where you listen), as Android Auto's sound goes through its own link, not an output the phone names.
+     */
+    val inCar: Boolean get() = Access.CAR in connected.values
+
     /** The root, at once and never null: as many top lists as [params]' root hint allows (Android Auto's, usually 4), and the list style for every level. */
     fun root(params: LibraryParams?): LibraryResult<MediaItem> {
         val limit = params?.extras?.getInt(MediaConstants.EXTRAS_KEY_ROOT_CHILDREN_LIMIT, 0)

@@ -128,7 +128,7 @@ object QueuesJson {
         val ids = read.map { it.id }.toSet()
         val currentId = root[CURRENT_KEY]?.text()?.takeIf { it in ids }
         val saved = strings(root[SAVED_KEY]).filter { it in ids }.distinct()
-        val recent = strings(root[RECENT_KEY]).filter { it in ids && it !in saved && it != currentId }.distinct().take(QueueBook.MAX_RECENT)
+        val recent = recentKept(strings(root[RECENT_KEY]).filter { it in ids && it !in saved && it != currentId }.distinct()) { id -> read.first { it.id == id }.items.size }
         val listed = saved.toSet() + recent + listOfNotNull(currentId)
         val queues = read.filter { it.id in listed }
         dropped += read.size - queues.size
@@ -172,7 +172,6 @@ object QueuesJson {
         put(POSITION_KEY, JsonPrimitive(queue.positionMs))
         put(UPDATED_AT_KEY, JsonPrimitive(queue.updatedAt))
         put(STARTED_AT_KEY, JsonPrimitive(queue.startedAt))
-        queue.listSize?.let { put(LIST_SIZE_KEY, JsonPrimitive(it)) }
         if (queue.smart) put(SMART_KEY, JsonPrimitive(true))
     }
 
@@ -217,8 +216,6 @@ object QueuesJson {
             updatedAt = stored.long(UPDATED_AT_KEY) ?: 0,
             // Queues stored before start times were kept: their last play is as near as is known.
             startedAt = stored.long(STARTED_AT_KEY) ?: stored.long(UPDATED_AT_KEY) ?: 0,
-            // A size that could not be the list's (shorter than a song's place in it) reads as unknown.
-            listSize = stored.int(LIST_SIZE_KEY)?.takeIf { size -> items.all { (it.sourceIndex ?: -1) < size } },
             // Smart shuffle is Shuffle with suggestions: only a shuffled queue has it.
             smart = stored.containsKey(UNSHUFFLED_KEY) && (stored[SMART_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true,
         )
@@ -238,7 +235,8 @@ object QueuesJson {
         else -> key
     }
 
-    private val OWN_KEY = Regex("""#q\d+$""")
+    /** A new queue's own key from Add to, made from a list's ([QueueBook.newQueue]): the list's key and #q<n>. */
+    internal val OWN_KEY = Regex("""#q\d+$""")
     private val OLD_SONGS_KEY = Regex("""^songs:[A-Z_]+(-reversed)?:[A-Z_]+$""")
     private val OLD_SEARCH_KEY = Regex("""^search:""")
     private val OLD_PICKED_KEY = Regex("""^picked:\d+$""")
@@ -276,7 +274,6 @@ object QueuesJson {
     private const val POSITION_KEY: String = "positionMs"
     private const val UPDATED_AT_KEY: String = "updatedAt"
     private const val STARTED_AT_KEY: String = "startedAt"
-    private const val LIST_SIZE_KEY: String = "listSize"
     private const val UNSHUFFLED_KEY: String = "unshuffled"
     private const val ITEMS_KEY: String = "items"
     private const val UID_KEY: String = "uid"

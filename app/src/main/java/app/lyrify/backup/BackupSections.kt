@@ -145,6 +145,8 @@ internal object SectionJson {
                 start.source?.let { put(SOURCE_KEY, JsonPrimitive(codeOf(it))) }
                 put(SHUFFLED_KEY, JsonPrimitive(start.shuffled))
                 start.songKey?.let { put(SONG_KEY_KEY, JsonPrimitive(it)) }
+                start.output?.let { put(OUTPUT_KEY, JsonPrimitive(codeOf(it))) }
+                start.playlistId?.let { put(PLAYLIST_ID_KEY, JsonPrimitive(it)) }
             }
             play.zoneOffsetMinutes?.let { put(ZONE_KEY, JsonPrimitive(it)) }
             play.end?.let { end ->
@@ -196,7 +198,7 @@ internal object SectionJson {
             startedAt = play.long(STARTED_AT_KEY)?.takeIf { it > 0 } ?: return null,
             heardMs = heardMs,
             counted = counted,
-            start = playStartOf(play.text(STARTED_BY_KEY), play.text(SOURCE_KEY), play.flag(SHUFFLED_KEY), play.text(SONG_KEY_KEY)),
+            start = playStartOf(play.text(STARTED_BY_KEY), play.text(SOURCE_KEY), play.flag(SHUFFLED_KEY), play.text(SONG_KEY_KEY), play.text(OUTPUT_KEY), play.text(PLAYLIST_ID_KEY)),
             zoneOffsetMinutes = zoneOffsetOf(play.long(ZONE_KEY)),
             end = playEndedOf(play.text(ENDED_KEY), play.long(ENDED_AT_KEY)),
             imported = counted && heardMs == 0L,
@@ -446,6 +448,8 @@ internal object SectionJson {
     private const val ENDED_KEY: String = "ended"
     private const val ENDED_AT_KEY: String = "endedAtMs"
     private const val CLOCK_KEY: String = "clockMs"
+    private const val OUTPUT_KEY: String = "output"
+    private const val PLAYLIST_ID_KEY: String = "playlistId"
     private const val INTERACTIONS_KEY: String = "interactions"
 
     /** Room in a part for its keys and brackets around the lists: `{"plays":[],"skips":[],"interactions":[]}`. */

@@ -87,11 +87,12 @@ class QueueWritesTest {
     }
 
     @Test
-    fun `a file written before reads back through the store, and is written again byte for byte`() = runBlocking {
+    fun `a file written before reads back through the store, and is written again byte for byte but the list's length, no longer kept`() = runBlocking {
         val book = QueuesJson.decode(OLD_FILE)!!
         assertEquals("Car \"mix\" é", book.current!!.name)
         assertEquals(listOf(3L, 4L, 5L), book.current!!.unshuffled)
-        assertEquals(OLD_FILE, QueuesJson.encode(book))
+        assertEquals(1 to 30_000L, book.queue("q1")!!.let { it.index to it.positionMs })
+        assertEquals(OLD_FILE.replace("\"listSize\":2,", ""), QueuesJson.encode(book))
 
         val file = File(folder.root, "queues.json").apply { writeText(OLD_FILE) }
         val store = queuesStore(file, folder.root, scope, clock = { 7 }) {}

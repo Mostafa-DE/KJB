@@ -80,7 +80,7 @@ class TreeData(
  * Artists; Songs with Shuffle all at the top. Android Auto shows only so many root items ([root]). Pure: the service
  * turns nodes into media items and pages them ([page]). A song's id is its list's id, a bar, and its place there
  * ("album:<key>|3"), so playing it plays that list from it as the same list in the app does: a list plays as the app's
- * own (the same queue source), so a tap in the car inside the list playing goes on in its queue.
+ * own (the same queue source), a new queue from the song as a tap in the app makes (an album's wrapped round).
  */
 object LibraryTree {
     const val ROOT: String = "root"

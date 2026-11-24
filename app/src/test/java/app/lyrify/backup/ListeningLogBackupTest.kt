@@ -15,6 +15,7 @@ import app.lyrify.backup.BackupFixtures.zip
 import app.lyrify.backup.SectionJson.flag
 import app.lyrify.backup.SectionJson.long
 import app.lyrify.backup.SectionJson.text
+import app.lyrify.audio.OutputKind
 import app.lyrify.library.PlaylistsJson
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.SongRef
@@ -203,6 +204,73 @@ class ListeningLogBackupTest {
         assertEquals(2, result.counts[Section.BOOK_PLAYS])
         assertEquals(listOf(newKeeperOne.path to 600_000L, newArchive.path to 300_000L), other.bookLog.plays.sortedBy { it.startedAt }.map { it.song.path to it.clockMs })
         assertEquals(emptyList<LoggedPlay>(), other.log.plays)
+    }
+
+    // Where you listen and Top playlists (KJB v4, IN3)
+
+    /** A play kept since v4: where it was heard and the playlist its queue came from. */
+    private val heardOn = LoggedPlay(
+        lantern.ref, T0 + 1_000_000, 190_000, counted = true,
+        start = picked.copy(source = SourceKind.PLAYLIST, output = OutputKind.BLUETOOTH, playlistId = "7d2e9b10-made-up-playlist"),
+        zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 201_000), clockMs = 190_000,
+    )
+
+    @Test
+    fun `where a play was heard and its playlist go under keys of their own, only when the play kept them, and come back`() {
+        val bytes = zip(BackupFixtures.snapshot.copy(plays = plays + heardOn))
+        val rows = (Json.parseToJsonElement(section(bytes, Section.PLAYS)).jsonObject["plays"] as JsonArray).map { it.jsonObject }
+        assertEquals(listOf(null, null, null, "bluetooth"), rows.map { it["output"]?.jsonPrimitive?.content })
+        assertEquals(listOf(null, null, null, "7d2e9b10-made-up-playlist"), rows.map { it["playlistId"]?.jsonPrimitive?.content })
+        assertEquals((plays + heardOn).map(::noId), contents(bytes).plays)
+
+        val stores = MemoryStores()
+        runBlocking { RestorePlan(contents(bytes), BackupFixtures.library).apply(setOf(Section.PLAYS), stores, newId = { "new" }) }
+        assertEquals(heardOn.start, stores.log.plays.single { it.startedAt == heardOn.startedAt }.start)
+    }
+
+    @Test
+    fun `3_1_x reads a new backup's plays as it always did, the keys it does not know skipped`() {
+        val bytes = zip(BackupFixtures.snapshot.copy(plays = plays + heardOn))
+        assertEquals(1, Section.PLAYS.version)
+        assertEquals((plays + heardOn).map { LoggedPlay(SongRef(it.song.path), it.startedAt, it.heardMs, it.counted) }, plays310(section(bytes, Section.PLAYS)))
+    }
+
+    @Test
+    fun `an r7 backup's plays come back as they were, without where they were heard or their playlist`() {
+        // test-v4-r7 wrote every key a play keeps but these two.
+        val r7 = """{"plays":[{"path":"${lantern.path}","startedAt":$T0,"heardMs":150000,"counted":true,"startedBy":"picked","source":"playlist",""" +
+            """"shuffled":false,"songKey":"k","zoneOffset":180,"ended":"finished","endedAtMs":201000,"clockMs":120000}]}"""
+
+        assertEquals(
+            listOf(
+                LoggedPlay(
+                    SongRef(lantern.path), T0, 150_000, counted = true, start = PlayStart(StartedBy.PICKED, SourceKind.PLAYLIST, shuffled = false, songKey = "k"),
+                    zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 201_000), clockMs = 120_000,
+                ),
+            ),
+            SectionJson.plays(r7)?.plays,
+        )
+    }
+
+    @Test
+    fun `where a play was heard and its playlist are read leniently, a playlist's id only for a play from a playlist`() {
+        val damaged = """{"plays":[{"path":"${lantern.path}","startedAt":$T0,"heardMs":150000,"counted":true,"startedBy":"picked","source":"album",""" +
+            """"output":"jetpack","playlistId":"Harbour Glass"},""" +
+            """{"path":"${bell.path}","startedAt":${T0 + 1},"heardMs":90000,"counted":true,"startedBy":"auto","source":"playlist","output":"car","playlistId":7},""" +
+            """{"path":"${water.path}","startedAt":${T0 + 2},"heardMs":90000,"counted":true,"output":"wired","playlistId":"p1"},""" +
+            """{"path":"${water.path}","startedAt":${T0 + 3},"heardMs":90000,"counted":true,"startedBy":"picked","source":"playlist","playlistId":"p1#q4"}]}"""
+
+        assertEquals(
+            listOf(
+                PlayStart(StartedBy.PICKED, SourceKind.ALBUM, shuffled = false, songKey = null),
+                PlayStart(StartedBy.AUTO, SourceKind.PLAYLIST, shuffled = false, songKey = null, output = OutputKind.CAR),
+                // Without how it began, nothing of it.
+                null,
+                // A saved queue made from a playlist has its own key: no playlist's.
+                PlayStart(StartedBy.PICKED, SourceKind.PLAYLIST, shuffled = false, songKey = null),
+            ),
+            SectionJson.plays(damaged)?.plays?.map { it.start },
+        )
     }
 
     private companion object {

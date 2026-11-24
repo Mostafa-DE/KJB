@@ -1,5 +1,6 @@
 package app.lyrify.stats
 
+import app.lyrify.audio.OutputKind
 import app.lyrify.library.SongRef
 import app.lyrify.player.SourceKind
 import kotlinx.coroutines.runBlocking
@@ -262,6 +263,9 @@ class PlaysSqlTest {
             LoggedPlay(alder, T0 + 4_000, 30_000, counted = false, start = PlayStart(StartedBy.UNKNOWN, null, true, "alder smoke||harbour glass|100"), clockMs = 30_000) to null,
             // Real minutes told again without them.
             LoggedPlay(alder, T0 + 4_000, 30_000, counted = false) to null,
+            // Where it was heard, missing at first, is filled in by a later write; its playlist is not replaced.
+            LoggedPlay(salt, T0 + 5_000, 20_000, counted = false, start = fromPlaylist.copy(output = null)) to OpenState(200_000, 20_000, emptyList()),
+            LoggedPlay(salt, T0 + 5_000, 90_000, counted = true, start = fromPlaylist.copy(playlistId = "another", output = OutputKind.WIRED)) to null,
         )
         val fake = FakePlayLog()
         val sql = store()
@@ -274,6 +278,85 @@ class PlaysSqlTest {
         assertEquals(sql.totals().toSet(), fake.totals().toSet())
         assertEquals(sql.totals(T0 + 1_000, T0 + 3_000).toSet(), fake.totals(T0 + 1_000, T0 + 3_000).toSet())
         assertEquals(sql.since(T0 + 1_000), fake.since(T0 + 1_000))
+    }
+
+    // Where you listen and Top playlists (version 7, KJB v4)
+
+    private val fromPlaylist = picked.copy(source = SourceKind.PLAYLIST, output = OutputKind.BLUETOOTH, playlistId = "4f1c2a90-0d1e-4c3b-9a55-made0up00001")
+
+    @Test
+    fun `an r7 file keeps every play as it was, and gains where each was heard and its playlist empty`() = runBlocking {
+        val store = store(version = 6)
+        val play = LoggedPlay(salt, T0, 200_000, counted = true, start = picked, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 210_000), clockMs = 190_000)
+        // Written as test-v4-r7 writes it: its columns only.
+        store.update(
+            "INSERT INTO plays (path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, ended_how, ended_at_ms, imported, clock_ms) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            salt.path, T0, 12, 200_000, 1, "picked", "album", 0, 180, picked.songKey, "finished", 210_000, 0, 190_000,
+        )
+
+        store.upgrade(6, PlaysSchema.VERSION)
+
+        assertEquals(PLAYS_310 + NEW_COLUMNS, store.columns("plays"))
+        assertEquals(listOf(play), store.all())
+        // A downgrade keeps the file; the next upgrade runs the step again without harm.
+        store.upgrade(6, PlaysSchema.VERSION)
+        assertEquals(listOf(play), store.all())
+    }
+
+    @Test
+    fun `a play keeps where it was heard and its playlist as first written, a part the first write lacked filled in later`() = runBlocking {
+        val store = store()
+        store.put(LoggedPlay(salt, T0, 15_000, counted = false, start = fromPlaylist.copy(output = null), zoneOffsetMinutes = 180), OpenState(210_000, 15_000, emptyList()))
+        // After a restart it goes on as the play kept, the phone on its speaker now and the player in another queue.
+        store.put(LoggedPlay(salt, T0, 200_000, counted = true, start = PlayStart(StartedBy.UNKNOWN, SourceKind.SEARCH, shuffled = true, songKey = null, output = OutputKind.SPEAKER)))
+        store.put(LoggedPlay(ember, T0 + 1_000, 90_000, counted = true, start = fromPlaylist))
+        // Written again with another output and another playlist (a resume after a restart): the first ones stay.
+        store.put(LoggedPlay(ember, T0 + 1_000, 120_000, counted = true, start = fromPlaylist.copy(output = OutputKind.WIRED, playlistId = "0b9e-made-up-other")))
+
+        assertEquals(listOf(fromPlaylist.copy(output = OutputKind.SPEAKER), fromPlaylist), store.all().map { it.start })
+        assertEquals(store.all(), store.since(T0))
+        // A restore of a backup that kept less (r7's) takes nothing away.
+        store.putAll(listOf(LoggedPlay(ember, T0 + 1_000, 90_000, counted = true, start = picked)))
+        assertEquals(fromPlaylist, store.all().last().start)
+    }
+
+    @Test
+    fun `where a play was heard and its playlist read leniently, a playlist's id only for a play from a playlist`() = runBlocking {
+        val store = store()
+        val insert = "INSERT INTO plays (path, started_at, heard_ms, counted, started_by, source, shuffled, output, playlist_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        store.update(insert, salt.path, T0, 5_000, 0, "picked", "album", 0, "jetpack", "Harbour Glass")
+        store.update(insert, ember.path, T0 + 1, 5_000, 0, "auto", "playlist", 1, "wired", " ")
+        store.update(insert, alder.path, T0 + 2, 5_000, 0, "next", "playlist", 0, "car", fromPlaylist.playlistId)
+        store.update(insert, alder.path, T0 + 3, 5_000, 0, "picked", "playlist", 0, "speaker", fromPlaylist.playlistId + "#q12")
+
+        assertEquals(
+            listOf(
+                // An output this version does not know is none, and an album's key (which holds names) is never a playlist's.
+                PlayStart(StartedBy.PICKED, SourceKind.ALBUM, shuffled = false, songKey = null),
+                PlayStart(StartedBy.AUTO, SourceKind.PLAYLIST, shuffled = true, songKey = null, output = OutputKind.WIRED),
+                PlayStart(StartedBy.NEXT, SourceKind.PLAYLIST, shuffled = false, songKey = null, output = OutputKind.CAR, playlistId = fromPlaylist.playlistId),
+                // A saved queue made from a playlist (New queue in Add to): its own key, so no playlist's.
+                PlayStart(StartedBy.PICKED, SourceKind.PLAYLIST, shuffled = false, songKey = null, output = OutputKind.SPEAKER),
+            ),
+            store.all().map { it.start },
+        )
+    }
+
+    @Test
+    fun `a play keeps a playlist's own id only, never a saved queue's made from it, another list's key or a blank one`() {
+        val id = fromPlaylist.playlistId
+        assertEquals(id, playlistIdOf(SourceKind.PLAYLIST, id))
+        // New queue in Add to keeps the list's kind and gives the queue a key of its own (QueueBook.newQueue): its songs
+        // are its own (more can be added from anywhere), so its plays name no playlist; saved again, the same.
+        assertEquals(null, playlistIdOf(SourceKind.PLAYLIST, "$id#q3"))
+        assertEquals(null, playlistIdOf(SourceKind.PLAYLIST, "$id#q3#q7"))
+        // An album's or a folder's key holds names or paths; a blank one or none is no id.
+        assertEquals(null, playlistIdOf(SourceKind.ALBUM, """["Kit Calloway","Harbour Glass"]"""))
+        assertEquals(null, playlistIdOf(SourceKind.FOLDER, "Music/Rips"))
+        assertEquals(null, playlistIdOf(SourceKind.PLAYLIST, " "))
+        assertEquals(null, playlistIdOf(null, id))
+        assertEquals(null, playlistIdOf(SourceKind.PLAYLIST, null))
     }
 
     // The interaction log (version 5)
@@ -407,7 +490,7 @@ class PlaysSqlTest {
 
         val PLAYS_310: Set<String> = setOf("path", "started_at", "media_id", "heard_ms", "counted")
         val OPEN_PLAYS_310: Set<String> = setOf("path", "started_at", "duration_ms", "position_ms", "spans")
-        val NEW_COLUMNS: Set<String> = setOf("started_by", "source", "shuffled", "zone_offset_min", "song_key", "ended_how", "ended_at_ms", "imported", "clock_ms")
+        val NEW_COLUMNS: Set<String> = setOf("started_by", "source", "shuffled", "zone_offset_min", "song_key", "ended_how", "ended_at_ms", "imported", "clock_ms", "output", "playlist_id")
         val INTERACTION_COLUMNS: Set<String> = setOf("at", "kind", "zone_offset_min", "words", "target", "target_key")
 
         /** 3.1.0's PlaysSchema.PUT. */

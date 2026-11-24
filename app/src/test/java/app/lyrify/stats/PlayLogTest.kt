@@ -135,9 +135,9 @@ class PlayLogTest {
     @Test
     fun `an upgrade leaves out the columns a table has already, and adds those it lacks`() {
         val added = PlaysSchema.upgrade(2, PlaysSchema.VERSION).filter { it.startsWith("ALTER ") }
-        assertEquals(9, added.size)
+        assertEquals(11, added.size)
         // A file a newer KJB left, then 3.1.0 kept: every column there, so no column is added twice.
-        val all = setOf("path", "started_at", "started_by", "source", "shuffled", "zone_offset_min", "song_key", "ended_how", "ended_at_ms", "imported", "clock_ms")
+        val all = setOf("path", "started_at", "started_by", "source", "shuffled", "zone_offset_min", "song_key", "ended_how", "ended_at_ms", "imported", "clock_ms", "output", "playlist_id")
         assertEquals(PlaysSchema.upgrade(2, PlaysSchema.VERSION) - added.toSet(), PlaysSchema.upgrade(2, PlaysSchema.VERSION) { if (it == "plays") all else emptySet() })
         // One column there: only the others are added.
         assertEquals(PlaysSchema.upgrade(2, PlaysSchema.VERSION).filterNot { it.contains(" song_key ") }, PlaysSchema.upgrade(2, PlaysSchema.VERSION) { if (it == "plays") setOf("song_key") else emptySet() })
@@ -151,6 +151,15 @@ class PlayLogTest {
         // 3.1.1's file (version 3) gets only that; a file that has it already (a newer KJB's, kept by 3.1.1) nothing.
         assertEquals(listOf("ALTER TABLE plays ADD COLUMN clock_ms INTEGER"), PlaysSchema.upgrade(3, 4))
         assertEquals(emptyList<String>(), PlaysSchema.upgrade(3, 4) { if (it == "plays") setOf("clock_ms") else emptySet() })
+    }
+
+    @Test
+    fun `step 7 adds where each play was heard and its playlist, empty columns on the plays from before, and nothing else`() {
+        val step = listOf("ALTER TABLE plays ADD COLUMN output TEXT", "ALTER TABLE plays ADD COLUMN playlist_id TEXT")
+        assertEquals(step, PlaysSchema.STEPS.getOrNull(6))
+        // test-v4-r7's file (version 6) gets only that; a file that has them already (a newer KJB's, kept by r7) nothing.
+        assertEquals(step, PlaysSchema.upgrade(6, 7))
+        assertEquals(emptyList<String>(), PlaysSchema.upgrade(6, 7) { if (it == "plays") setOf("output", "playlist_id") else emptySet() })
     }
 
     // An unreadable plays.db (the open that finds it runs in PlaysDbDeviceTest)

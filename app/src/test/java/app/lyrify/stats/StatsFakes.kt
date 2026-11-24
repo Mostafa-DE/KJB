@@ -67,8 +67,11 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList(), interactions: List<Inte
     }
 
     /** How a play began, as plays.db merges it: each part as first written, one the first write lacked filled in later. */
-    private fun firstStart(old: PlayStart?, new: PlayStart?): PlayStart? =
-        if (old == null || new == null) old ?: new else old.copy(source = old.source ?: new.source, songKey = old.songKey ?: new.songKey)
+    private fun firstStart(old: PlayStart?, new: PlayStart?): PlayStart? = if (old == null || new == null) {
+        old ?: new
+    } else {
+        old.copy(source = old.source ?: new.source, songKey = old.songKey ?: new.songKey, output = old.output ?: new.output, playlistId = old.playlistId ?: new.playlistId)
+    }
 
     override suspend fun all(): List<LoggedPlay>? = if (failing) null else plays.sortedBy { it.startedAt }
 
