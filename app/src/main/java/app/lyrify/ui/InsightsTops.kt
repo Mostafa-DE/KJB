@@ -225,7 +225,10 @@ internal fun TopSongs(card: TopCard<Song>, settings: Settings, onOpen: (Page) ->
             Column(Modifier.weight(1f).clickable(onClickLabel = stringResource(R.string.stats_song_options)) { onSong(first.top.item.ref) }.semantics(mergeDescendants = true) {}) {
                 Text(stringResource(R.string.insights_top_song).uppercase(), style = CardKicker.copy(fontSize = 11.5.sp), color = brand.highlight)
                 Text(displayTitle(first.top.item, settings.library), style = display(24, 28, -0.02, weight = 700), color = colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                first.top.item.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    first.top.item.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium), color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)) }
+                    SongLength(first.top.item.durationMs)
+                }
                 Counted(first.top.plays.toLong(), BigNumber, colors.onSurface, Modifier.padding(top = 6.dp)) { plays ->
                     buildAnnotatedString {
                         append(formatCount(plays.toInt()))
@@ -240,7 +243,10 @@ internal fun TopSongs(card: TopCard<Song>, settings: Settings, onOpen: (Page) ->
                 val song = row.top.item
                 val clock = LocalArrivalClock.current
                 val title = displayTitle(song, settings.library)
-                val rowDescription = stringResource(R.string.stats_row, place, title, playsNote(row.top.plays)) + placeWords(place, row.before, card.compared)
+                val rowDescription = listOfNotNull(
+                    stringResource(R.string.stats_row, place, title, playsNote(row.top.plays)) + placeWords(place, row.before, card.compared),
+                    lengthWords(song.durationMs).ifEmpty { null },
+                ).joinToString(", ")
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -258,7 +264,10 @@ internal fun TopSongs(card: TopCard<Song>, settings: Settings, onOpen: (Page) ->
                             Text(title, style = RowTitle, color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                             PlaceChange(place, row.before, card.compared)
                         }
-                        Text(listOfNotNull(song.artist?.takeIf { it.isNotBlank() }, listenedText(row.top.heardMs)).joinToString(" · "), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(listOfNotNull(song.artist?.takeIf { it.isNotBlank() }, listenedText(row.top.heardMs)).joinToString(" · "), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            SongLength(song.durationMs, Modifier.padding(start = 8.dp))
+                        }
                     }
                     Column(horizontalAlignment = Alignment.End, modifier = Modifier.width(CountColumn)) {
                         Text(formatCount(row.top.plays), style = CountStyle, color = colors.onSurface)
@@ -594,7 +603,10 @@ internal fun HowYouListen(how: HowCard, settings: Settings, onSong: (SongRef) ->
                 SongCover(SongArt(skipped.song.path, skipped.song.ref.mediaStoreId), size = 48.dp)
                 Column(Modifier.weight(1f)) {
                     Text(stringResource(R.string.insights_most_skipped, title), style = MaterialTheme.typography.titleSmall, color = colors.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    Text(stringResource(R.string.insights_most_skipped_line, skipped.early, skipped.plays), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), color = colors.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.insights_most_skipped_line, skipped.early, skipped.plays), style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.sp), color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
+                        SongLength(skipped.song.durationMs, Modifier.padding(start = 8.dp))
+                    }
                 }
             }
         }

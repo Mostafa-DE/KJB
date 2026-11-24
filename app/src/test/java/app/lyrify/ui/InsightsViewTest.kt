@@ -351,6 +351,31 @@ class InsightsViewTest {
     }
 
     @Test
+    fun `every song shown ends the line under its name with its length, which TalkBack says in words (read from the source)`() {
+        val ui = File("src/main/java/app/lyrify/ui")
+        // The line takes what the length leaves (weighted), the length right after it, so it is never cut or wrapped.
+        // SongLength says it in words; a row with words of its own says it there too.
+        fun ends(text: String, line: String, length: String) =
+            assertTrue(length, Regex(Regex.escape(line) + """[^\n]*weight\(1f[^\n]*\n\s*""" + Regex.escape(length)).containsMatchIn(text))
+        val tops = File(ui, "InsightsTops.kt").readText()
+        // Top songs: the top song under its name, each row after its artist and time; the most skipped song.
+        ends(tops, "first.top.item.artist?.let { Text(it, ", "SongLength(first.top.item.durationMs)")
+        ends(tops, "Text(listOfNotNull(song.artist?.takeIf { it.isNotBlank() }, listenedText(row.top.heardMs)).joinToString(\" · \"), ", "SongLength(song.durationMs, Modifier.padding(start = 8.dp))")
+        assertTrue(tops.contains("lengthWords(song.durationMs).ifEmpty { null }"))
+        ends(tops, "Text(stringResource(R.string.insights_most_skipped_line, skipped.early, skipped.plays), ", "SongLength(skipped.song.durationMs, Modifier.padding(start = 8.dp))")
+        val you = File(ui, "InsightsYou.kt").readText()
+        // Back again's songs after their quiet days (below them when a narrow tile has no room for both), and the song a
+        // friend sent that you kept playing under its name.
+        assertTrue(Regex(Regex.escape("FlowRow(") + """[^\n]*\n\s*""" + Regex.escape("Text(pluralStringResource(R.plurals.insights_quiet_days, ") + """[^\n]*\n\s*""" + Regex.escape("SongLength(back.song.durationMs)")).containsMatchIn(you))
+        assertTrue(Regex(Regex.escape("Text(title, style = display(22, 26, -0.025, weight = 700), color = colors.onSurface)") + """\s*""" + Regex.escape("SongLength(kept.song.durationMs)")).containsMatchIn(you))
+        // The story's quiz and its top song, and the top songs of the picture to share, in their lilac.
+        val slides = File(ui, "InsightsSlides.kt").readText()
+        ends(slides, "song.artist?.let { Text(it, ", "SongLength(song.durationMs, color = BrandLilac.copy(alpha = 0.78f))")
+        assertTrue(Regex(Regex.escape("Text(title, style = SlideTitle, ") + """[^\n]*\n\s*""" + Regex.escape("SongLength(first.top.item.durationMs, Modifier.padding(top = 4.dp).rise(clock, 320), color = BrandLilac.copy(alpha = 0.9f))")).containsMatchIn(slides))
+        ends(File(ui, "InsightsPictures.kt").readText(), "row.top.item.artist?.let { Text(it, ", "SongLength(row.top.item.durationMs, color = BrandLilac.copy(alpha = 0.75f))")
+    }
+
+    @Test
     fun `Books and podcasts show the book's and the episode's covers, and the record's parts are the page's own`() {
         val ui = File("src/main/java/app/lyrify/ui")
         val milestones = File(ui, "InsightsMilestones.kt").readText()

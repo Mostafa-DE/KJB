@@ -214,6 +214,7 @@ internal fun Slide(slide: StorySlide, page: InsightsPage, settings: Settings, st
                     )
                     Text(stringResource(R.string.insights_top_song).uppercase(), style = SlideKicker, color = StoryKicker, modifier = Modifier.rise(clock, 200))
                     Text(title, style = SlideTitle, color = BrandLilac, modifier = Modifier.padding(top = 8.dp).rise(clock, 280))
+                    SongLength(first.top.item.durationMs, Modifier.padding(top = 4.dp).rise(clock, 320), color = BrandLilac.copy(alpha = 0.9f))
                     val day = cards.songs.firstsDay?.takeIf { it.song == first.top.item }
                     Text(
                         listOfNotNull(
@@ -444,7 +445,10 @@ private fun Quiz(rows: List<Ranked<Song>>, settings: Settings, state: StoryState
                         SongCover(SongArt(row.cover.path, row.cover.ref.mediaStoreId), size = 56.dp)
                         Column(Modifier.weight(1f)) {
                             Text(displayTitle(song, settings.library), style = MaterialTheme.typography.titleSmall, color = BrandLilac, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            song.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = BrandLilac.copy(alpha = 0.78f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                song.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = BrandLilac.copy(alpha = 0.78f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)) }
+                                SongLength(song.durationMs, color = BrandLilac.copy(alpha = 0.78f))
+                            }
                         }
                     }
                 }

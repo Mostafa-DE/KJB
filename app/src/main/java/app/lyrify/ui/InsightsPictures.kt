@@ -154,7 +154,10 @@ internal fun SharePicture(picture: Picture, page: InsightsPage, settings: Settin
                                 SongCover(SongArt(row.cover.path, row.cover.ref.mediaStoreId), size = 32.dp, shape = RoundedCornerShape(7.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(displayTitle(row.top.item, settings.library), style = body(12.5f, 15, 600), color = BrandLilac, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    row.top.item.artist?.let { Text(it, style = body(11f, 14), color = BrandLilac.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        row.top.item.artist?.let { Text(it, style = body(11f, 14), color = BrandLilac.copy(alpha = 0.75f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)) }
+                                        SongLength(row.top.item.durationMs, color = BrandLilac.copy(alpha = 0.75f))
+                                    }
                                 }
                             }
                         }

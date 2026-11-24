@@ -197,7 +197,11 @@ internal fun NewToYou(found: FoundCard?, comebacks: List<Comeback>, forgotten: L
                     ) {
                         SongCover(SongArt(back.song.path, back.song.ref.mediaStoreId), Modifier.fillMaxWidth().aspectRatio(1f), size = 104.dp, shape = RoundedCornerShape(16.dp))
                         Text(title, style = MaterialTheme.typography.bodyMedium.copy(fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold), color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(pluralStringResource(R.plurals.insights_quiet_days, back.quietDays, formatCount(back.quietDays)), style = FigureLabel, color = brand.suggestion, modifier = Modifier.offset(y = (-6).dp))
+                        // The length after the quiet days, below them when the tile has no room for both.
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.offset(y = (-6).dp)) {
+                            Text(pluralStringResource(R.plurals.insights_quiet_days, back.quietDays, formatCount(back.quietDays)), style = FigureLabel, color = brand.suggestion)
+                            SongLength(back.song.durationMs)
+                        }
                     }
                 }
                 repeat(BACK_AGAIN - comebacks.size.coerceAtMost(BACK_AGAIN)) { Spacer(Modifier.weight(1f)) }
@@ -336,7 +340,10 @@ internal fun YouAndFriends(friends: FriendsCard, settings: Settings) {
                     Text(stringResource(R.string.insights_from_friend_kept, kept.name).uppercase(), style = CardKicker.copy(fontSize = 11.sp), color = color)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 8.dp)) {
-                    Text(title, style = display(22, 26, -0.025, weight = 700), color = colors.onSurface, modifier = Modifier.weight(1f))
+                    Column(Modifier.weight(1f)) {
+                        Text(title, style = display(22, 26, -0.025, weight = 700), color = colors.onSurface)
+                        SongLength(kept.song.durationMs)
+                    }
                     SongCover(SongArt(kept.song.path, kept.song.ref.mediaStoreId), Modifier.rotate(3f), size = 58.dp, shape = RoundedCornerShape(6.dp))
                 }
                 Text(pluralStringResource(R.plurals.insights_from_friend_line, kept.plays, kept.plays), style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, lineHeight = 18.sp), color = colors.onSurfaceVariant)
