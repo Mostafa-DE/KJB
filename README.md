@@ -154,14 +154,14 @@ over.
 
 ## Install
 
-1. On your phone, download `KJB-3.1.1.apk` (about 10 MB) from the
+1. On your phone, download `KJB-4.0.0.apk` (about 11 MB) from the
    [release page](https://github.com/Mostafa-DE/KJB/releases/latest).
 2. Open it. If asked, allow your browser or file manager to install apps.
 3. Open KJB and allow All files access. "See what's playing" and "Keep running" are optional.
 4. If a switch is greyed out ("Restricted setting"), your phone blocks it for apps from outside an app store: in KJB tap
    **Greyed out?**, open App info, tap the three dots at the top right, then **Allow restricted settings**, and try again.
 
-With adb instead: `adb install -r KJB-3.1.1.apk`.
+With adb instead: `adb install -r KJB-4.0.0.apk`.
 
 ## Add-ons
 
@@ -169,13 +169,13 @@ Two parts of KJB come as separate apps, so KJB itself stays small. Both are opti
 
 - **KJB AI** (`KJB-AI-3.0.3.apk`, about 70 MB): AI lyrics. It needs Android 15 or newer and a supported Snapdragon
   chip (see "Requirements").
-- **KJB Downloads** (`KJB-Downloads-3.1.0.apk`, about 53 MB): saves audio or video from a link you share to **Save to
+- **KJB Downloads** (`KJB-Downloads-4.0.0.apk`, about 53 MB): saves audio or video from a link you share to **Save to
   KJB**, or one you paste in Tools > Downloads, whole playlists song by song, and what you find with Search YouTube.
   Save only what you have the right to save.
 
 KJB gets the add-ons itself: tap **Get AI** in Tools > AI lyrics, or **Get Downloads** in Tools > Downloads. KJB
 downloads the add-on, then your phone asks you to confirm the install. The files are also on GitHub, KJB Downloads on
-the [v3.1.0 release](https://github.com/Mostafa-DE/KJB/releases/tag/v3.1.0) and KJB AI on the
+the [v4.0.0 release](https://github.com/Mostafa-DE/KJB/releases/tag/v4.0.0) and KJB AI on the
 [v3.0.3 release](https://github.com/Mostafa-DE/KJB/releases/tag/v3.0.3): download the APK on your phone and open it,
 before or after installing KJB.
 
@@ -219,7 +219,7 @@ echo "sdk.dir=$HOME/Android/Sdk" > local.properties   # if ANDROID_HOME is not s
 
 - The debug APK (`app/build/outputs/apk/debug/app-debug.apk`) is `app.lyrify.debug`, named "KJB dev". It installs
   beside the release app with its own data, and changes shared storage only in `Music/KJB test/`.
-- The release APK is `app/build/outputs/apk/release/KJB-<version>.apk`, arm64-v8a only, about 10 MB. The add-ons
+- The release APK is `app/build/outputs/apk/release/KJB-<version>.apk`, arm64-v8a only, about 11 MB. The add-ons
   build beside it, to `ai-addon/build/outputs/apk/release/KJB-AI-<version>.apk` and
   `dl-addon/build/outputs/apk/release/KJB-Downloads-<version>.apk`. All three are signed when
   `~/.android-keys/lyrify-keystore.properties` (or the file named by `LYRIFY_KEYSTORE_PROPS`) gives `storeFile`,

@@ -37,12 +37,12 @@ val updateRepo = findProperty("updateRepo")?.toString() ?: kjbRepo
 
 /**
  * The Downloads add-on's APK that KJB downloads (Tools > Downloads > Get Downloads): KJB-Downloads-<version>.apk on the same
- * release, pinned the same way: KJB Downloads 3.1.0 on v3.1.0. -PdlAddonUrl, -PdlAddonSha256 and -PdlAddonBytes point
+ * release, pinned the same way: KJB Downloads 4.0.0 on v4.0.0. -PdlAddonUrl, -PdlAddonSha256 and -PdlAddonBytes point
  * a test build at another file.
  */
-val dlAddonUrl = findProperty("dlAddonUrl")?.toString() ?: "https://github.com/$kjbRepo/releases/download/v3.1.0/KJB-Downloads-3.1.0.apk"
-val dlAddonSha256 = findProperty("dlAddonSha256")?.toString() ?: "e2d6f1fe469f0b1633c0715873086a35c6456d64ad64f3cc17200dbd5af4dbc9" // the release asset's SHA-256
-val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "55916018" // the release asset's size in bytes
+val dlAddonUrl = findProperty("dlAddonUrl")?.toString() ?: "https://github.com/$kjbRepo/releases/download/v4.0.0/KJB-Downloads-4.0.0.apk"
+val dlAddonSha256 = findProperty("dlAddonSha256")?.toString() ?: "3ebe1202081404be21ed327c44633b3a1a8e0e5db9e3a54c73ab095f30c63d97" // the release asset's SHA-256
+val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "55931398" // the release asset's size in bytes
 
 /**
  * Huddle's server (huddle-server/, plan Q3.2): its Railway address (live since 2026-11-22, serving assetlinks.json for
@@ -62,8 +62,8 @@ android {
         minSdk = 30
         targetSdk = 36
         // 3.0.0 was 10, not 9: a private 2.0.2 used 9 on the user's phone, and 3.0.0 installed over it as an update.
-        versionCode = 16
-        versionName = "3.1.1"
+        versionCode = 17
+        versionName = "4.0.0"
 
         ndk {
             // TagLib's library is built for arm64 only (taglib/), as the AI add-on's QNN libraries are.
