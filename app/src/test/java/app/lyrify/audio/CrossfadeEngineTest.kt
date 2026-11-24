@@ -1100,8 +1100,59 @@ class CrossfadeEngineTest {
         rig.engine.setRepeat(Repeat.ONE)
         rig.run(0)
         assertEquals(rig.uids[1], playing.ahead)
+        rig.engine.setRepeat(Repeat.OFF)
+        // The song it went on to moves far down the queue, out of the songs the player holds next, and the queue is
+        // reordered around it (round-2 review): it stays on the player while the queue has it.
+        rig.engine.applyAll(listOf(Edit.Move(2, 6)))
+        rig.run(0)
+        rig.engine.applyAll(listOf(Edit.Move(1, 4), Edit.Move(3, 1)))
+        rig.run(0)
+        assertEquals(rig.uids[1], playing.ahead)
         assertFalse("started again", playing.restartedAhead)
         assertFalse("ended", playing.endedAhead)
+        assertTrue(rig.uids[1] in playing.loaded)
+        // The player says the song started: from there it holds the queue's next songs, and the songs before go.
+        playing.wentOn()
+        rig.run(0)
+        val at = rig.engine.loaded.indexOf(rig.uids[1])
+        assertEquals(at, rig.engine.index)
+        assertEquals(rig.engine.loaded.drop(at).take(SONGS_HELD), playing.loaded)
+    }
+
+    @Test
+    fun `Repeat all turned off just as the last song went round keeps the first song playing`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(6, lengthMs = 20_000))
+        rig.mayFade = { _, _ -> false }
+        rig.engine.setRepeat(Repeat.ALL)
+        rig.run(5 * 20_000 + 2_000)
+        val playing = rig.made(0)
+        assertEquals(5, rig.engine.index)
+        playing.goOnAhead()
+        assertEquals(rig.uids[0], playing.ahead)
+        rig.engine.setRepeat(Repeat.OFF)
+        rig.run(0)
+        assertEquals(rig.uids[0], playing.ahead)
+        assertFalse("ended", playing.endedAhead)
+        assertFalse("started again", playing.restartedAhead)
+    }
+
+    /** Round-2 review: a queue cut down to the songs the player already holds is held whole, so Repeat all reaches it. */
+    @Test
+    fun `a queue cut down to the three songs the player holds goes round with Repeat all`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(5, lengthMs = 20_000))
+        rig.mayFade = { _, _ -> false }
+        rig.engine.setRepeat(Repeat.ALL)
+        rig.run(2 * 20_000 + 2_000)
+        val playing = rig.made(0)
+        assertEquals(rig.uids.subList(2, 5), playing.loaded)
+        assertEquals(Repeat.OFF, playing.repeat)
+        rig.engine.applyAll(listOf(Edit.Remove(0, 2)))
+        rig.run(0)
+        assertEquals(rig.uids.subList(2, 5), playing.loaded)
+        assertEquals(Repeat.ALL, playing.repeat)
+        rig.run(3 * 20_000)
+        assertEquals(rig.start(2, natural = true), rig.heard.starts.last())
+        assertFalse("ended" in rig.heard.events)
     }
 
     @Test

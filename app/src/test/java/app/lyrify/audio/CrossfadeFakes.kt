@@ -171,6 +171,15 @@ class FakeSlot(
         ahead = loaded.getOrNull(index + 1) ?: loaded.firstOrNull()?.takeIf { repeat == Repeat.ALL }
     }
 
+    /** The main thread hears where the playback thread went ([ahead]): that song started, as at a song's natural end. */
+    fun wentOn() = changing {
+        val now = checkNotNull(ahead)
+        ahead = null
+        index = loaded.indexOf(now)
+        anchor(0)
+        emit { it.onSongStarted(now, lap = false, natural = true) }
+    }
+
     /** The songs at [goneAt] of [before] were taken out: the playback thread goes on as Media3 does if its song was one. */
     private fun walkAhead(before: List<Long>, goneAt: Set<Int>) {
         val now = ahead ?: return

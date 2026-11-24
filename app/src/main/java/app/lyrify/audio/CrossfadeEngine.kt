@@ -28,6 +28,7 @@ import app.lyrify.player.SourceKind
 import app.lyrify.player.Speed
 import app.lyrify.player.albumInOrder
 import app.lyrify.player.around
+import app.lyrify.player.edits
 import app.lyrify.player.resumeAt
 import app.lyrify.settings.RememberPlace
 import app.lyrify.settings.Settings
@@ -247,6 +248,12 @@ class CrossfadeEngine(
 
     /** The queue as the session sees it while crossfade is on, each player holding a few songs of it; null while off. */
     private var held: Held? = null
+
+    /**
+     * Each song that came right after the song playing on its player since it started: at the song's end ExoPlayer's own
+     * thread may go on to any of them before the main thread hears of it (CR2), so none is taken out from under it.
+     */
+    private val mayBePlaying = mutableSetOf<Long>()
 
     /**
      * The song a Next goes to, loaded and waiting silent on the second player ([standbyFor] its uid, at [standbyAt]):
@@ -590,12 +597,19 @@ class CrossfadeEngine(
             heardFrom = null
         }
         // While crossfade is on, the player playing holds its song and the next ones as the queue and Repeat have them now
-        // ([windowOf]): the songs played go and the songs after it come and go, never the song playing or the one after
-        // it, which ExoPlayer's thread may be on already (CR2, [around]).
+        // ([windowOf]); the songs played go. A song ExoPlayer's thread may be on already ([mayBePlaying]) that the queue
+        // still has stays after them, and the edits keep every song that stays ([edits]); one the queue left goes last,
+        // behind the new songs, so the thread goes on to the queue's next song ([around]).
         val at = index
-        val window = if (held == null || at < 0) null else windowOf(at)
-        if (window != null && active.loaded != window.map(loaded::get)) {
-            active.applyAll(around(active.loaded, window.map(songs::get), loaded[at]))
+        if (held != null && at >= 0) {
+            active.loaded.getOrNull(active.index + 1)?.let(mayBePlaying::add)
+            val window = windowOf(at)
+            val wanted = window.map(loaded::get)
+            val holds = window + mayBePlaying.filter { it in active.loaded && it !in wanted }.map(loaded::indexOf).filter { it >= 0 }.sorted()
+            if (active.loaded != holds.map(loaded::get)) {
+                val left = mayBePlaying.any { it in active.loaded && it !in holds.map(loaded::get) }
+                active.applyAll(if (left) around(active.loaded, holds.map(songs::get), loaded[at]) else checkNotNull(edits(active.loaded, holds.map(songs::get))))
+            }
             active.setRepeat(slotRepeat)
         }
         if (tailRamp?.done == true || tail?.let(::finished) == true) letTailGo()
@@ -718,6 +732,7 @@ class CrossfadeEngine(
         tail = out
         tailRamp = Ramp(up = false, lengthMs = lengthMs)
         active = incoming
+        mayBePlaying.clear()
         activeRamp = Ramp(up = true, lengthMs = lengthMs)
         applyVolumes()
         incoming.loaded.getOrNull(incoming.index)?.let { uid ->
@@ -753,6 +768,7 @@ class CrossfadeEngine(
         tail = out
         tailRamp = Ramp(up = false, lengthMs = SHORT_FADE_MS)
         active = incoming
+        mayBePlaying.clear()
         activeRamp = Ramp(up = true, lengthMs = SHORT_FADE_MS)
         applyVolumes()
         incoming.loaded.getOrNull(incoming.index)?.let { uid -> tell { it.onSongStarted(uid, lap = false, natural = false) } }
@@ -933,6 +949,8 @@ class CrossfadeEngine(
 
         override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
             if (slot !== active) return
+            // The player says where it is: its thread is on this song, no other.
+            mayBePlaying.clear()
             if (natural && fading) finishFade()
             failedAhead = null
             if (offloadAtNextSong) {
