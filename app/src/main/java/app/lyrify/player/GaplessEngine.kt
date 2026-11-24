@@ -112,11 +112,12 @@ interface PlaybackEngine : PlayerPort {
 }
 
 /**
- * One ExoPlayer holding the queue playing: media audio attributes with audio focus (it pauses when another app takes
- * focus and comes back after a short loss), pause on becoming noisy (headphones out), a local wake lock, and gapless
- * playback as ExoPlayer does it (MP3 with LAME or iTunes gapless info, FLAC, M4A with an edit list). Its audio sink runs
- * the audio chain ([AudioChain]) with float output off, so the chain always runs. The crossfade engine (A2) holds one,
- * or two around a fade, each with its own chain.
+ * One ExoPlayer holding the queue playing (a few songs of it while Crossfade is on): media audio attributes with audio
+ * focus (it pauses when another app takes focus and comes back after a short loss), pause on becoming noisy (headphones
+ * out), a local wake lock, and gapless playback as ExoPlayer does it (MP3 with LAME or iTunes gapless info, FLAC, M4A
+ * with an edit list). Its audio sink runs the audio chain ([AudioChain]) with float output off, so the chain always runs.
+ * The crossfade engine (A2) holds one, or two while the music plays (the song a Next goes to waiting on the second),
+ * each with its own chain.
  */
 @OptIn(UnstableApi::class)
 class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLevels, private val itemOf: (Projected) -> MediaItem) : FadeSlot {
@@ -227,6 +228,17 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
             // uris are the same (canUpdateMediaItem), so the song playing goes on undisturbed.
             is Edit.Refresh -> player.replaceMediaItems(edit.at, edit.at + edit.items.size, edit.items.map(itemOf))
         }
+    }
+
+    override fun around(before: List<MediaItem>, after: List<MediaItem>) = changeSongs {
+        val at = player.currentMediaItemIndex
+        val count = player.mediaItemCount
+        // The songs after it that stay are kept as they are: the next one may be loaded already, or even playing on
+        // ExoPlayer's thread (CR2). The rest are replaced, the new ones added before the old ones go, so a player gone on
+        // to one of those goes on to them.
+        val kept = (0 until minOf(after.size, count - at - 1)).takeWhile { player.getMediaItemAt(at + 1 + it).mediaId == after[it].mediaId }.size
+        if (kept < after.size || at + 1 + kept < count) player.replaceMediaItems(at + 1 + kept, count, after.subList(kept, after.size))
+        if (at > 0 || before.isNotEmpty()) player.replaceMediaItems(0, at, before)
     }
 
     /** [change] made to ExoPlayer's songs: the kept ones go first, and are read again at the next read. */

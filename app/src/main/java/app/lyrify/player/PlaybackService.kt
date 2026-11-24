@@ -181,10 +181,12 @@ class PlaybackService : MediaLibraryService() {
         library = LibraryGraph.repository(this).state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
         val levels = Levels()
         val main = Handler(mainLooper)
-        // One gapless player; with Crossfade on, a second one around each fade (A2), in the same audio session. Focus is
-        // the engine's then.
+        // One gapless player; with Crossfade on, a second one in the same audio session (A2), waiting with the song a
+        // Next goes to while the music plays, each holding a few songs of the queue the engine holds (PW2). Focus is the
+        // engine's then.
         engine = CrossfadeEngine(
             newSlot = { GaplessEngine(this, settings::value, levels, ::mediaItem) },
+            itemOf = ::mediaItem,
             rules = QueueFadeRules(core, PlayerExtras.of(this), settings::value) { bookSpeed() },
             focusOf = { control -> MediaFocus(this, mainLooper, control) },
             scope = scope,
