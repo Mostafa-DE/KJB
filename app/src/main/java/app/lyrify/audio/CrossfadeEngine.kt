@@ -176,6 +176,9 @@ interface FadeSlot : PlaybackEngine {
     /** The song going out of a fade pauses at its end instead of going on to the next song. */
     fun setPauseAtEndOfItems(pause: Boolean)
 
+    /** Whether it last paused itself at the end of its song ([setPauseAtEndOfItems]), not paused by the phone (headphones out). */
+    val pausedAtEnd: Boolean
+
     /** Whether this player asks for audio focus itself (alone, crossfade off) or leaves it to the engine (two). */
     fun setFocusHandled(handled: Boolean)
 
@@ -311,6 +314,12 @@ class CrossfadeEngine(
      * its fade, as before PW2.
      */
     private var lean: Boolean = false
+
+    /**
+     * The listeners hear of a song that started by itself: a move they make now is the app's own (a part going back to
+     * A), never a change by hand, so it fades nothing.
+     */
+    private var settling: Boolean = false
     private var next: Job? = null
     private var looking: Boolean = false
     private var lookAgain: Boolean = false
@@ -496,7 +505,7 @@ class CrossfadeEngine(
                 shorten(fromSilence = other)
                 goTo(index, positionMs)
             }
-            on && other && sounding && active.isPlaying -> return swap(index, positionMs)
+            on && other && sounding && active.isPlaying && !settling -> return swap(index, positionMs)
             else -> goTo(index, positionMs)
         }
         applyVolumes()
@@ -880,7 +889,7 @@ class CrossfadeEngine(
 
     /** The song going out is over: faded, paused at its end, ended or failed. */
     private fun finished(slot: FadeSlot): Boolean =
-        slot.playbackState == Player.STATE_ENDED || slot.playbackState == Player.STATE_IDLE || (sounding && !slot.playWhenReady)
+        slot.playbackState == Player.STATE_ENDED || slot.playbackState == Player.STATE_IDLE || (sounding && !slot.playWhenReady && slot.pausedAtEnd)
 
     private fun letTailGo() {
         tail?.let(::letGo)
@@ -973,14 +982,14 @@ class CrossfadeEngine(
     /** One player's events: the player playing speaks for the engine; the others only move the fades. */
     private inner class SlotEvents(private val slot: FadeSlot) : EngineListener {
         override fun onChanged() {
-            if (slot === active) {
-                // Paused by the phone (headphones out): the music is paused, both players.
-                if (on && sounding && !slot.playWhenReady) {
-                    wantPlay = false
-                    applyPlay()
-                }
-                tell { it.onChanged() }
+            // Paused by the phone (headphones out), the player playing or the song going out of a fade, whichever hears
+            // it first: the music is paused, both players, and the fade waits.
+            val pausedByPhone = (slot === active || slot === tail) && on && sounding && !slot.playWhenReady && !slot.pausedAtEnd
+            if (pausedByPhone) {
+                wantPlay = false
+                applyPlay()
             }
+            if (slot === active || pausedByPhone) tell { it.onChanged() }
             if (slot === active || slot === tail || slot === standby) look()
         }
 
@@ -995,7 +1004,12 @@ class CrossfadeEngine(
                 offloadAtNextSong = false
                 if (!on) slot.setOffload(offload)
             }
-            tell { it.onSongStarted(uid, lap, natural) }
+            settling = natural
+            try {
+                tell { it.onSongStarted(uid, lap, natural) }
+            } finally {
+                settling = false
+            }
             look()
         }
 
@@ -1011,7 +1025,10 @@ class CrossfadeEngine(
         override fun onEnded() {
             if (slot === active) {
                 if (fading) finishFade()
-                tell { it.onEnded() }
+                // Crossfade on, a player holds a few songs: one that ran past them before the main thread heard of them
+                // (songs shorter than its delay) ended while the queue goes on, and goes on to the queue's next song.
+                val queueNext = if (held == null || index < 0) null else nextIndexFor(index, loaded.size, repeat)
+                if (queueNext != null) goTo(queueNext, 0) else tell { it.onEnded() }
             }
             if (slot === tail) {
                 letTailGo()

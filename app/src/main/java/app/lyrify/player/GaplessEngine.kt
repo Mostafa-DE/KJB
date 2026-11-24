@@ -172,6 +172,11 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
                 listeners.forEach { it.onPlayingChanged(isPlaying) }
             }
 
+            // Heard before onEvents, so the engine reads it with the pause.
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                pausedAtEnd = !playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) listeners.forEach { it.onEnded() }
             }
@@ -297,6 +302,9 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
     override fun setPauseAtEndOfItems(pause: Boolean) {
         player.pauseAtEndOfMediaItems = pause
     }
+
+    override var pausedAtEnd: Boolean = false
+        private set
 
     override fun setFocusHandled(handled: Boolean) = player.setAudioAttributes(player.audioAttributes, handled)
 

@@ -55,6 +55,8 @@ class FakeSlot(
         private set
     var pauseAtEnd: Boolean = false
         private set
+    override var pausedAtEnd: Boolean = false
+        private set
     var focusHandled: Boolean = true
         private set
     var sessionId: Int = 100 + number
@@ -166,6 +168,23 @@ class FakeSlot(
         }
     }
 
+    /** Headphones out: the player pauses itself, as ExoPlayer does with audio becoming noisy. */
+    fun unplugged() = changing {
+        anchor(positionMs)
+        playWhenReady = false
+        pausedAtEnd = false
+    }
+
+    /**
+     * The player went past the songs it holds before the main thread heard of them (songs shorter than its delay): it
+     * ends where it is, as ExoPlayer does at the end of its list.
+     */
+    fun runsOut() = changing {
+        anchor(uid?.let(lengthOf) ?: positionMs)
+        playbackState = Player.STATE_ENDED
+        emit { it.onEnded() }
+    }
+
     /** The song playing ends on the playback thread, which goes on to the next song held; the main thread hears nothing yet. */
     fun goOnAhead() {
         ahead = loaded.getOrNull(index + 1) ?: loaded.firstOrNull()?.takeIf { repeat == Repeat.ALL }
@@ -216,6 +235,7 @@ class FakeSlot(
 
     override fun setPlayWhenReady(play: Boolean) = changing {
         calls += "play $play"
+        pausedAtEnd = false
         if (play && playbackState == Player.STATE_IDLE && loaded.isNotEmpty()) buffer()
         anchor(positionMs)
         playWhenReady = play
@@ -294,6 +314,7 @@ class FakeSlot(
                 pauseAtEnd -> {
                     anchor(length)
                     playWhenReady = false
+                    pausedAtEnd = true
                 }
                 repeat == Repeat.ONE -> {
                     anchor(over)

@@ -1309,6 +1309,63 @@ class CrossfadeEngineTest {
         assertEquals(PRESSES + 1, rig.heard.starts.size)
     }
 
+    // Round 4, the whole engine
+
+    @Test
+    fun `headphones out during a fade pause both players where they are, whichever pauses itself first, and the fade goes on at Play`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6)
+        rig.runToLeft(6_000)
+        rig.run(2_000)
+        val (out, incoming) = rig.two(rig.live)
+        // Each player hears the phone on its own: the song going out first.
+        out.unplugged()
+        rig.run(0)
+        incoming.unplugged()
+        rig.run(0)
+        assertFalse(out.released)
+        assertFalse(rig.engine.playWhenReady)
+        assertFalse(out.isPlaying || incoming.isPlaying)
+        rig.run(10_000)
+        assertEquals(listOf(out, incoming), rig.live)
+        rig.engine.setPlayWhenReady(true)
+        assertTrue(out.isPlaying && incoming.isPlaying)
+        rig.run(4_100)
+        assertTrue(out.released)
+        assertEquals(1f, incoming.volume, 0f)
+    }
+
+    /** A player holds a few songs; one that ran past them before the main thread heard goes on, as the queue does. */
+    @Test
+    fun `a player that ran past the songs it holds goes on to the queue's next song, never ending the queue there`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(6))
+        rig.mayFade = { _, _ -> false }
+        rig.run(10_000)
+        rig.made(0).runsOut()
+        rig.run(FakeSlot.BUFFER_MS + 50)
+        assertFalse("ended" in rig.heard.events)
+        assertEquals(rig.start(1), rig.heard.starts.last())
+        assertEquals(1, rig.engine.index)
+        assertTrue(rig.engine.isPlaying)
+    }
+
+    /** A part repeating whose song played on past the loop's end goes back to A at once, as without crossfade. */
+    @Test
+    fun `a part repeating that played past its song's end jumps back to A, with no fade`() = runTest {
+        lateinit var extras: PlayerExtras
+        val rig = FadeRig(this, crossfadeSeconds = 6) { extras = extrasOn(it) }
+        rig.mayFade = { from, to -> mayCrossfade(rig.queue, from, to, keepAlbumsGapless = true, part = extras.state.value.part, sleep = null) }
+        runCurrent()
+        // The loop's end lies past the song's end, so the song plays out and the next one starts.
+        extras.change { it.copy(part = AbPart(rig.songs[0].path, 50_000, 65_000)) }
+        rig.run(60_000 + 100)
+        assertEquals(rig.start(0), rig.heard.starts.last())
+        assertEquals(0, rig.engine.index)
+        assertTrue(rig.engine.positionMs in 50_000L..50_200L)
+        // Back on the player it played on, at full volume: no fade in.
+        assertEquals(rig.uids[0], rig.made(0).uid)
+        assertEquals(1f, rig.made(0).volume, 0f)
+    }
+
     // When the second player lets go (the lead's round 3)
 
     @Test
