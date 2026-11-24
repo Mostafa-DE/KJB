@@ -376,6 +376,14 @@ class QueuesTest {
     }
 
     @Test
+    fun `Recent's budget keeps queues up to exactly 20,000 songs, and never fewer than the newest`() {
+        val sizes = mapOf("a" to 7_000, "b" to 13_000, "c" to 1, "big" to 30_000)
+        assertEquals(listOf("a", "b"), recentKept(listOf("a", "b", "c")) { sizes.getValue(it) })
+        assertEquals(listOf("big"), recentKept(listOf("big", "a")) { sizes.getValue(it) })
+        assertEquals(emptyList<String>(), recentKept(emptyList<String>()) { sizes.getValue(it) })
+    }
+
+    @Test
     fun `a book's queue left for music or another book is never kept in Recent, the music queue before it is`() {
         val parts = (1..3).map { song("Lantern Road $it") }
         val lanternRoad = QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Lantern Road/|Lantern Road", "Lantern Road")

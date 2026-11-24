@@ -92,8 +92,8 @@ fun QueueBook.playBook(start: BookStart, now: Long): Switched {
 
 /**
  * [start]'s book plays from [BookStart.place] exactly: its own queue too, when that plays already, goes there
- * ([QueueBook.jump]), a part taken out of it put back first, after the parts before it; else a new queue of its parts
- * ([QueueBook.play]). A book's queue never shuffles, so its order is the parts' own.
+ * ([QueueBook.jump]), a part taken out of it put back first, after the last of the book's parts before it (by path:
+ * one moved with Play next keeps no list place); else a new queue of its parts ([QueueBook.play]).
  */
 private fun QueueBook.playBookAt(start: BookStart, now: Long): Switched {
     val source = bookSource(start.book)
@@ -104,7 +104,8 @@ private fun QueueBook.playBookAt(start: BookStart, now: Long): Switched {
         own == null -> play(start.book.parts.map { it.ref }, part, source, now)
         at >= 0 -> jump(own.id, at, now)
         else -> {
-            val back = own.items.indexOfLast { (it.sourceIndex ?: -1) in 0 until part } + 1
+            val before = start.book.parts.take(part).mapTo(HashSet()) { it.path }
+            val back = own.items.indexOfLast { it.song.path in before } + 1
             putBack(own.id, QueueItem(nextUid, start.book.parts[part].ref, sourceIndex = part), back).copy(nextUid = nextUid + 1).jump(own.id, back, now)
         }
     }

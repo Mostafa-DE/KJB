@@ -243,10 +243,11 @@ class BackupRestoreTest {
     fun `with Recent full, a restore keeps every saved queue, the phone's and the backup's`() {
         val source = QueueSource(SourceKind.SONGS, "songs", "Songs")
         val other = song("Music/Salt Road/01 Salt Road.mp3", title = "Salt Road", id = 14)
-        // Ten recent queues, the first holding the songs of the backup's saved queue, and a saved one.
-        val recent = (1..10).map { n -> Queue("q$n", source, listOf(QueueItem(n.toLong(), if (n == 1) water.ref else SongRef(VOLUME_PHONE + "Music/r$n.mp3"))), updatedAt = T0) }
-        val mine = Queue("q11", source, listOf(QueueItem(11, other.ref)), name = "Mine", updatedAt = T0)
-        val stores = MemoryStores(queues = QueueBook(recent + mine, recent = recent.map { it.id }, saved = listOf("q11"), nextId = 12, nextUid = 12))
+        // Recent full, the first queue holding the songs of the backup's saved queue, and a saved one.
+        val full = QueueBook.MAX_RECENT
+        val recent = (1..full).map { n -> Queue("q$n", source, listOf(QueueItem(n.toLong(), if (n == 1) water.ref else SongRef(VOLUME_PHONE + "Music/r$n.mp3"))), updatedAt = T0) }
+        val mine = Queue("q${full + 1}", source, listOf(QueueItem(full + 1L, other.ref)), name = "Mine", updatedAt = T0)
+        val stores = MemoryStores(queues = QueueBook(recent + mine, recent = recent.map { it.id }, saved = listOf(mine.id), nextId = full + 2L, nextUid = full + 2L))
         // The backup saves a queue of the songs of one of its recent queues.
         val backup = contents().let { it.copy(queues = it.queues!!.let { book -> book.copy(queues = book.queues + book.queue("q1")!!.copy(id = "q9", name = "Kept"), saved = book.saved + "q9") }) }
 
@@ -256,6 +257,19 @@ class BackupRestoreTest {
         assertEquals(recent.map { it.id }, book.recent)
         assertEquals(listOf("Mine", "Ferry songs", "Kept"), book.saved.map { book.queue(it)!!.name })
         assertEquals(listOf(listOf(other.ref), listOf(water.ref), listOf(lantern.ref, bell.ref)), book.saved.map { id -> book.queue(id)!!.items.map { it.song } })
+    }
+
+    @Test
+    fun `a restore adds the backup's recent queues only while Recent has room for their songs too`() {
+        val source = QueueSource(SourceKind.SONGS, "songs", "Songs")
+        fun shelf(id: String, name: String, from: Long) = Queue(id, source, (1..7_000).map { i -> QueueItem(from + i, SongRef(VOLUME_PHONE + "Music/$name $i.mp3")) }, updatedAt = T0)
+        val now = QueueBook(listOf(shelf("q1", "Long Shelf", 0), shelf("q2", "Far Shelf", 10_000)), recent = listOf("q1", "q2"), nextId = 3, nextUid = 20_001)
+        val small = Queue("q2", source, listOf(QueueItem(1, water.ref)), updatedAt = T0)
+        val backup = QueueBook(listOf(shelf("q1", "Wide Shelf", 0), small), recent = listOf("q1", "q2"), nextId = 3, nextUid = 10_000)
+        // 14,000 songs here, 7,000 more would pass 20,000: the backup's Recent stays out, the small queue after it too.
+        assertEquals(listOf("q1", "q2"), RestorePlan.mergeQueues(now, backup).recent)
+        // With room for it, a small one comes in.
+        assertEquals(3, RestorePlan.mergeQueues(now, backup.copy(recent = listOf("q2"))).recent.size)
     }
 
     @Test

@@ -539,12 +539,12 @@ data class QueueBook(
 }
 
 /**
- * Of [recent] (queue ids, the newest first), the ones Recent keeps: at most [QueueBook.MAX_RECENT] queues and
+ * Of [recent] (queues or their ids, the newest first), the ones Recent keeps: at most [QueueBook.MAX_RECENT] queues and
  * [QueueBook.MAX_RECENT_SONGS] songs in all ([songs] of each), the oldest going first; the newest always stays. The
- * queue playing and the saved ones are not in it, so they never count. The same rule for a switch and for a read.
+ * queue playing and the saved ones are not in it, so they never count. The same rule for a switch, a read and a restore.
  */
-internal fun recentKept(recent: List<String>, songs: (String) -> Int): List<String> {
-    val total = recent.runningFold(0) { sum, id -> sum + songs(id) }.drop(1)
+internal fun <T> recentKept(recent: List<T>, songs: (T) -> Int): List<T> {
+    val total = recent.runningFold(0) { sum, queue -> sum + songs(queue) }.drop(1)
     return recent.take(minOf(QueueBook.MAX_RECENT, total.count { it <= QueueBook.MAX_RECENT_SONGS }.coerceAtLeast(1)))
 }
 

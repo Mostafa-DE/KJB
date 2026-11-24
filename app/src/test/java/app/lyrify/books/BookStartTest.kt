@@ -204,7 +204,20 @@ class BookStartTest {
         val marked = without.toBookmark(parts[2].path, 30_000, library, now = 11)!!.book
         assertEquals(id, marked.currentId)
         assertEquals(parts.map { it.path }, marked.current!!.items.map { it.song.path })
+        assertEquals(2, marked.current!!.index)
         assertEquals(30_000L, marked.current!!.positionMs)
+    }
+
+    @Test
+    fun `a part put back goes after the book's parts before it, one moved with Play next too`() {
+        val playing = QueueBook().play(parts.map { it.ref }, 0, bookSource(folderBook), now = 1).book
+        val id = playing.currentId!!
+        // The second part moved with Play next (it keeps no place in the list), the third taken out.
+        val moved = playing.playNext(listOf(parts[1].ref), QueueSource(SourceKind.PICKED, "picked", ""), now = 2)!!.book
+        val edited = moved.remove(id, moved.current!!.items[2].uid)!!.book
+        val marked = edited.toBookmark(parts[2].path, 30_000, library, now = 11)!!.book
+        assertEquals(parts.map { it.path }, marked.current!!.items.map { it.song.path })
+        assertEquals(2, marked.current!!.index)
     }
 
     @Test

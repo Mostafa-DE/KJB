@@ -229,6 +229,7 @@ class QueueStoreTest {
         assertEquals(listOf("q3", "q2"), book.recent)
         assertEquals(listOf("q2", "q3", "q4"), book.queues.map { it.id })
         val one = QueuesJson.encode(QueueBook(queues.take(1).map { it.copy(items = it.items + (1..14_000).map { i -> QueueItem(90_000L + i, song("Far $i")) }) } + queues[1], currentId = "q2", recent = listOf("q1"), nextId = 5, nextUid = 200_000))
+        assertEquals(21_000, QueuesJson.decode(one)!!.queue("q1")!!.items.size)
         assertEquals(listOf("q1"), QueuesJson.decode(one)!!.recent)
     }
 

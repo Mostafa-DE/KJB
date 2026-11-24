@@ -22,6 +22,7 @@ import app.lyrify.player.QueueBook
 import app.lyrify.player.Repeat
 import app.lyrify.player.SongState
 import app.lyrify.player.Speed
+import app.lyrify.player.recentKept
 import app.lyrify.settings.HeldSong
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
@@ -637,7 +638,8 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
          * order, the same ids. Else they are added after the phone's own with new ids and uids from its counters: a
          * saved queue is never lost (added unless the phone saves one with the same songs in the same order); the one
          * playing plays again when the phone plays none, else it goes first among the recent ones; a recent queue is
-         * added while Recent has room, unless a queue there or one restored has its songs.
+         * added while Recent has room for it and its songs ([recentKept]), unless a queue there or one restored has its
+         * songs.
          */
         internal fun mergeQueues(now: QueueBook, restored: QueueBook): QueueBook {
             if (now.queues.isEmpty()) return restored.copy(jumps = now.jumps, nextId = maxOf(restored.nextId, now.nextId), nextUid = maxOf(restored.nextUid, now.nextUid))
@@ -650,7 +652,8 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
                 if (queue.id in restored.saved) toSaved.firstOrNull { it.id == queue.id } else queue.takeIf { seen.add(songs(it)) }
             }
             val recent = listOfNotNull(current?.takeIf { playing == null && it.id !in restored.saved }) + restored.recent.mapNotNull(restored::queue)
-            val toRecent = recent.filter { seen.add(songs(it)) }.take((QueueBook.MAX_RECENT - now.recent.size).coerceAtLeast(0))
+            val recentHere = now.recent.mapNotNull(now::queue)
+            val toRecent = recentKept(recentHere + recent.filter { seen.add(songs(it)) }) { it.items.size }.drop(recentHere.size)
             val adding = (listOfNotNull(playing?.takeIf { it.id !in restored.saved }) + toRecent + toSaved)
             if (adding.isEmpty()) return now
             var nextId = now.nextId
