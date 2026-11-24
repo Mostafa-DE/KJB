@@ -20,6 +20,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -306,11 +307,43 @@ class BigQueueDeviceTest {
         assertEquals(projection(onMain { second.core.book.value.current }, find).map { it.uid }, onMain { second.engine.loaded })
     }
 
+    /**
+     * Next and Previous in a library-sized queue (PW2), back and forth over the one song that plays: the engine reads its
+     * songs once, not again on every Next. Before PW2 each Next walked the queue about 20 times.
+     */
+    @Test
+    fun nextAndPreviousInALibrarySizedQueueKeepTheEnginesSongs() {
+        val songs = library(seconds = 20)
+        val byPath = songs.associateBy { it.path }
+        val stack = Stack(KeptStorage(), { ref -> byPath[ref.path] }, "kjb-pw2-skip")
+        assertTrue(waitFor(2_000) { stack.core.ready.value })
+        onMain { stack.core.switch { it.play(songs.map(Song::ref), START, QueueSource(SourceKind.SONGS, "songs", "Songs"), System.currentTimeMillis()) } }
+        stack.sync()
+        assertTrue("the queue never reached the controller", waitFor(10_000) { stack.controller.mediaItemCount == QUEUED && stack.controller.currentMediaItem?.mediaId == stack.current().toString() })
+        onMain { stack.controller.play() }
+        assertTrue("never played: ${onMain { stack.describe() }}", waitFor(5_000) { stack.engine.isPlaying })
+        val held = onMain { stack.engine.items }
+        val times = mutableListOf<Long>()
+        repeat(SKIPS) { step ->
+            val target = if (step % 2 == 0) START + 1 else START
+            val started = SystemClock.elapsedRealtime()
+            onMain { if (step % 2 == 0) stack.controller.seekToNextMediaItem() else stack.controller.seekToPreviousMediaItem() }
+            assertTrue("skip $step never reached the controller", waitFor(5_000) { stack.controller.currentMediaItemIndex == target })
+            times += SystemClock.elapsedRealtime() - started
+            if (target == START) assertTrue("never played again: ${onMain { stack.describe() }}", waitFor(5_000) { stack.engine.isPlaying })
+        }
+        Log.i(TAG, "PW2 measure: a skip in a $QUEUED-song queue reached the controller in ${times.sorted()[SKIPS / 2]} ms (median of $SKIPS)")
+        assertSame("the engine's songs were read again", held, onMain { stack.engine.items })
+    }
+
     private companion object {
         const val TAG = "KJB-CR1"
 
         /** A library-sized queue: the crash's had 6,906 songs. */
         const val QUEUED = 7_000
         const val START = 3_000
+
+        /** Next and Previous presses measured. */
+        const val SKIPS = 21
     }
 }
