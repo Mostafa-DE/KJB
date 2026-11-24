@@ -176,6 +176,17 @@ class CoverSwipeTest {
     }
 
     @Test
+    fun `in a book both parts either side are read ahead when both were taken out of the queue, as each step puts its own back (INT9)`() {
+        val parts = (1..3).map { song("Audiobooks/Folder Book/$it.mp3", album = "Folder Book", durationMs = 600_000) }
+        val library = Library.of(parts, Settings())
+        val book = library.books.single()
+        val playing = QueueBook().play(parts.map { it.ref }, 1, bookSource(book), now = 1).book
+        // Each chapter step puts its part back as the queues' next new item, so Next's and Previous's share one uid.
+        val alone = listOf(0, 2).fold(playing) { queues, gone -> queues.remove(queues.currentId!!, queues.current!!.items.first { it.song.path == parts[gone].path }.uid)!!.book }
+        assertEquals(listOf("2.mp3", "3.mp3", "1.mp3"), ahead(ui(alone.current!!, queues = alone, library = library)))
+    }
+
+    @Test
     fun `a cover read ahead names the song by the library's MediaStore id, and at the version Covers & tags gave it`() {
         val songs = (0 until 3).map { song("Music/Paper Harbour/made-up-$it.mp3", id = 40L + it) }
         val queue = Queue("q", QueueSource(SourceKind.ALBUM, "album:x", "Paper Harbour"), songs.mapIndexed { i, it -> QueueItem(uid = i.toLong(), song = SongRef(it.path)) }, index = 1)

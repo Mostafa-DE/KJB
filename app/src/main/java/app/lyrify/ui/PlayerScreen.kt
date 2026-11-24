@@ -309,15 +309,17 @@ fun incoming(ui: PlayerUi, way: SkipWay, positionMs: Long, book: BookNow? = null
 /**
  * The covers read ahead while [ui]'s song plays ([rememberOwnNow]), in the order they are read: its own, then the songs
  * Next and Previous go to from its start, as the cover's swipe brings them in ([incoming]; past 3 s Previous starts the
- * song over, and a second one goes to the song before). In a book, the parts its chapter buttons go to; a single file's
- * chapters stay in its one part. Each by the library's MediaStore id, so its read skips the lookup by path, and at its
- * version in [versions] ([CoverVersions]), the key the screens look it up by (PW3).
+ * song over, and a second one goes to the song before). In a book, the parts its chapter buttons go to, also one taken
+ * out of the queue (BC1); a single file's chapters stay in its one part. Each file once, by the library's MediaStore id,
+ * so its read skips the lookup by path, and at its version in [versions] ([CoverVersions]), the key the screens look it
+ * up by (PW3).
  */
 fun coversAhead(ui: PlayerUi, versions: Map<String, Int>): List<SongArt> {
     // At the part's start, a book's chapters are its parts: a single file's own chapters ([BookState]) never leave it.
     val book = playingBook(ui.queue, ui.library, ui.item.uid)?.let { bookNow(it.book, it.partIndex, 0, BookState()) }
+    // By path, not uid: each step puts a part taken out back as the queues' next new item, so two such parts share one.
     return (listOf(ui.item) + SkipWay.entries.mapNotNull { incoming(ui, it, positionMs = 0, book) })
-        .distinctBy { it.uid }
+        .distinctBy { it.song.path }
         .map { SongArt(it.song.path, ui.library?.resolver?.find(it.song)?.ref?.mediaStoreId, versions[it.song.path] ?: 0) }
 }
 
