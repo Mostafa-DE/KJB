@@ -872,6 +872,38 @@ class DlRunsTest {
     }
 
     @Test
+    fun `a link that names a list and no song is the playlist's own, looked up once and never asked about`() = runTest {
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        val runs = runs()
+        val watch = Looked()
+        val embed = Looked()
+
+        runs.info("https://www.youtube.com/watch?list=PLq7", watch)
+        runCurrent()
+        runs.info("https://www.youtube.com/embed/videoseries?list=PLq7", embed)
+        runCurrent()
+
+        // No "Just this song" for a link with no song: it would save the playlist's link as one download.
+        listOf(watch, embed).forEach { looked -> assertEquals(listOf(DlPlaylist("Harbour Nights", twoSongs)), looked.infos.map { it.playlist }) }
+        assertEquals(2, ytdlp.argLists.size)
+        assertTrue(ytdlp.argLists.toString(), ytdlp.argLists.all { "--no-playlist" in it })
+    }
+
+    @Test
+    fun `a song's short link that names a playlist is the song, its playlist listed first`() = runTest {
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
+        ytdlp.scripts += Script.Hang()
+        val looked = Looked()
+
+        runs().info("https://youtu.be/abc123def45?list=PLq7&si=x9", looked)
+        runCurrent()
+
+        assertEquals(listOf(DlPlaylist("Harbour Nights", twoSongs, withSong = true)), looked.infos.map { it.playlist })
+        assertTrue(ytdlp.argLists.first().toString(), "--yes-playlist" in ytdlp.argLists.first())
+    }
+
+    @Test
     fun `a song's link that names a playlist has it listed first, told with the quick info while the song is looked up`() = runTest {
         quick = { DlInfo(it, "Paper Lantern", "The Quiet Hours", partial = true) }
         ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("PLq7")))
@@ -929,16 +961,19 @@ class DlRunsTest {
     fun `a Mix is listed to its first 50 songs, from a song's link or its own`() = runTest {
         ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("RDabc123def45")))
         ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(fullInfo))
-        ytdlp.scripts += Script.Fail("ERROR: [youtube:tab] RDabc123def45: YouTube said: This playlist type is unviewable.")
+        // YouTube today calls a Mix's own link "unviewable" (a private playlist's sentence); one listed is a Mix all the same.
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(listed("RDabc123def45")))
         val runs = runs()
         val looked = Looked()
+        val own = Looked()
 
         runs.info("https://music.youtube.com/watch?v=abc123def45&list=RDAMVMabc123def45", looked)
         runCurrent()
-        runs.info("https://www.youtube.com/playlist?list=RDabc123def45", Looked())
+        runs.info("https://www.youtube.com/playlist?list=RDabc123def45", own)
         runCurrent()
 
         assertEquals(DlPlaylist("Harbour Nights", twoSongs, mix = true, withSong = true), looked.infos.last().playlist)
+        assertEquals(DlPlaylist("Harbour Nights", twoSongs, mix = true), own.infos.single().playlist)
         assertEquals(listOf(":50", ":50", ":50"), ytdlp.argLists.map { it[it.indexOf("--playlist-items") + 1] })
     }
 
