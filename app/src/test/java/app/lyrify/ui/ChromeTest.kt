@@ -438,7 +438,7 @@ class ChromeTest {
         // several playing, their count; no name yet, an ink plus.
         val bars = button.substringAfter("Equaliser(").substringBefore("\n                        )")
         assertTrue(bars, bars.trimStart().startsWith("brand.highlight,") && "count = 3," in bars && "gap = ground," in bars)
-        assertTrue(button, "val pulse = if (lit > 0f && huddleMoves()) rememberInfiniteTransition(label = \"huddle ring\")" in button)
+        assertTrue(button, "val pulse = if (lit <= 0f) null else if (huddleMoves()) rememberInfiniteTransition(label = \"huddle ring\")" in button)
         // The ring pulses on the mockup's curve, a Motion token as every screen's motion is (Grok round 2, reuse).
         assertTrue(button, "tween(RING_PULSE_MS, easing = Motion.Pulse)" in button)
         assertEquals(CubicBezierEasing(0.2f, 0.6f, 0.4f, 1f), Motion.Pulse)

@@ -293,7 +293,7 @@ internal fun HuddleButton(word: Boolean, onClick: () -> Unit) {
     // The note gives way to the bars, and the ring comes, on one spring; at once with Remove animations.
     val lit by animateFloatAsState(if (live.playing.isNotEmpty()) 1f else 0f, motion(Motion.indicator, reduced), label = "huddle live")
     // The ring's clock, only while a friend plays (or the ring fades).
-    val pulse = if (lit > 0f && huddleMoves()) rememberInfiniteTransition(label = "huddle ring").animateFloat(0f, 1f, infiniteRepeatable(tween(RING_PULSE_MS, easing = Motion.Pulse)), label = "pulse") else null
+    val pulse = if (lit <= 0f) null else if (huddleMoves()) rememberInfiniteTransition(label = "huddle ring").animateFloat(0f, 1f, infiniteRepeatable(tween(RING_PULSE_MS, easing = Motion.Pulse)), label = "pulse") else null
     // The count a leaving badge keeps showing.
     val count = remember { Kept(2) }
     if (live.playing.size > 1) count.value = live.playing.size
