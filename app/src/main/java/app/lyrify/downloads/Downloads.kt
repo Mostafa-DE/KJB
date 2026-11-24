@@ -211,6 +211,16 @@ data class DownloadsMemory(val settings: DownloadSettings = DownloadSettings(), 
     /** The queued download to run next: the oldest, and of songs added together the first. Null when none waits. */
     fun next(): DownloadItem? = items.filter { it.state == DownloadState.Queued }.minByOrNull { it.addedAt }
 
+    /**
+     * What Cancel on [key] stops: that download while it is still to come, and with [rest] its playlist's songs still to
+     * come (the playlist's Cancel, and the notification's, which may still name a song that just ended). Never one that
+     * ended: saved or not, it stays on the list.
+     */
+    fun cancelling(key: String, rest: Boolean): Set<String> {
+        val playlist = items.firstOrNull { it.key == key }?.playlist?.takeIf { rest }
+        return items.filter { it.key == key && it.active }.map { it.key }.toSet() + playlist?.rest(items).orEmpty()
+    }
+
     /** Every download under way, and the newest [HISTORY] of the rest (VidGrab kept 200 in its Finished list). */
     fun capped(): DownloadsMemory {
         val kept = items.filterNot { it.active }.sortedByDescending { it.addedAt }.take(HISTORY).toSet()

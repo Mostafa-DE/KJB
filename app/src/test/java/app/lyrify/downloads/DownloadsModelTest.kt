@@ -256,6 +256,32 @@ class DownloadsModelTest {
     }
 
     @Test
+    fun `Cancel stops only what is still to come, and the rest of a playlist with it, also from a song that just ended`() {
+        val playlist = DownloadPlaylist("p1", "Harbour Nights")
+        val memory = DownloadsMemory(
+            items = listOf(
+                item.copy(key = "a", state = DownloadState.Done("/x/a.mp3", 1), playlist = playlist),
+                item.copy(key = "b", state = DownloadState.Failed(DownloadFailure.NOT_FOUND), playlist = playlist),
+                item.copy(key = "c", state = DownloadState.Running, playlist = playlist),
+                item.copy(key = "d", state = DownloadState.Queued, playlist = playlist),
+                item.copy(key = "e", state = DownloadState.Queued, playlist = DownloadPlaylist("p2", "Harbour Nights")),
+                item.copy(key = "f", state = DownloadState.Queued),
+            ),
+        )
+
+        // A song's own Cancel.
+        assertEquals(setOf("c"), memory.cancelling("c", rest = false))
+        assertEquals(setOf("f"), memory.cancelling("f", rest = true))
+        // The playlist's Cancel, and the notification's, which may still name the song that just ended.
+        assertEquals(setOf("c", "d"), memory.cancelling("d", rest = true))
+        assertEquals(setOf("c", "d"), memory.cancelling("a", rest = true))
+        // A song that ended stays on the list, saved or not, and one already gone is nothing.
+        assertEquals(emptySet<String>(), memory.cancelling("a", rest = false))
+        assertEquals(emptySet<String>(), memory.cancelling("b", rest = false))
+        assertEquals(emptySet<String>(), memory.cancelling("gone", rest = true))
+    }
+
+    @Test
     fun `the store keeps every download under way and the newest 200 of the rest`() {
         val done = (1..250).map { item.copy(key = "h$it", addedAt = it.toLong(), state = DownloadState.Done("/x/$it.mp3", it.toLong())) }
         val live = listOf(item.copy(key = "q1", addedAt = 0))

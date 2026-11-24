@@ -157,12 +157,15 @@ object Downloads {
      */
     fun cancel(context: Context, key: String, rest: Boolean = false) {
         val app = context.applicationContext
-        val items = _state.value.items
-        val keys = items.firstOrNull { it.key == key }?.playlist?.takeIf { rest }?.rest(items).orEmpty().toSet() + key
-        cancelled += keys
-        current?.takeIf { it.first in keys }?.second?.cancel()
         scope.launch {
-            change(app) { memory -> memory.copy(items = memory.items.filterNot { it.key in keys }) }
+            // Chosen holding the store's lock ([DownloadsMemory.cancelling]): one that ended meanwhile stays on the list.
+            var keys = emptySet<String>()
+            change(app) { memory ->
+                keys = memory.cancelling(key, rest)
+                memory.copy(items = memory.items.filterNot { it.key in keys })
+            }
+            cancelled += keys
+            current?.takeIf { it.first in keys }?.second?.cancel()
             // The one that ran is discarded by the service once it has stopped.
             val gone = keys - setOfNotNull(current?.first)
             if (gone.isNotEmpty()) DlAddon.withPort(app) { port -> gone.forEach(port::discard) }

@@ -97,6 +97,7 @@ import app.lyrify.dl.api.DlSearchResult
 import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.DlUpdate
 import app.lyrify.dl.api.VideoChoice
+import app.lyrify.dl.api.playlistId
 import app.lyrify.downloads.DlAddon
 import app.lyrify.downloads.DlLookup
 import app.lyrify.downloads.DlLookupEvents
@@ -930,7 +931,7 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
             onDismiss = onDismiss,
             // A playlist's buttons stay in view under its songs, once they are in: Save, as audio at the quality set, or Video
             // at a height.
-            footer = playlist?.takeIf { lookup.info?.partial == false && it.songs.isNotEmpty() }?.let { list ->
+            footer = playlist?.takeIf { it.songs.isNotEmpty() }?.let { list ->
                 {
                     val ticked = list.songs.size - unticked.size
                     val ready = lookup.addon == AddonState.Ready && ticked > 0
@@ -969,9 +970,11 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
                 }
                 // Nothing to save: no one but its owner can list it.
                 failed == DlFailure.PRIVATE_PLAYLIST -> Text(stringResource(R.string.dl_playlist_private), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                // A song's playlist has its songs as soon as the add-on says which is meant; a playlist's own link with the
+                // full info.
                 playlist != null -> when {
-                    failed != null -> Text(stringResource(searchFailureText(failed)), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    lookup.info?.partial != false -> Text(stringResource(R.string.dl_looking_up), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    failed != null && playlist.songs.isEmpty() -> Text(stringResource(searchFailureText(failed)), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    lookup.info?.partial != false && playlist.songs.isEmpty() -> Text(stringResource(R.string.dl_looking_up), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     else -> {
                         val songs = playlist.songs.size
                         Text(
@@ -1017,15 +1020,18 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
                     } else if (!lookup.settled) {
                         Text(stringResource(R.string.dl_looking_up), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    // A link that names a playlist waits until the add-on says whether it is one (the ask, or the songs), so it
+                    // is never saved as one song unasked; Just this song, or a lookup that ended, lets it go.
+                    val ready = lookup.addon == AddonState.Ready && (named != null || lookup.settled || playlistId(url) == null)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                        LyrifyButton(stringResource(R.string.dl_audio), onClick = { audio(null) }, icon = R.drawable.ic_music_note, enabled = lookup.addon == AddonState.Ready, modifier = Modifier.weight(1f))
-                        LyrifyButton(stringResource(R.string.dl_video), onClick = { step = SaveStep.VIDEO }, icon = R.drawable.ic_movie, kind = ButtonKind.SECONDARY, enabled = lookup.addon == AddonState.Ready, modifier = Modifier.weight(1f))
+                        LyrifyButton(stringResource(R.string.dl_audio), onClick = { audio(null) }, icon = R.drawable.ic_music_note, enabled = ready, modifier = Modifier.weight(1f))
+                        LyrifyButton(stringResource(R.string.dl_video), onClick = { step = SaveStep.VIDEO }, icon = R.drawable.ic_movie, kind = ButtonKind.SECONDARY, enabled = ready, modifier = Modifier.weight(1f))
                     }
                     LyrifyButton(
                         stringResource(R.string.dl_quality) + " · " + stringResource(qualityLabel(ui.settings.audioQuality)),
                         onClick = { step = SaveStep.AUDIO },
                         kind = ButtonKind.GHOST,
-                        enabled = lookup.addon == AddonState.Ready,
+                        enabled = ready,
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
