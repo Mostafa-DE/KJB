@@ -1080,6 +1080,48 @@ class DlRunsTest {
     }
 
     @Test
+    fun `every search or lookup that fails logs its kind, also one whose answer was not read or whose yt-dlp the phone killed`() = runTest {
+        // A VPN's search on the phone failed with no line of the add-on's at all: these paths said nothing.
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf("""{"title":"Paper Harbour","uploader":"Mira Solen"}"""))
+        ytdlp.scripts += Script.Hang()
+        ytdlp.scripts += Script.Hang()
+        val runs = runs()
+        val odd = Found()
+        val killed = Found()
+        val looked = Looked()
+        val refused = Found()
+
+        val first = runs.search(DlSearch("paper harbour"), odd)
+        runCurrent()
+        val second = runs.search(DlSearch("mira solen"), killed)
+        runCurrent()
+        // Killed by the phone (low on memory), not by a cancel.
+        ytdlp.live.remove("info-$second")!!.complete(YtdlpExit.Killed)
+        runCurrent()
+        val third = runs.info("https://youtu.be/quietLantern7", looked)
+        runCurrent()
+        ytdlp.live.remove("info-$third")!!.complete(YtdlpExit.Killed)
+        runCurrent()
+        val fourth = runs.search(null, refused)
+        runCurrent()
+
+        assertEquals(listOf(DlEnd.Failed(DlFailure.UNKNOWN), DlEnd.Failed(DlFailure.UNKNOWN), DlEnd.Failed(DlFailure.UNKNOWN)), listOf(odd.failed, killed.failed, looked.failed))
+        assertEquals(
+            listOf(
+                "lookup $first: yt-dlp answered nothing readable",
+                "lookup $first: failed (UNKNOWN)",
+                "lookup $second: yt-dlp was killed",
+                "lookup $second: failed (UNKNOWN)",
+                "lookup $third: yt-dlp was killed",
+                "lookup $third: failed (UNKNOWN)",
+                "lookup $fourth: failed (REFUSED)",
+            ),
+            logs.filter { it.startsWith("lookup ") },
+        )
+        listOf("paper", "harbour", "mira", "solen", "quietlantern").forEach { word -> assertTrue(word, logs.none { word in it.lowercase() }) }
+    }
+
+    @Test
     fun `a search's own words never decide why it failed, though yt-dlp names the search by them`() = runTest {
         // yt-dlp 2026.10.26 names a search 'query "<words>"' in its ERROR lines (YoutubeTabBaseInfoExtractor._search_results).
         ytdlp.scripts += Script.Fail("ERROR: [youtube:search] query \"timed out signature\" page 1: Unable to download API JSON: HTTP Error 429: Too Many Requests")

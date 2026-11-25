@@ -211,9 +211,9 @@ class DlSession internal constructor(
  * it stays frozen, so KJB lets go of it and stops the service it started ([DlSession.abandon]); the add-on, KJB gone,
  * stops the lookup itself (its onUnbind). A lookup has no beat of its own: the sheet shows what came, its buttons work
  * without the full info (but for a link that names a playlist, which waits for the add-on's answer), and its going lets
- * the add-on go.
+ * the add-on go. A failure is [log]ged by its kind, never the link or the words.
  */
-class DlLookup(private val connect: suspend () -> DlConnection) {
+class DlLookup(private val log: (String) -> Unit = {}, private val connect: suspend () -> DlConnection) {
     private var session: DlSession? = null
     private var closed = false
 
@@ -233,7 +233,9 @@ class DlLookup(private val connect: suspend () -> DlConnection) {
             }
 
             override fun onFailed(end: DlEnd.Failed) {
-                if (answered.compareAndSet(false, true)) events.onFailed(end)
+                if (!answered.compareAndSet(false, true)) return
+                log("downloads: lookup failed (${end.failure})")
+                events.onFailed(end)
             }
         }
         val died = { once.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }
@@ -257,7 +259,9 @@ class DlLookup(private val connect: suspend () -> DlConnection) {
             }
 
             override fun onFailed(end: DlEnd.Failed) {
-                if (answered.compareAndSet(false, true)) events.onFailed(end)
+                if (!answered.compareAndSet(false, true)) return
+                log("downloads: search failed (${end.failure})")
+                events.onFailed(end)
             }
         }
         val died = { once.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }

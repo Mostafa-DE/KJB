@@ -6,12 +6,15 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.text.format.DateUtils
 import android.text.format.Formatter
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
@@ -77,6 +80,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.addon.AddonExemptions
@@ -187,6 +191,7 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
     var searching by rememberSaveable { mutableStateOf<String?>(null) }
     var opened by remember { mutableStateOf<DownloadItem?>(null) }
     var filesAccess by remember { mutableStateOf(true) }
+    var vpn by remember { mutableStateOf(false) }
     // The add-on left out of the phone's battery optimisation (AD9), and what the user answered about it.
     val exemptions = remember(context) { AddonExemptions.store(context) }
     val exemptionChoices by exemptions.choices.collectAsStateWithLifecycle()
@@ -198,6 +203,7 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
     LaunchedEffect(Unit) { Downloads.load(context) }
     LifecycleResumeEffect(Unit) {
         filesAccess = Environment.isExternalStorageManager()
+        vpn = vpnOn(context)
         exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)
         installer.resume()
         Downloads.resume(context)
@@ -253,6 +259,12 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
             if (ui.keepOpen) {
                 item(key = "keep-open", contentType = "keep-open") {
                     Box(rowMotion(reduced)) { Banner(R.drawable.ic_hourglass_top_fill, stringResource(R.string.dl_keep_open), action = null) {} }
+                }
+            }
+            // A note only, never a block (the owner's call): YouTube refused the owner's VPN (user feedback 81, 82).
+            if (ready && vpn) {
+                item(key = "vpn", contentType = "vpn") {
+                    Box(rowMotion(reduced)) { Banner(R.drawable.ic_info, stringResource(R.string.dl_vpn_on), action = null) {} }
                 }
             }
             if (!filesAccess) {
@@ -541,6 +553,7 @@ private fun Bar(fraction: Float?) {
 private fun DownloadSheet(item: DownloadItem, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val state = item.state
+    val vpn = remember(state) { state is DownloadState.Failed && vpnOn(context) }
     LyrifySheet(
         onDismiss = onDismiss,
         footer = {
@@ -573,7 +586,7 @@ private fun DownloadSheet(item: DownloadItem, onDismiss: () -> Unit) {
         Text(item.title.ifBlank { item.url }, style = MaterialTheme.typography.titleLarge, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
         if (item.artist.isNotBlank()) Text(item.artist, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         val sentence = when (state) {
-            is DownloadState.Failed -> stringResource(failureSentence(state.reason))
+            is DownloadState.Failed -> stringResource(failureSentence(state.reason, vpn))
             is DownloadState.Done -> state.copyOf?.let { stringResource(R.string.dl_copy_of, File(it).name) }
             else -> null
         }
@@ -581,8 +594,31 @@ private fun DownloadSheet(item: DownloadItem, onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * What a VPN may be behind, YouTube refusing its address or answering it slowly: never a full phone, a file that did not
+ * reach KJB, a phone that froze the add-on, a missing add-on, a folder KJB may not use, a local link or an age-restricted
+ * video.
+ */
+private val VPN_MAY_CAUSE = setOf(
+    DownloadFailure.OFFLINE,
+    DownloadFailure.NOT_FOUND,
+    DownloadFailure.SITE_CHANGED,
+    DownloadFailure.SITE_CHANGED_NEWEST,
+    DownloadFailure.BLOCKED,
+    DownloadFailure.STALLED,
+    DownloadFailure.ADDON_GONE,
+    DownloadFailure.UNKNOWN,
+)
+
+/** Whether the phone's internet goes through a VPN now: YouTube often refuses a VPN's address. */
+private fun vpnOn(context: Context): Boolean {
+    val connectivity = context.getSystemService(ConnectivityManager::class.java) ?: return false
+    return connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+}
+
+/** A failed download's sentence; with a [vpn] on, to turn it off and try again, for what a VPN may be behind. */
 @StringRes
-internal fun failureSentence(reason: DownloadFailure): Int = when (reason) {
+internal fun failureSentence(reason: DownloadFailure, vpn: Boolean): Int = if (vpn && reason in VPN_MAY_CAUSE) R.string.dl_failed_vpn_detail else when (reason) {
     DownloadFailure.OFFLINE -> R.string.dl_failed_offline_detail
     DownloadFailure.NOT_FOUND -> R.string.dl_failed_not_found_detail
     DownloadFailure.SITE_CHANGED -> R.string.dl_failed_site_detail
@@ -602,13 +638,18 @@ internal fun failureSentence(reason: DownloadFailure): Int = when (reason) {
 
 /**
  * Why a search found nothing to show, in dl1's words where they are true of a search too: no connection, or a site that
- * refused it. Anything else asks to try again or update the downloader, since a search makes no update of its own.
+ * refused it. Anything else asks to try again or update the downloader, since a search makes no update of its own. With
+ * a [vpn] on, to turn it off and try again, for what a VPN may be behind (a lookup's failure too).
  */
 @StringRes
-internal fun searchFailureText(failure: DlFailure): Int = when (failure) {
-    DlFailure.OFFLINE -> R.string.dl_failed_offline_detail
-    DlFailure.BLOCKED -> R.string.dl_failed_blocked_detail
-    else -> R.string.dl_failed_unknown_detail
+internal fun searchFailureText(failure: DlFailure, vpn: Boolean): Int = if (vpn && DownloadFailure.of(DlEnd.Failed(failure)) in VPN_MAY_CAUSE) {
+    R.string.dl_failed_vpn_detail
+} else {
+    when (failure) {
+        DlFailure.OFFLINE -> R.string.dl_failed_offline_detail
+        DlFailure.BLOCKED -> R.string.dl_failed_blocked_detail
+        else -> R.string.dl_failed_unknown_detail
+    }
 }
 
 /** A saved song plays in KJB's own player; a video opens in the phone's video app. */
@@ -837,7 +878,7 @@ private class LinkLookup(private val context: Context, private val scope: Corout
     var addon: AddonState? by mutableStateOf(null)
         private set
 
-    private val lookup = DlLookup { DlAddon.connect(context) }
+    private val lookup = DlLookup({ Log.w(LOG_TAG, it) }) { DlAddon.connect(context) }
 
     fun start() {
         scope.launch(Dispatchers.IO) {
@@ -971,6 +1012,8 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
             // A song's playlist has the playlist's own name, its first song's cover and its songs' length together.
             LinkHead(if (playlist?.withSong == true) DlInfo(url, playlist.title, "", playlist.songs.sumOf { it.durationSec }, playlist.songs.firstOrNull()?.thumbnail) else lookup.info, url)
             val failed = lookup.failed
+            // A VPN on, and a failure it may be behind.
+            val vpn = remember(failed) { failed != null && vpnOn(context) && DownloadFailure.of(DlEnd.Failed(failed)) in VPN_MAY_CAUSE }
             when {
                 lookup.addon != null && lookup.addon != AddonState.Ready -> {
                     Text(stringResource(if (lookup.addon is AddonState.Outdated) R.string.dl_playlist_update_first else R.string.dl_get_first), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -984,7 +1027,7 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
                 // A song's playlist has its songs as soon as the add-on says which is meant; a playlist's own link with the
                 // full info.
                 playlist != null -> when {
-                    failed != null && playlist.songs.isEmpty() -> Text(stringResource(searchFailureText(failed)), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    failed != null && playlist.songs.isEmpty() -> Text(stringResource(searchFailureText(failed, vpn)), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     lookup.info?.partial != false && playlist.songs.isEmpty() -> Text(stringResource(R.string.dl_looking_up), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     else -> {
                         val songs = playlist.songs.size
@@ -1027,7 +1070,7 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
                 }
                 else -> {
                     if (failed != null && lookup.info?.partial != false) {
-                        Text(stringResource(R.string.dl_lookup_failed), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(if (vpn) R.string.dl_failed_vpn_detail else R.string.dl_lookup_failed), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else if (!lookup.settled) {
                         Text(stringResource(R.string.dl_looking_up), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -1108,7 +1151,7 @@ private class YouTubeSearch(private val context: Context, private val scope: Cor
     /** Searches for [words], on one line and cut to what a search takes. */
     fun search(words: String) {
         lookup?.close()
-        val next = DlLookup { DlAddon.connect(context) }
+        val next = DlLookup({ Log.w(LOG_TAG, it) }) { DlAddon.connect(context) }
         lookup = next
         results = null
         failed = null
@@ -1202,11 +1245,13 @@ fun YouTubeSearchSheet(query: String, onDismiss: () -> Unit, onStarted: () -> Un
 /** What the search found, each video a choice to download; or that it searches, found nothing, or why it failed. */
 @Composable
 private fun SearchFound(search: YouTubeSearch, onPick: (DlSearchResult) -> Unit) {
+    val context = LocalContext.current
     val found = search.results
     val failed = search.failed
+    val vpn = remember(failed) { failed != null && vpnOn(context) }
     val line = when {
         search.waiting -> stringResource(R.string.dl_searching)
-        failed != null -> stringResource(searchFailureText(failed))
+        failed != null -> stringResource(searchFailureText(failed, vpn))
         found.isNullOrEmpty() -> stringResource(R.string.dl_search_none)
         else -> null
     }

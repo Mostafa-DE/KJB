@@ -450,14 +450,36 @@ class DlRuns(
      * names a playlist too (&list=, a Mix started from it) is the song, its playlist listed first and told with the quick
      * info (a partial info) before the song's full info, which has it too.
      */
-    fun info(url: String, events: InfoEvents): Long = lookup { id -> lookUp(id, url, events) }
+    fun info(url: String, events: InfoEvents): Long = lookup { id ->
+        lookUp(
+            id,
+            url,
+            object : InfoEvents by events {
+                override fun onFailed(end: DlEnd.Failed) {
+                    log("lookup $id: failed (${end.failure})")
+                    events.onFailed(end)
+                }
+            },
+        )
+    }
 
     /**
      * Searches YouTube for [search] and returns its id at once: a lookup of words, which yt-dlp answers with YouTube's
      * list and opens none of it. One that is not valid (null) is refused. It never updates yt-dlp: the download picked
      * from it does when that is due.
      */
-    fun search(search: DlSearch?, events: SearchEvents): Long = lookup { id -> find(id, search, events) }
+    fun search(search: DlSearch?, events: SearchEvents): Long = lookup { id ->
+        find(
+            id,
+            search,
+            object : SearchEvents by events {
+                override fun onFailed(end: DlEnd.Failed) {
+                    log("lookup $id: failed (${end.failure})")
+                    events.onFailed(end)
+                }
+            },
+        )
+    }
 
     /** Starts a lookup's (or a search's) [body] and returns its id at once: [busy] from now until its end. */
     private fun lookup(body: suspend (id: Long) -> Unit): Long {
@@ -534,7 +556,7 @@ class DlRuns(
             when {
                 info != null -> events.onInfo(info)
                 exit is YtdlpExit.Failed -> events.onFailed(DlEnd.Failed(failure("lookup $id", exit)))
-                else -> events.onFailed(DlEnd.Failed(DlFailure.UNKNOWN))
+                else -> events.onFailed(unanswered(id, exit))
             }
         }
     }
@@ -553,8 +575,17 @@ class DlRuns(
                 val reasons = exit.err.lines().joinToString("\n") { it.replaceFirst(words, "") }
                 events.onFailed(DlEnd.Failed(failure("lookup $id", exit.copy(err = reasons))))
             }
-            else -> events.onFailed(DlEnd.Failed(DlFailure.UNKNOWN))
+            else -> events.onFailed(unanswered(id, exit))
         }
+    }
+
+    /**
+     * Lookup [id]'s yt-dlp ended with no answer read and no error: killed by the phone (low on memory), or its answer not
+     * the JSON asked for. Logged by which, never what it said.
+     */
+    private fun unanswered(id: Long, exit: YtdlpExit?): DlEnd.Failed {
+        log("lookup $id: yt-dlp ${if (exit == YtdlpExit.Killed) "was killed" else "answered nothing readable"}")
+        return DlEnd.Failed(DlFailure.UNKNOWN)
     }
 
     /**

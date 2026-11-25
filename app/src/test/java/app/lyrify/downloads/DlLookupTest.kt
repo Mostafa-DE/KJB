@@ -359,6 +359,23 @@ class DlLookupTest {
     }
 
     @Test
+    fun `a search or lookup that fails is logged by its kind, never its words or its link`() = runTest {
+        val logs = mutableListOf<String>()
+        val searchDeath = CompletableDeferred<Unit>()
+        val search = DlLookup({ logs += it }) { DlConnection.Open(session(FakePort(answers = false), api = DL_SEARCH_API, death = searchDeath)) }
+        val lookupDeath = CompletableDeferred<Unit>()
+        val lookup = DlLookup({ logs += it }) { DlConnection.Open(session(death = lookupDeath)) }
+
+        search.search(DlSearch("paper lantern"), searchEvents)
+        searchDeath.complete(Unit)
+        lookup.start("https://video.example.com/w/quiet-harbour", events)
+        lookupDeath.complete(Unit)
+
+        assertEquals(listOf(DlFailure.ENGINE, DlFailure.ENGINE), failures)
+        assertEquals(listOf("downloads: search failed (ENGINE)", "downloads: lookup failed (ENGINE)"), logs)
+    }
+
+    @Test
     fun `an add-on that cannot be bound says why`() = runTest {
         val lookup = DlLookup { DlConnection.Closed(AddonState.Missing) }
 
