@@ -48,9 +48,10 @@ sealed interface Message {
 
     /**
      * The friend's [name], sent whenever they set it, and whether yours is the name of another of their friends
-     * ([taken]: pick another, so they can tell you apart). The server keeps only the newest one waiting.
+     * ([taken]: pick another, so they can tell you apart). The server keeps only the newest one waiting. [self]: who they
+     * are ([HuddleState.self], from KJB 4.1; none from an older KJB), so a new invite or join from them is known as theirs.
      */
-    data class Profile(override val id: String, override val at: Long, val name: String, val taken: Boolean = false) : Message
+    data class Profile(override val id: String, override val at: Long, val name: String, val taken: Boolean = false, val self: String? = null) : Message
 
     /**
      * What the friend's player does now ([state]), at [positionMs] in [song], told [at]: at each play, pause, resume, skip,
@@ -160,7 +161,7 @@ object Messages {
             SHARE -> (root[CARD_KEY] as? JsonObject)?.let(::cardOf)?.let { Message.Share(id, at, it) }
             PLAY -> (root[SONG_KEY] as? JsonObject)?.let(::songOf)?.let { Message.Play(id, at, it, favourite = root.flag(FAVOURITE_KEY) == true) }
             BYE -> Message.Bye(id, at)
-            PROFILE -> root.text(NAME_KEY)?.let(Invites::cleanName)?.let { Message.Profile(id, at, it, taken = root.flag(TAKEN_KEY) == true) }
+            PROFILE -> root.text(NAME_KEY)?.let(Invites::cleanName)?.let { Message.Profile(id, at, it, taken = root.flag(TAKEN_KEY) == true, self = root.text(SELF_KEY)?.takeIf(Invites.SELF::matches)) }
             NOW -> {
                 val song = (root[SONG_KEY] as? JsonObject)?.let(::songOf) ?: return null
                 // A state a newer KJB tells, or no place: not this version's.
@@ -212,6 +213,7 @@ object Messages {
                     put(KIND_KEY, JsonPrimitive(PROFILE))
                     put(NAME_KEY, JsonPrimitive(message.name))
                     if (message.taken) put(TAKEN_KEY, JsonPrimitive(true))
+                    message.self?.let { put(SELF_KEY, JsonPrimitive(it)) }
                 }
                 is Message.Now -> {
                     put(KIND_KEY, JsonPrimitive(NOW))
@@ -273,6 +275,7 @@ object Messages {
     private const val STATE_KEY = "e"
     private const val POSITION_KEY = "p"
     private const val COVER_KEY = "j"
+    private const val SELF_KEY = "w"
     private const val TITLE_KEY = "t"
     private const val ARTIST_KEY = "a"
     private const val ALBUM_KEY = "l"
@@ -298,7 +301,10 @@ sealed interface Match {
     /** By its title, artist, album (when the card has one) and length: it plays. */
     data class Found(val song: Song) : Match
 
-    /** Only by its title and length, on another album or by another artist: KJB asks "Is this the song?" first. */
+    /**
+     * Only a loose match: by its title and length on another album or by another artist, or by its title and artist at
+     * another length or as one of two copies. KJB asks "Is this the song?" first.
+     */
     data class Maybe(val song: Song) : Match
 
     /** Not in this library, or several songs fit: never a guess. */
@@ -308,10 +314,11 @@ sealed interface Match {
 /**
  * [song] in this phone's library, through the import matcher ([SongMatcher.find]: title, artist, album as far as known,
  * a length within 2 s, never a guess when several fit): found with all its tags, else a maybe without the album, then
- * without the artist too (hd-research-check.md U7), else missing.
+ * by its title and artist at any length, the nearest of several ([SongMatcher.nearest]: your copy of it, user
+ * 2026-11-25), then without the artist (hd-research-check.md U7), else missing (Search on YouTube).
  */
 fun SongMatcher.match(song: CardSong): Match {
     fun find(artist: String?, album: String?): Song? = find(ImportSong(location = song.title, path = null, title = song.title, artist = artist, album = album, durationMs = song.durationMs))
     find(song.artist, song.album)?.let { return Match.Found(it) }
-    return (find(song.artist, null) ?: find(null, null))?.let { Match.Maybe(it) } ?: Match.Missing
+    return (find(song.artist, null) ?: song.artist?.let { nearest(song.title, it, song.durationMs) } ?: find(null, null))?.let { Match.Maybe(it) } ?: Match.Missing
 }

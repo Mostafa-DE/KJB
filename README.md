@@ -115,7 +115,8 @@ gets covers from the Cover Art Archive and archive.org.
 - Huddle, once you use it: what you send, your name, and what you play with a small picture of its cover go to your
   friends through KJB's Huddle server (kjb-huddle.up.railway.app). Each is locked on your phone so only your friends'
   phones can open it. The server deletes it once delivered, and stores no names, songs or IP addresses; it sees your
-  phone's address only while your phone talks to it. An invite link holds your name and any song you invite with.
+  phone's address only while your phone talks to it. An invite link holds your name, a random number that tells
+  your friends' KJB it is you (so a friend's new invite never makes them a friend twice), and any song you invite with.
 - While you use KJB, it asks github.com every hour if there is a new version. KJB updates and the add-ons download from
   KJB's release page on GitHub.
 - The AI add-on downloads its models once, from Qualcomm AI Hub, GitHub and Hugging Face. The AI itself runs offline.

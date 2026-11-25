@@ -62,7 +62,7 @@
 
     <!-- What leaves your phone. -->
     <string name="huddle_privacy_title">What leaves your phone</string>
-    <string name="huddle_privacy">What you send goes through Huddle\'s server sealed, so only your friend\'s phone can read it: each song\'s title, artist, album and length, your note and your name, never the file. Share what I play is on for each friend from the moment they join, so each song you play goes to them too, with a small picture of its cover, unless you stop sharing with them or listen privately. The server keeps no names, accounts or phone numbers. It sees that two phones exchange messages, and when.</string>
+    <string name="huddle_privacy">What you send goes through Huddle\'s server sealed, so only your friend\'s phone can read it: each song\'s title, artist, album and length, your note, your name and a random number that tells their KJB it is you, never the file. Share what I play is on for each friend from the moment they join, so each song you play goes to them too, with a small picture of its cover, unless you stop sharing with them or listen privately. The server keeps no names, accounts or phone numbers. It sees that two phones exchange messages, and when.</string>
 
     <!-- Send to a friend: the song sheet, the player, an album's and a playlist's menu. -->
     <string name="huddle_send">Send to a friend</string>

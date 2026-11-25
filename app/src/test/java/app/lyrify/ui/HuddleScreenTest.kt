@@ -83,11 +83,11 @@ class HuddleScreenTest {
     fun `what a friend sent plays in a queue of its own named From and their name, in the player and the queues, an album or a playlist too`() {
         val sheets = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText()
         // A card's song, album or playlist: the card's own place, under the name you see. A friend's song (Play it, Play
-        // along) plays as theirs too.
+        // along) plays as theirs too, in their one queue (changed on purpose, user 2026-11-25: the Play along test below).
         val plays = Regex("""Lyrify\.playback\(context\)\.play\([^\n]*""").findAll(sheets).map { it.value }.toList()
-        assertEquals(2, plays.size)
+        assertEquals(1, plays.size)
         assertTrue(plays.all { "QueueSource(SourceKind.HUDDLE, " in it })
-        assertTrue(sheets.contains("val source = QueueSource(SourceKind.HUDDLE, \"\${play.friend}:\${play.at}\", name)"))
+        assertEquals(2, Regex("""\.playAlong\(song\.ref, [^\n]*QueueSource\(SourceKind\.HUDDLE, """).findAll(sheets).count())
         // A card you sent ("You and <name>") plays as yours: From and your name.
         assertTrue(sheets.contains("Lyrify.playback(context).play(songs.map { it.ref }, 0, QueueSource(SourceKind.HUDDLE, kept.id, sender))"))
         assertTrue(sheets.contains("val sender = if (mine) state.name ?: from else from"))
@@ -216,8 +216,8 @@ class HuddleScreenTest {
     @Test
     fun `Play along moves the player to the friend's place even when their song's queue plays already, and Join and play is for a song`() {
         val sheets = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText()
-        assertTrue(sheets.contains("if (connection.ui.value?.queue?.from(source) == true) {"))
-        assertTrue(sheets.contains("connection.seekTo(at)"))
+        // Changed on purpose (user 2026-11-25): their one queue goes to their place, playing or not (QueuesTest, Play along).
+        assertTrue(sheets.contains("PlayerGraph.connection(context).playAlong(song.ref, playAlongMs(play, System.currentTimeMillis()), "))
         val invite = File("src/main/java/app/lyrify/ui/HuddleInvite.kt").readText()
         assertTrue(invite.contains("if (card?.kind == CardKind.SONG && found is Match.Found) {"))
         assertTrue(invite.contains("val ticket = rememberSaveable { UUID.randomUUID().toString() }"))
@@ -314,6 +314,15 @@ class HuddleScreenTest {
         assertTrue(face.contains(".heightIn(min = 48.dp)"))
         // The divider under the row.
         assertTrue(everywhere.substringAfter("private fun HuddleFriends(").substringBefore("\n}\n").contains(".height(1.dp).background(MaterialTheme.colorScheme.outlineVariant)"))
+    }
+
+    @Test
+    fun `the friends row scrolls sideways under the finger on Library's tabs, and the tabs take the swipe at its ends`() {
+        val row = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText().substringAfter("internal fun FriendsRow(").substringBefore("\n}\n")
+        // The row tells the tab pages where it is and how far it scrolls (TabPager.kt, rowKeeps), and forgets it as it goes.
+        assertTrue(row.contains("val list = rememberLazyListState()"))
+        assertTrue(row.contains("DisposableEffect(rows, list) { onDispose { rows?.remove(list) } }"))
+        assertTrue(row.contains("LazyRow(modifier.onGloballyPositioned { rows?.set(list, it.boundsInWindow()) }, state = list, contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 6.dp)"))
     }
 
     @Test
@@ -497,6 +506,17 @@ class HuddleScreenTest {
         assertTrue(peek.contains("playIt(context, "))
         // A paused friend's card on the Huddle page: Play it, the same way.
         assertTrue(File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText().contains("friend.paused -> playIt(context, song, play, friend.friend.shownName, player)"))
+    }
+
+    @Test
+    fun `Play along and Play it go to one queue per friend, whatever song or time they played it`() {
+        val sheets = File("src/main/java/app/lyrify/ui/HuddleSheets.kt").readText()
+        val along = sheets.substringAfter("internal fun playAlong(").substringBefore("\n}\n")
+        val it = sheets.substringAfter("internal fun playIt(").substringBefore("\n}\n")
+        // The friend's own queue (QueueBook.playAlong), named by the friend alone, never by their play's time.
+        assertTrue(along.contains("PlayerGraph.connection(context).playAlong(song.ref, playAlongMs(play, System.currentTimeMillis()), QueueSource(SourceKind.HUDDLE, \"friend:\${play.friend}\", name))"))
+        assertTrue(it.contains("PlayerGraph.connection(context).playAlong(song.ref, 0, QueueSource(SourceKind.HUDDLE, \"friend:\${play.friend}\", name))"))
+        assertFalse(sheets.contains("\${play.at}"))
     }
 
     @Test

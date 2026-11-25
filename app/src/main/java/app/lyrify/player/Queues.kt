@@ -119,6 +119,25 @@ data class QueueBook(
         return book.switchTo(queue.id, now)
     }
 
+    /**
+     * A friend's song from [positionMs] (Huddle's Play along, and Play it from the top), in that friend's one queue
+     * ([source], user 2026-11-25): playing or in Recent, it plays again with [song] where it is in it, else added at its
+     * end ([addTo]), under the friend's name and key as you see them now; with none, a new queue of the song. Their queue
+     * from before 4.1 counts too, keyed by the friend's id and their play's time. The queue left goes to Recent as from a
+     * tap ([switchTo]).
+     */
+    fun playAlong(song: SongRef, positionMs: Long, source: QueueSource, now: Long): Switched {
+        val before = source.key.removePrefix("friend:") + ":"
+        val theirs = (listOfNotNull(currentId) + recent).firstOrNull { id -> queue(id)?.let { it.from(source) || (it.source.kind == source.kind && it.source.key.startsWith(before)) } == true }
+        val moved = if (theirs == null) {
+            play(listOf(song), 0, source, now)
+        } else {
+            val added = addTo(theirs, listOf(song))!!.book.edit(theirs) { it.copy(source = source) }
+            added.jumpTo(theirs, added.queue(theirs)!!.items.indexOfFirst { it.song.path == song.path }, now)
+        }
+        return moved.copy(book = moved.book.place(moved.book.current!!.index, positionMs))
+    }
+
     /** A list header's Shuffle: a new queue from [source] in a random order, the old one kept in Recent. */
     fun shuffle(songs: List<SongRef>, source: QueueSource, random: Random, now: Long): Switched {
         if (songs.isEmpty()) return Switched(this, toRecent = false)

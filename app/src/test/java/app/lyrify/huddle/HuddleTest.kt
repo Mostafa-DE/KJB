@@ -195,6 +195,126 @@ class HuddleTest {
     }
 
     @Test
+    fun `a new invite from a friend is known by who made it, not by name - the sheet says so, nobody joins, and the link stays for someone else`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
+        assertNotNull(wrenState.now.self)
+        assertEquals("each phone knows who the other is", wrenState.now.self, juniperState.now.friends.single().self)
+        assertEquals(juniperState.now.self, wrenState.now.friends.single().self)
+        // Wren renamed and a new invite: still Wren (user 2026-11-25: by who, never by name).
+        assertTrue(wren.setName("Wren Vale"))
+        val invite = checkNotNull(juniper.parse(link(wren)))
+        assertEquals(wrenOnJuniper.id, juniperState.now.friendBy(invite)?.id)
+        assertEquals(wrenOnJuniper.id, (juniper.accept(invite) as Accepted.Already).friend.id)
+        assertEquals(1, juniperState.now.friends.size)
+        assertEquals("the invite waits for someone else", 1, server.invites.size)
+        assertTrue(wren.sync())
+        assertEquals(1, wrenState.now.friends.size)
+        assertEquals(1, wrenState.now.invites.size)
+        // The other way round too.
+        assertEquals(juniperOnWren.id, (wren.accept(checkNotNull(wren.parse(link(juniper)))) as Accepted.Already).friend.id)
+        // Someone else who goes by the same name is someone else.
+        val (other, _) = phone("Wren Vale")
+        val stranger = checkNotNull(juniper.parse(link(other)))
+        assertNull(juniperState.now.friendBy(stranger))
+        assertTrue(juniper.accept(stranger) is Accepted.Joined)
+        assertEquals(2, juniperState.now.friends.size)
+    }
+
+    @Test
+    fun `friends from before tell each other who they are at the next sync, and a join that crossed it leaves one friend on each phone, quietly`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
+        // As KJB 4.0 kept them: nobody knows who anybody is.
+        listOf(wrenState, juniperState).forEach { phone -> phone.change { state -> state.copy(self = null, friends = state.friends.map { it.copy(self = null) }) } }
+        // Wren's KJB tells Juniper at its next sync; before Juniper's KJB reads it, Juniper joins Wren's new invite.
+        assertTrue(wren.sync())
+        assertNotNull(wrenState.now.self)
+        assertTrue(juniper.accept(checkNotNull(juniper.parse(link(wren, song)))) is Accepted.Joined)
+        assertEquals(2, juniperState.now.friends.size)
+        assertTrue(wren.sync())
+        assertTrue(juniper.sync())
+        assertTrue(wren.sync())
+        // The card the second invite brought went with that friend: nothing kept under nobody (Grok review).
+        assertTrue(juniper.cards().isEmpty())
+        assertTrue(juniperState.now.inbox.isEmpty())
+        // Each phone keeps the friend it had, with the history, and lets the newer one go: no past friend, no "Wren 2".
+        assertEquals(listOf(juniperOnWren.id), wrenState.now.friends.map { it.id })
+        assertEquals(listOf(wrenOnJuniper.id), juniperState.now.friends.map { it.id })
+        assertTrue(wrenState.now.past.isEmpty())
+        assertTrue(juniperState.now.past.isEmpty())
+        assertEquals("only Juniper's first join is greeted", listOf(juniperOnWren.id), wrenState.now.joined)
+        assertEquals(wrenState.now.self, juniperState.now.friends.single().self)
+        assertEquals(juniperState.now.self, wrenState.now.friends.single().self)
+        assertTrue(juniper.accept(checkNotNull(juniper.parse(link(wren)))) is Accepted.Already)
+    }
+
+    @Test
+    fun `a friend whose older KJB read your id and let it go learns it once they update`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        listOf(wrenState, juniperState).forEach { phone -> phone.change { state -> state.copy(self = null, friends = state.friends.map { it.copy(self = null) }) } }
+        // Wren updates first and tells Juniper, whose KJB 4.0 reads the profile without the id and acknowledges it.
+        assertTrue(wren.sync())
+        val told = server.waiting(juniperOnWren.outBox)
+        assertEquals(1, told.size)
+        assertTrue(server.ack(mapOf(juniperOnWren.outBox to told.single().seq)))
+        // Juniper updates: their id goes to Wren, and Wren's answer tells them Wren's (Grok review).
+        assertTrue(juniper.sync())
+        assertTrue(wren.sync())
+        assertTrue(juniper.sync())
+        assertEquals(wrenState.now.self, juniperState.now.friends.single().self)
+        assertEquals(juniperState.now.self, wrenState.now.friends.single().self)
+        assertTrue(juniper.accept(checkNotNull(juniper.parse(link(wren)))) is Accepted.Already)
+    }
+
+    @Test
+    fun `a friend's profile never changes who another friend is, so no friend can make you drop one of long standing`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val (rook, rookState) = phone("Rook")
+        assertTrue(rook.accept(checkNotNull(rook.parse(link(wren)))) is Accepted.Joined)
+        assertTrue(juniper.accept(checkNotNull(juniper.parse(link(wren)))) is Accepted.Joined)
+        assertTrue(wren.sync())
+        assertEquals(2, wrenState.now.friends.size)
+        val rookId = wrenState.now.friends.first().id
+        val juniperSelf = checkNotNull(juniperState.now.self)
+        // Rook's KJB, changed, says Rook is Juniper.
+        var lies = 0
+        suspend fun lie() {
+            val toWren = rookState.now.friends.single()
+            val sealed = HuddleCrypto.seal(HuddleCrypto.decode(toWren.outKey)!!, Messages.encode(Message.Profile("lie-${++lies}", now, "Rook", self = juniperSelf)), toWren.outBox.encodeToByteArray(), random)
+            server.send(toWren.outBox, Kind.PROFILE, HuddleCrypto.encode(sealed))
+        }
+        lie()
+        assertTrue(wren.sync())
+        assertEquals("who Rook is, once known, stays", rookState.now.self, wrenState.now.friends.first { it.id == rookId }.self)
+        assertEquals(2, wrenState.now.friends.size)
+        // A friend from before whose id Wren never learned says so: Juniper, a friend for more than a week, stays.
+        wrenState.change { state -> state.copy(friends = state.friends.map { if (it.id == rookId) it.copy(self = null) else it.copy(addedAt = it.addedAt - 8 * 24 * Huddle.HOUR_MS) }) }
+        lie()
+        assertTrue(wren.sync())
+        assertEquals(2, wrenState.now.friends.size)
+    }
+
+    @Test
+    fun `a friend's join of your new invite, before their KJB knew it was yours, adds nobody and uses the invite up`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        juniperState.change { state -> state.copy(friends = state.friends.map { it.copy(self = null) }) }
+        assertTrue(juniper.accept(checkNotNull(juniper.parse(link(wren)))) is Accepted.Joined)
+        assertTrue(wren.sync())
+        assertEquals(listOf(juniperOnWren.id), wrenState.now.friends.map { it.id })
+        assertTrue(wrenState.now.invites.isEmpty())
+        assertTrue("the slot is deleted once read", server.invites.isEmpty())
+        assertEquals("no second \"joined your Huddle\"", listOf(juniperOnWren.id), wrenState.now.joined)
+    }
+
+    @Test
     fun `without a name nothing is invited or accepted, and without network nothing is half made`() = runTest {
         val (wren, wrenState) = phone()
         val (juniper, juniperState) = phone()

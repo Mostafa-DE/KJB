@@ -109,6 +109,13 @@ class SongMatcher(phone: List<Song>) {
         return byFileName[relativeKey(name)]?.singleOrNull()?.takeIf { fits(song, it) && (song.title != null || song.info == null || titled(song.info, it)) }
     }
 
+    /**
+     * A friend's song's last resort (Huddle, user 2026-11-25): of the songs with [title] and [artist], case, accents and
+     * punctuation aside, at any length, the one nearest [durationMs]; null when none. One look-up in the title index.
+     */
+    fun nearest(title: String, artist: String, durationMs: Long): Song? =
+        byTitle[TrackNames.normalize(title).takeIf(String::isNotEmpty) ?: return null].orEmpty().filter { same(artist, it.artist) }.minByOrNull { abs(it.durationMs - durationMs) }
+
     /** Pass 2: the songs at [path] below the storage root, or at the longest end of a path whose root is unknown. */
     private fun below(path: String): List<Song> {
         val relative = if (path.startsWith('/')) relativeToRoot(path) else null
