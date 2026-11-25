@@ -608,26 +608,17 @@ internal fun HuddleSheetsHost(sheet: HuddleSheet?, ledger: LedgerState, onPlayer
 }
 
 /**
- * Plays [song] from where [play]'s friend is in it ([playAlongMs]), as a queue from them named [name], and shows the
- * player; their song's queue playing already (Play it, a Play along before) moves there too.
+ * Plays [song] from where [play]'s friend is in it ([playAlongMs]), in their one queue named [name] (playing, in Recent,
+ * or new: QueueBook.playAlong, user 2026-11-25), and shows the player.
  */
 internal fun playAlong(context: Context, song: Song, play: FriendPlay, name: String, onPlayer: () -> Unit) {
-    val connection = PlayerGraph.connection(context)
-    val source = QueueSource(SourceKind.HUDDLE, "${play.friend}:${play.at}", name)
-    val at = playAlongMs(play, System.currentTimeMillis())
-    // playFrom goes on where that queue is when it plays already: the friend's place is asked for, so it goes there.
-    if (connection.ui.value?.queue?.from(source) == true) {
-        connection.seekTo(at)
-        connection.play()
-    } else {
-        connection.playFrom(listOf(song.ref), 0, at, source)
-    }
+    PlayerGraph.connection(context).playAlong(song.ref, playAlongMs(play, System.currentTimeMillis()), QueueSource(SourceKind.HUDDLE, "friend:${play.friend}", name))
     onPlayer()
 }
 
-/** Plays [song], [play]'s friend's song, from the top as a queue from them named [name], and shows the player ([onPlayer]): Play it. */
+/** Plays [song], [play]'s friend's song, from the top in their one queue named [name] ([playAlong]), and shows the player ([onPlayer]): Play it. */
 internal fun playIt(context: Context, song: Song, play: FriendPlay, name: String, onPlayer: () -> Unit) {
-    Lyrify.playback(context).play(listOf(song.ref), 0, QueueSource(SourceKind.HUDDLE, "${play.friend}:${play.at}", name))
+    PlayerGraph.connection(context).playAlong(song.ref, 0, QueueSource(SourceKind.HUDDLE, "friend:${play.friend}", name))
     onPlayer()
 }
 

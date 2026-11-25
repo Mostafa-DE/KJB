@@ -75,6 +75,66 @@ class QueuesTest {
         assertFalse(kept in tapped.book.recent)
     }
 
+    // A friend's Play along and Play it: one queue per friend, used again (user 2026-11-25)
+
+    private val wrenSource = QueueSource(SourceKind.HUDDLE, "friend:wren", "Wren")
+    private val juniperSource = QueueSource(SourceKind.HUDDLE, "friend:juniper", "Juniper")
+
+    @Test
+    fun `Play along with a friend makes their queue, at their place in the song, and the queue left goes to Recent`() {
+        val book = playing(2)
+        val old = book.currentId!!
+        val along = book.playAlong(folder[0], 61_000, wrenSource, now = 2)
+        assertTrue(along.toRecent)
+        assertEquals(listOf(old), along.book.recent)
+        assertEquals(listOf("Rips 1"), paths(along.book.current))
+        assertEquals(61_000L, along.book.current!!.positionMs)
+        assertTrue(along.book.current!!.from(wrenSource))
+    }
+
+    @Test
+    fun `Play along again with the same friend and another song adds it to their queue and plays it there, never a second queue`() {
+        val first = playing(2).playAlong(folder[0], 61_000, wrenSource, now = 2).book
+        val theirs = first.currentId!!
+        val again = first.playAlong(folder[1], 15_000, wrenSource, now = 3)
+        assertEquals(theirs, again.book.currentId)
+        assertEquals(listOf("Rips 1", "Rips 2"), paths(again.book.current))
+        assertEquals("Rips 2", currentName(again.book))
+        assertEquals(15_000L, again.book.current!!.positionMs)
+        assertFalse(again.toRecent)
+        assertEquals(first.recent, again.book.recent)
+        assertTrue("the player goes there", again.book.jumps > first.jumps)
+        // The same song again goes to where they are in it, never in twice.
+        val same = again.book.playAlong(folder[1], 40_000, wrenSource, now = 4).book
+        assertEquals(listOf("Rips 1", "Rips 2"), paths(same.current))
+        assertEquals("Rips 2", currentName(same))
+        assertEquals(40_000L, same.current!!.positionMs)
+        assertTrue(same.jumps > again.book.jumps)
+    }
+
+    @Test
+    fun `a friend's queue left for another list comes back from Recent at their next Play along, the only one of theirs, and another friend has their own`() {
+        val along = playing(2).playAlong(folder[0], 61_000, wrenSource, now = 2).book
+        val theirs = along.currentId!!
+        val left = along.play(album, 0, albumSource, now = 3).book
+        val other = left.currentId!!
+        // Renamed meanwhile: their queue goes by the name you see now.
+        val back = left.playAlong(folder[1], 5_000, wrenSource.copy(name = "Wren Vale"), now = 4)
+        assertEquals(theirs, back.book.currentId)
+        assertEquals("Wren Vale", back.book.current!!.source.name)
+        assertEquals(listOf("Rips 1", "Rips 2"), paths(back.book.current))
+        assertEquals("Rips 2", currentName(back.book))
+        assertEquals(5_000L, back.book.current!!.positionMs)
+        assertTrue(back.toRecent)
+        assertEquals(other, back.book.recent.first())
+        assertEquals(1, back.book.listed.count { it.from(wrenSource) })
+        val juniper = back.book.playAlong(folder[2], 0, juniperSource, now = 5).book
+        assertNotEquals(theirs, juniper.currentId)
+        assertEquals(listOf("Rips 3"), paths(juniper.current))
+        assertEquals(1, juniper.listed.count { it.from(wrenSource) })
+        assertEquals(1, juniper.listed.count { it.from(juniperSource) })
+    }
+
     // Tapping a song of an album (user 2026-11-24)
 
     @Test

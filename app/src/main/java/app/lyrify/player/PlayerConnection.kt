@@ -260,14 +260,19 @@ class PlayerConnection(
     }
 
     /**
-     * A book's queue ([source], books/BookPlayback.kt) from part [start] at [positionMs]: "Continue" and a tap on a book;
-     * and a friend's song from where they are in it (Huddle's Play along). The queue playing when it is that source's
-     * already plays on where it is.
+     * A book's queue ([source], books/BookPlayback.kt) from part [start] at [positionMs]: "Continue" and a tap on a book.
+     * The queue playing when it is that source's already plays on where it is.
      */
     fun playFrom(songs: List<SongRef>, start: Int, positionMs: Long, source: QueueSource) {
         if (core.book.value.current?.from(source) != true) {
             core.switch { book -> book.play(songs, start, source, core.now()).let { it.copy(book = it.book.place(start, positionMs)) } }
         }
+        send { it.play() }
+    }
+
+    /** A friend's [song] from [positionMs], in their one queue ([source], [QueueBook.playAlong]): Huddle's Play along and Play it. */
+    fun playAlong(song: SongRef, positionMs: Long, source: QueueSource) {
+        core.switch { it.playAlong(song, positionMs, source, core.now()) }
         send { it.play() }
     }
 
