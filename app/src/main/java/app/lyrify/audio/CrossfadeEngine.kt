@@ -320,6 +320,12 @@ class CrossfadeEngine(
      * A), never a change by hand, so it fades nothing.
      */
     private var settling: Boolean = false
+
+    /**
+     * The queue's song a player that ran past its songs went on to ([SlotEvents.onEnded]): its start is told as natural,
+     * the song before having played to its end (the play log, the sleep timer), as without crossfade.
+     */
+    private var wentOnTo: Long? = null
     private var next: Job? = null
     private var looking: Boolean = false
     private var lookAgain: Boolean = false
@@ -983,30 +989,31 @@ class CrossfadeEngine(
     private inner class SlotEvents(private val slot: FadeSlot) : EngineListener {
         override fun onChanged() {
             // Paused by the phone (headphones out), the player playing or the song going out of a fade, whichever hears
-            // it first: the music is paused, both players, and the fade waits.
-            val pausedByPhone = (slot === active || slot === tail) && on && sounding && !slot.playWhenReady && !slot.pausedAtEnd
-            if (pausedByPhone) {
+            // it first: the music is paused, both players, and the fade waits. The player playing tells the listeners.
+            if ((slot === active || slot === tail) && on && sounding && !slot.playWhenReady && !slot.pausedAtEnd) {
                 wantPlay = false
                 applyPlay()
             }
-            if (slot === active || pausedByPhone) tell { it.onChanged() }
+            if (slot === active) tell { it.onChanged() }
             if (slot === active || slot === tail || slot === standby) look()
         }
 
         override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
             if (slot !== active) return
+            val byItself = natural || uid == wentOnTo
+            wentOnTo = null
             // The player says where it is: its thread is on this song, no other.
             mayBePlaying.clear()
             lean = false
-            if (natural && fading) finishFade()
+            if (byItself && fading) finishFade()
             failedAhead = null
             if (offloadAtNextSong) {
                 offloadAtNextSong = false
                 if (!on) slot.setOffload(offload)
             }
-            settling = natural
+            settling = byItself
             try {
-                tell { it.onSongStarted(uid, lap, natural) }
+                tell { it.onSongStarted(uid, lap, byItself) }
             } finally {
                 settling = false
             }
@@ -1026,9 +1033,17 @@ class CrossfadeEngine(
             if (slot === active) {
                 if (fading) finishFade()
                 // Crossfade on, a player holds a few songs: one that ran past them before the main thread heard of them
-                // (songs shorter than its delay) ended while the queue goes on, and goes on to the queue's next song.
+                // (songs shorter than its delay) ended while the queue goes on, and goes on to the queue's next song, as
+                // at a song's end. Unless a listener moved it already as it heard of the song before (the sleep timer
+                // parking the music): ExoPlayer tells of the end after that song's start, ended then, not now.
                 val queueNext = if (held == null || index < 0) null else nextIndexFor(index, loaded.size, repeat)
-                if (queueNext != null) goTo(queueNext, 0) else tell { it.onEnded() }
+                when {
+                    queueNext == null -> tell { it.onEnded() }
+                    slot.playbackState == Player.STATE_ENDED -> {
+                        wentOnTo = loaded[queueNext]
+                        goTo(queueNext, 0)
+                    }
+                }
             }
             if (slot === tail) {
                 letTailGo()

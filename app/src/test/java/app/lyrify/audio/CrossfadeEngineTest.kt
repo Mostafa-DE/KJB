@@ -1317,9 +1317,11 @@ class CrossfadeEngineTest {
         rig.runToLeft(6_000)
         rig.run(2_000)
         val (out, incoming) = rig.two(rig.live)
-        // Each player hears the phone on its own: the song going out first.
+        // Each player hears the phone on its own: the song going out first. The session hears of the pause once.
+        val told = rig.heard.changes
         out.unplugged()
         rig.run(0)
+        assertEquals(told + 1, rig.heard.changes)
         incoming.unplugged()
         rig.run(0)
         assertFalse(out.released)
@@ -1334,18 +1336,85 @@ class CrossfadeEngineTest {
         assertEquals(1f, incoming.volume, 0f)
     }
 
-    /** A player holds a few songs; one that ran past them before the main thread heard goes on, as the queue does. */
+    /**
+     * A player holds a few songs; one that ran past them before the main thread heard goes on to the queue's song after
+     * them, as at a song's end (the song before played to its end), and ends the queue only at its last song.
+     */
     @Test
-    fun `a player that ran past the songs it holds goes on to the queue's next song, never ending the queue there`() = runTest {
+    fun `a player that ran past the songs it holds goes on to the queue's song after them as at a song's end, ending only the queue's last`() = runTest {
         val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(6))
         rig.mayFade = { _, _ -> false }
         rig.run(10_000)
-        rig.made(0).runsOut()
+        val player = rig.made(0)
+        assertEquals(rig.uids.take(3), player.loaded)
+        player.runsOut()
         rig.run(FakeSlot.BUFFER_MS + 50)
         assertFalse("ended" in rig.heard.events)
-        assertEquals(rig.start(1), rig.heard.starts.last())
-        assertEquals(1, rig.engine.index)
+        assertEquals(listOf(rig.start(0), rig.start(2, natural = true), rig.start(3, natural = true)), rig.heard.starts)
+        assertEquals(3, rig.engine.index)
+        assertEquals(rig.uids[3], player.uid)
         assertTrue(rig.engine.isPlaying)
+        // Repeat off, the queue's last song: the queue ends there.
+        rig.run(10_000)
+        player.runsOut()
+        rig.run(FakeSlot.BUFFER_MS + 50)
+        assertEquals(rig.start(5, natural = true), rig.heard.starts.last())
+        assertTrue("ended" in rig.heard.events)
+        assertFalse(rig.engine.isPlaying)
+    }
+
+    @Test
+    fun `the sleep timer by songs counts the song a player ran past, and parks the music at the start of the song after its last`() = runTest {
+        val timer = MutableStateFlow<SleepTimer?>(sleepAfter(2))
+        lateinit var driver: SleepDriver
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(6)) { rig ->
+            driver = SleepDriver(EngineExtras(rig.engine), timer, rig.clock)
+            rig.engine.addListener(object : EngineListener {
+                override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+                    if (natural) driver.songEnded()
+                }
+
+                override fun onEnded() = driver.queueEnded()
+            })
+        }
+        rig.mayFade = { _, _ -> false }
+        backgroundScope.launch { driver.run() }
+        rig.run(10_000)
+        // Song 3 (index 2) is the timer's last: the player ran past it to its end.
+        rig.made(0).runsOut()
+        rig.run(FakeSlot.BUFFER_MS + 50)
+        assertNull(timer.value)
+        assertEquals(3, rig.engine.index)
+        assertEquals(0L, rig.engine.positionMs)
+        assertFalse(rig.engine.playWhenReady)
+    }
+
+    @Test
+    fun `a player that ran past the songs it holds stays where the sleep timer parked it as the song before its end started`() = runTest {
+        val timer = MutableStateFlow<SleepTimer?>(sleepAfter(1))
+        lateinit var driver: SleepDriver
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(6)) { rig ->
+            driver = SleepDriver(EngineExtras(rig.engine), timer, rig.clock)
+            rig.engine.addListener(object : EngineListener {
+                override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+                    if (natural) driver.songEnded()
+                }
+
+                override fun onEnded() = driver.queueEnded()
+            })
+        }
+        rig.mayFade = { _, _ -> false }
+        backgroundScope.launch { driver.run() }
+        rig.run(10_000)
+        // The timer's last song ended: the song after it (index 2 as the player ran past) parks at its start, and the end
+        // the player tells after it moves nothing.
+        rig.made(0).runsOut()
+        rig.run(FakeSlot.BUFFER_MS + 50)
+        assertNull(timer.value)
+        assertEquals(listOf(rig.start(0), rig.start(2, natural = true)), rig.heard.starts)
+        assertEquals(2, rig.engine.index)
+        assertEquals(0L, rig.engine.positionMs)
+        assertFalse(rig.engine.playWhenReady)
     }
 
     /** A part repeating whose song played on past the loop's end goes back to A at once, as without crossfade. */

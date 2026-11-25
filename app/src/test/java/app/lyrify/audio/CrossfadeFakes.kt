@@ -177,11 +177,15 @@ class FakeSlot(
 
     /**
      * The player went past the songs it holds before the main thread heard of them (songs shorter than its delay): it
-     * ends where it is, as ExoPlayer does at the end of its list.
+     * ended on the last of them, as ExoPlayer does at the end of its list. The main thread hears that song start and the
+     * end together, the end last, as ExoPlayer tells them: told even when a listener moved the player on hearing the start.
      */
     fun runsOut() = changing {
-        anchor(uid?.let(lengthOf) ?: positionMs)
+        val from = index
+        index = loaded.lastIndex
+        anchor(lengthOf(loaded[index]))
         playbackState = Player.STATE_ENDED
+        if (index != from) emit { it.onSongStarted(loaded[index], lap = false, natural = true) }
         emit { it.onEnded() }
     }
 
@@ -220,7 +224,7 @@ class FakeSlot(
         val other = index != this.index
         this.index = index
         anchor(positionMs)
-        if (other || playbackState == Player.STATE_IDLE) {
+        if (other || playbackState == Player.STATE_IDLE || playbackState == Player.STATE_ENDED) {
             error = null
             buffer()
         }
@@ -416,6 +420,14 @@ class FakeFocus : FocusPort {
 class Heard : EngineListener {
     val events = mutableListOf<String>()
     val starts get() = events.filter { it.startsWith("start") }
+
+    /** How often the session was told to read the state again. */
+    var changes: Int = 0
+        private set
+
+    override fun onChanged() {
+        changes++
+    }
 
     override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
         events += "start $uid" + (if (lap) " lap" else "") + (if (natural) " natural" else "")
