@@ -311,10 +311,11 @@ sealed interface Match {
 /**
  * [song] in this phone's library, through the import matcher ([SongMatcher.find]: title, artist, album as far as known,
  * a length within 2 s, never a guess when several fit): found with all its tags, else a maybe without the album, then
- * without the artist too (hd-research-check.md U7), else missing.
+ * without the artist too (hd-research-check.md U7), then by its title and artist at any length, the nearest of several
+ * ([SongMatcher.nearest]: another copy of it, user 2026-11-25), else missing (Search on YouTube).
  */
 fun SongMatcher.match(song: CardSong): Match {
     fun find(artist: String?, album: String?): Song? = find(ImportSong(location = song.title, path = null, title = song.title, artist = artist, album = album, durationMs = song.durationMs))
     find(song.artist, song.album)?.let { return Match.Found(it) }
-    return (find(song.artist, null) ?: find(null, null))?.let { Match.Maybe(it) } ?: Match.Missing
+    return (find(song.artist, null) ?: find(null, null) ?: song.artist?.let { nearest(song.title, it, song.durationMs) })?.let { Match.Maybe(it) } ?: Match.Missing
 }

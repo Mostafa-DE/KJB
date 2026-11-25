@@ -181,13 +181,29 @@ class CardsTest {
     }
 
     @Test
-    fun `never a guess - two songs that fit, another length, or nothing alike is missing`() {
+    fun `never a guess - two songs by others that fit, or nothing alike is missing`() {
         val one = song("Music/A/Paper Lantern.mp3", title = "Paper Lantern", artist = "Ida Moss", album = "A", durationMs = 201_000)
         val two = song("Music/B/Paper Lantern.mp3", title = "Paper Lantern", artist = "Bo Lane", album = "B", durationMs = 201_500)
         assertEquals(Match.Missing, SongMatcher(listOf(one, two)).match(lantern))
-        val longer = song("Music/HG/01.mp3", title = "Paper Lantern", album = "Harbour Glass", durationMs = 240_000)
-        assertEquals(Match.Missing, SongMatcher(listOf(longer)).match(lantern))
         assertEquals(Match.Missing, SongMatcher(listOf(song("Music/HG/02.mp3", title = "Brass Bell"))).match(lantern))
         assertEquals(Match.Missing, SongMatcher(emptyList()).match(lantern))
+    }
+
+    @Test
+    fun `the song in your library at another length, or in two copies, is offered as a maybe, never YouTube`() {
+        // Changed on purpose (user 2026-11-25): another length by the same artist was missing, so only YouTube was offered.
+        val longer = song("Music/HG/01.mp3", title = "Paper Lantern", album = "Harbour Glass", durationMs = 240_000)
+        assertEquals(Match.Maybe(longer), SongMatcher(listOf(longer)).match(lantern))
+        // Of several, the one nearest its length; title and artist case, accents and punctuation aside.
+        val near = song("Music/Rips/Paper Lantern.mp3", title = "paper lantern!", artist = "Kit Callowáy", durationMs = 205_000)
+        val far = song("Music/Live/Paper Lantern.mp3", title = "Paper Lantern", durationMs = 300_000)
+        assertEquals(Match.Maybe(near), SongMatcher(listOf(far, near)).match(lantern))
+        // Two copies that fit it all, which "never a guess" left missing.
+        val copy = song("Music/HG/01.mp3", title = "Paper Lantern", album = "Harbour Glass", durationMs = 201_000)
+        val twin = song("Music/Copies/01.mp3", title = "Paper Lantern", album = "Harbour Glass", durationMs = 201_000)
+        assertEquals(Match.Maybe(copy), SongMatcher(listOf(copy, twin)).match(lantern))
+        // By someone else, or a friend's song without an artist: still missing, YouTube as before.
+        assertEquals(Match.Missing, SongMatcher(listOf(song("Music/X/Paper Lantern.mp3", title = "Paper Lantern", artist = "Ida Moss", durationMs = 300_000))).match(lantern))
+        assertEquals(Match.Missing, SongMatcher(listOf(longer)).match(lantern.copy(artist = null)))
     }
 }
