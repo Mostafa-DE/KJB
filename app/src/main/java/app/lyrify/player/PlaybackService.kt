@@ -606,6 +606,9 @@ private class ThumbnailLoader(private val context: Context) : BitmapLoader {
 /** How long the media notification's updates must stop before [NotificationRepost] posts it once more. */
 const val REPOST_QUIET_MS: Long = 1_500
 
+/** How long after its first post [NotificationRepost] posts the notification once more, if no update came between. */
+const val REPOST_AGAIN_MS: Long = 4_000
+
 /**
  * The media notification posted once more when its updates stop. The phone's media card (the shade, quick settings,
  * the lock screen) reads the song only when the notification is posted, and a read can end wrong: Android drops an
@@ -613,9 +616,16 @@ const val REPOST_QUIET_MS: Long = 1_500
  * cover, its buttons), so Nexts in quick succession lose the last ones; a card coming back to life reads at once and
  * can land after a newer read. Media3 never posts again once a song settles, so the card stayed on a song skipped past,
  * often with no cover, until the next song. So once [quietMs] go by with no update ([posted]), [post] posts it again,
- * long enough after the last post for Android to let it through. Its own post is not an update. Main thread.
+ * long enough after the last post for Android to let it through, and once more [againMs] later: KJB's other
+ * notifications (a download's progress, Covers & tags) count toward the same rate and can have the first dropped too.
+ * Its own posts are not updates. Main thread.
  */
-class NotificationRepost(private val scope: CoroutineScope, private val quietMs: Long = REPOST_QUIET_MS, private val post: () -> Unit) {
+class NotificationRepost(
+    private val scope: CoroutineScope,
+    private val quietMs: Long = REPOST_QUIET_MS,
+    private val againMs: Long = REPOST_AGAIN_MS,
+    private val post: () -> Unit,
+) {
     private var waiting: Job? = null
     private var posting = false
 
@@ -624,12 +634,14 @@ class NotificationRepost(private val scope: CoroutineScope, private val quietMs:
         if (posting) return
         waiting?.cancel()
         waiting = scope.launch {
-            delay(quietMs)
-            posting = true
-            try {
-                post()
-            } finally {
-                posting = false
+            listOf(quietMs, againMs).forEach { ms ->
+                delay(ms)
+                posting = true
+                try {
+                    post()
+                } finally {
+                    posting = false
+                }
             }
         }
     }
