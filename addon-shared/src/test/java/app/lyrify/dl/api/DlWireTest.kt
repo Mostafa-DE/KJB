@@ -50,10 +50,11 @@ class DlWireTest {
     }
 
     @Test
-    fun `a failure kind a later add-on adds reads as unknown in an older KJB, and BLOCKED reads here`() {
+    fun `a failure kind a later add-on adds reads as unknown in an older KJB, and BLOCKED and AGE_RESTRICTED read here`() {
         // KJB 3.0's DlWire.end, the same as this one: a kind it does not know fails the read, a failure of an unknown kind.
         assertEquals(DlEnd.Failed(DlFailure.UNKNOWN), DlWire.end("""{"type":"failed","failure":"SOMETHING_LATER","updated":false}"""))
         assertEquals(DlEnd.Failed(DlFailure.BLOCKED), DlWire.end(DlWire.encode(DlEnd.Failed(DlFailure.BLOCKED))))
+        assertEquals(DlEnd.Failed(DlFailure.AGE_RESTRICTED), DlWire.end(DlWire.encode(DlEnd.Failed(DlFailure.AGE_RESTRICTED))))
     }
 
     @Test

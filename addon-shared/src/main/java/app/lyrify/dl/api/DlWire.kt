@@ -339,6 +339,12 @@ enum class DlFailure {
      */
     BLOCKED,
 
+    /**
+     * A video YouTube shows only to adults who sign in ("sign in to confirm your age"): the add-on never signs in, so no
+     * update, network or later try saves it. An older KJB reads it as [UNKNOWN].
+     */
+    AGE_RESTRICTED,
+
     /** No room on the phone: in the add-on's cache, or where KJB saves. */
     NO_ROOM,
 

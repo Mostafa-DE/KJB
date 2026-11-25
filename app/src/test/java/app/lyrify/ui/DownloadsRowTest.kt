@@ -72,6 +72,9 @@ class DownloadsRowTest {
         assertEquals(R.string.dl_failed_blocked_detail, sentence(DlFailure.BLOCKED, updated = false))
         assertEquals(R.string.dl_failed_blocked_detail, sentence(DlFailure.BLOCKED, updated = true))
         assertEquals(R.string.dl_failed_blocked, label(DlFailure.BLOCKED, updated = false))
+        // An age-restricted video: never the VPN's words, which would send the user to turn off a VPN they do not have.
+        assertEquals(R.string.dl_failed_age_detail, sentence(DlFailure.AGE_RESTRICTED, updated = false))
+        assertEquals(R.string.dl_failed_age, label(DlFailure.AGE_RESTRICTED, updated = false))
         // "Updated the downloader and tried again" only when it was.
         assertEquals(R.string.dl_failed_site_detail, sentence(DlFailure.SITE_CHANGED, updated = true))
         assertEquals(R.string.dl_failed_site_newest_detail, sentence(DlFailure.SITE_CHANGED, updated = false))

@@ -88,7 +88,8 @@ object UpdatePolicy {
 
     /**
      * Failures a newer yt-dlp may fix: a site that changed, a link it does not know yet, and what it did not say. Never a
-     * site that refuses this network ([DlFailure.BLOCKED]): an update does not change who asks.
+     * site that refuses this network ([DlFailure.BLOCKED]): an update does not change who asks; nor a video only for adults
+     * who sign in ([DlFailure.AGE_RESTRICTED]).
      */
     private val FIXABLE = setOf(DlFailure.SITE_CHANGED, DlFailure.NOT_FOUND, DlFailure.UNKNOWN)
 

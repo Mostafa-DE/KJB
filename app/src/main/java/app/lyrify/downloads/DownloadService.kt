@@ -550,6 +550,7 @@ internal object DownloadNotices {
         DownloadFailure.NOT_FOUND -> R.string.dl_failed_not_found
         DownloadFailure.SITE_CHANGED, DownloadFailure.SITE_CHANGED_NEWEST -> R.string.dl_failed_site
         DownloadFailure.BLOCKED -> R.string.dl_failed_blocked
+        DownloadFailure.AGE_RESTRICTED -> R.string.dl_failed_age
         DownloadFailure.NO_ROOM -> R.string.dl_failed_room
         DownloadFailure.HAND_OFF -> R.string.dl_failed_hand_off
         DownloadFailure.STALLED -> R.string.dl_failed_stalled

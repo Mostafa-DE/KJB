@@ -310,6 +310,7 @@ class DownloadsModelTest {
         assertEquals(DownloadFailure.SITE_CHANGED_NEWEST, DownloadFailure.of(DlEnd.Failed(DlFailure.SITE_CHANGED, updated = false)))
         assertEquals(DownloadFailure.BLOCKED, DownloadFailure.of(DlEnd.Failed(DlFailure.BLOCKED)))
         assertEquals(DownloadFailure.BLOCKED, DownloadFailure.of(DlEnd.Failed(DlFailure.BLOCKED, updated = true)))
+        assertEquals(DownloadFailure.AGE_RESTRICTED, DownloadFailure.of(DlEnd.Failed(DlFailure.AGE_RESTRICTED)))
         assertEquals(DownloadFailure.UNKNOWN, DownloadFailure.of(DlEnd.Failed(DlFailure.REFUSED)))
         assertEquals(DownloadFailure.NO_ROOM, DownloadFailure.of(DlEnd.Failed(DlFailure.NO_ROOM, updated = true)))
     }

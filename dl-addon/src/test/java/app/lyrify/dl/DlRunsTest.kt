@@ -1369,7 +1369,7 @@ class DlRunsTest {
         assertTrue(UpdatePolicy.beforeRun(lastCheck = now + day, now = now))
 
         listOf(DlFailure.SITE_CHANGED, DlFailure.NOT_FOUND, DlFailure.UNKNOWN).forEach { assertTrue(it.name, UpdatePolicy.afterFailure(it, checkedThisRun = false)) }
-        listOf(DlFailure.OFFLINE, DlFailure.BLOCKED, DlFailure.NO_ROOM, DlFailure.HAND_OFF, DlFailure.ENGINE, DlFailure.REFUSED).forEach {
+        listOf(DlFailure.OFFLINE, DlFailure.BLOCKED, DlFailure.AGE_RESTRICTED, DlFailure.NO_ROOM, DlFailure.HAND_OFF, DlFailure.ENGINE, DlFailure.REFUSED).forEach {
             assertFalse(it.name, UpdatePolicy.afterFailure(it, checkedThisRun = false))
         }
         assertFalse(UpdatePolicy.afterFailure(DlFailure.SITE_CHANGED, checkedThisRun = true))

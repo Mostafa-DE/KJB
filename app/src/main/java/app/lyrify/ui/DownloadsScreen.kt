@@ -588,6 +588,7 @@ internal fun failureSentence(reason: DownloadFailure): Int = when (reason) {
     DownloadFailure.SITE_CHANGED -> R.string.dl_failed_site_detail
     DownloadFailure.SITE_CHANGED_NEWEST -> R.string.dl_failed_site_newest_detail
     DownloadFailure.BLOCKED -> R.string.dl_failed_blocked_detail
+    DownloadFailure.AGE_RESTRICTED -> R.string.dl_failed_age_detail
     DownloadFailure.NO_ROOM -> R.string.dl_failed_room_detail
     DownloadFailure.HAND_OFF -> R.string.dl_failed_hand_off_detail
     DownloadFailure.STALLED -> R.string.dl_failed_stalled_detail

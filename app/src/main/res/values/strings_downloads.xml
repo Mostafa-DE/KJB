@@ -91,6 +91,8 @@
     <string name="dl_failed_not_found_detail">There is no video at that link: it was removed, it is private, or the site is not one KJB can save from.</string>
     <string name="dl_failed_site_detail">The site changed. KJB updated the downloader and tried again; Retry later, when the downloader has caught up.</string>
     <string name="dl_failed_site_newest_detail">The site changed, and KJB\'s downloader is already the newest. Retry later, when the downloader catches up.</string>
+    <string name="dl_failed_age">Age-restricted</string>
+    <string name="dl_failed_age_detail">YouTube shows this video only to adults who sign in. KJB does not sign in to YouTube, so it can\'t save it.</string>
     <string name="dl_failed_blocked_detail">The site refused this connection. If you use a VPN, turn it off and Retry, or try again later.</string>
     <string name="dl_failed_room_detail">Your phone has no room left for it. Free some space, then Retry.</string>
     <string name="dl_failed_hand_off_detail">The file did not reach KJB whole, so nothing was kept. Retry goes on from what was downloaded.</string>
