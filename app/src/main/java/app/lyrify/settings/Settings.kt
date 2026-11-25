@@ -120,7 +120,7 @@ data class LibrarySettings(
      */
     val hiddenSongs: List<SongRef> = emptyList(),
     /**
-     * "Leave songs out of Insights" (the Insights page's menu, KJB v4): songs whose plays leave every Insights card and
+     * "Leave songs out of Insights" (the Insights page's menu, KJB v4.1): songs whose plays leave every Insights card and
      * story; they still play and count for Most played, Recently played and Suggestions. Each once, as [hiddenSongs].
      */
     val leftOutOfInsights: List<SongRef> = emptyList(),
