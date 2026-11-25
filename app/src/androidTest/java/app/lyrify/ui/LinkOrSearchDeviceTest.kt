@@ -98,6 +98,9 @@ class LinkOrSearchDeviceTest {
         compose.onNodeWithText(SEARCH).assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).performTextInput("   ")
         compose.onNodeWithText(SEARCH).assertIsNotEnabled()
+        // Not blank, but nothing a search takes once its control characters are spaces.
+        compose.onNode(hasSetTextAction()).performTextReplacement(" \u0001\u0002 ")
+        compose.onNodeWithText(SEARCH).assertIsNotEnabled()
         compose.onNode(hasSetTextAction()).performImeAction()
         compose.waitForIdle()
 

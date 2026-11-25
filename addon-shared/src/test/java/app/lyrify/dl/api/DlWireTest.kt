@@ -136,10 +136,12 @@ class DlWireTest {
         assertTrue(namesSong("https://www.youtube.com/shorts/abc123def45?list=PLq7"))
         assertTrue(namesSong("https://www.youtube.com/live/abc123def45?list=PLq7"))
         assertTrue(namesSong("https://www.youtube.com/embed/abc123def45?list=PLq7"))
+        assertTrue(namesSong("https://www.youtube.com/Shorts/abc123def45?list=PLq7"))
         listOf(
             "https://youtu.be/?list=PLq7",
             "https://www.youtube.com/watch?v=&list=PLq7",
             "https://www.youtube.com/shorts/?list=PLq7",
+            "https://www.youtube.com/Embed/VideoSeries?list=PLq7",
             "https://www.youtube.com/playlist?list=PLq7",
             "https://music.youtube.com/playlist?list=OLAK5uy_m4dE&si=x9",
             "https://www.youtube.com/watch?list=PLq7",

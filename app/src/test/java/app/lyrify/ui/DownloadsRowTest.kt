@@ -103,15 +103,17 @@ class DownloadsRowTest {
         // The owner's VPN made YouTube refuse a search and an album (user feedback 81, 82): the words said neither.
         val vpnMayCause = listOf(
             DownloadFailure.OFFLINE, DownloadFailure.NOT_FOUND, DownloadFailure.SITE_CHANGED, DownloadFailure.SITE_CHANGED_NEWEST,
-            DownloadFailure.BLOCKED, DownloadFailure.STALLED, DownloadFailure.ADDON_GONE, DownloadFailure.UNKNOWN,
+            DownloadFailure.BLOCKED, DownloadFailure.STALLED, DownloadFailure.UNKNOWN,
         )
         vpnMayCause.forEach { assertEquals(it.name, R.string.dl_failed_vpn_detail, failureSentence(it, vpn = true)) }
         (DownloadFailure.entries - vpnMayCause.toSet()).forEach { assertEquals(it.name, failureSentence(it, vpn = false), failureSentence(it, vpn = true)) }
         DownloadFailure.entries.forEach { assertTrue(it.name, failureSentence(it, vpn = false) != R.string.dl_failed_vpn_detail) }
 
-        listOf(DlFailure.OFFLINE, DlFailure.NOT_FOUND, DlFailure.SITE_CHANGED, DlFailure.BLOCKED, DlFailure.ENGINE, DlFailure.REFUSED, DlFailure.UNKNOWN)
+        // A refused search reads as an unknown failure, as everywhere in KJB (DownloadFailure.of).
+        listOf(DlFailure.OFFLINE, DlFailure.NOT_FOUND, DlFailure.SITE_CHANGED, DlFailure.BLOCKED, DlFailure.REFUSED, DlFailure.UNKNOWN)
             .forEach { assertEquals(it.name, R.string.dl_failed_vpn_detail, searchFailureText(it, vpn = true)) }
-        listOf(DlFailure.AGE_RESTRICTED, DlFailure.NO_ROOM, DlFailure.HAND_OFF, DlFailure.LOCAL_ADDRESS)
+        // An add-on that died or a yt-dlp that never started: no VPN does that (the second review of this lane).
+        listOf(DlFailure.ENGINE, DlFailure.AGE_RESTRICTED, DlFailure.NO_ROOM, DlFailure.HAND_OFF, DlFailure.LOCAL_ADDRESS)
             .forEach { assertEquals(it.name, searchFailureText(it, vpn = false), searchFailureText(it, vpn = true)) }
     }
 

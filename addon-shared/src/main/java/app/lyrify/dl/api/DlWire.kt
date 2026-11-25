@@ -103,7 +103,12 @@ fun namesSong(url: String): Boolean {
         return false
     }
     val path = uri.path.orEmpty().split('/')
-    val id = if (uri.host?.lowercase() == "youtu.be") path.getOrNull(1) else path.getOrNull(2)?.takeIf { path[1] in setOf("shorts", "live", "embed") && it != "videoseries" }
+    // The words before an id are read without case; the id keeps its own.
+    val id = if (uri.host?.lowercase() == "youtu.be") {
+        path.getOrNull(1)
+    } else {
+        path.getOrNull(2)?.takeIf { path[1].lowercase() in setOf("shorts", "live", "embed") && !it.equals("videoseries", ignoreCase = true) }
+    }
     return !id.isNullOrEmpty() || uri.rawQuery.orEmpty().split('&').any { it.startsWith("v=") && it.length > 2 }
 }
 

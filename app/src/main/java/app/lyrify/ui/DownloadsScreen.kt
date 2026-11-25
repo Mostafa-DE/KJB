@@ -192,7 +192,7 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
     var searching by rememberSaveable { mutableStateOf<String?>(null) }
     var opened by remember { mutableStateOf<DownloadItem?>(null) }
     var filesAccess by remember { mutableStateOf(true) }
-    var vpn by remember { mutableStateOf(false) }
+    val vpn = vpnOn()
     // The add-on left out of the phone's battery optimisation (AD9), and what the user answered about it.
     val exemptions = remember(context) { AddonExemptions.store(context) }
     val exemptionChoices by exemptions.choices.collectAsStateWithLifecycle()
@@ -204,7 +204,6 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
     LaunchedEffect(Unit) { Downloads.load(context) }
     LifecycleResumeEffect(Unit) {
         filesAccess = Environment.isExternalStorageManager()
-        vpn = vpnOn(context)
         exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)
         installer.resume()
         Downloads.resume(context)
@@ -365,9 +364,10 @@ internal fun LinkOrSearchField(
 ) {
     val link = ShareLinks.parse(text).firstOrNull()
     val searching = link == null && searches
-    val usable = link != null || (searching && text.isNotBlank())
+    val words = DlSearch.of(text).query
+    val usable = link != null || (searching && words.isNotEmpty())
     val submit = {
-        if (link != null) onLookUp(link) else if (usable) onSearch(DlSearch.of(text).query)
+        if (link != null) onLookUp(link) else if (usable) onSearch(words)
     }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = modifier) {
         LyrifyField(
@@ -554,7 +554,7 @@ private fun Bar(fraction: Float?) {
 private fun DownloadSheet(item: DownloadItem, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val state = item.state
-    val vpn = remember(state) { state is DownloadState.Failed && vpnOn(context) }
+    val vpn = vpnOn()
     LyrifySheet(
         onDismiss = onDismiss,
         footer = {
@@ -597,8 +597,8 @@ private fun DownloadSheet(item: DownloadItem, onDismiss: () -> Unit) {
 
 /**
  * What a VPN may be behind, YouTube refusing its address or answering it slowly: never a full phone, a file that did not
- * reach KJB, a phone that froze the add-on, a missing add-on, a folder KJB may not use, a local link or an age-restricted
- * video.
+ * reach KJB, an add-on that stopped or that the phone froze, a missing add-on, a folder KJB may not use, a local link or
+ * an age-restricted video.
  */
 private val VPN_MAY_CAUSE = setOf(
     DownloadFailure.OFFLINE,
@@ -607,14 +607,23 @@ private val VPN_MAY_CAUSE = setOf(
     DownloadFailure.SITE_CHANGED_NEWEST,
     DownloadFailure.BLOCKED,
     DownloadFailure.STALLED,
-    DownloadFailure.ADDON_GONE,
     DownloadFailure.UNKNOWN,
 )
 
-/** Whether the phone's internet goes through a VPN now: YouTube often refuses a VPN's address. */
-private fun vpnOn(context: Context): Boolean {
-    val connectivity = context.getSystemService(ConnectivityManager::class.java) ?: return false
-    return connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+/**
+ * Whether the phone's internet goes through a VPN: YouTube often refuses a VPN's address. Read each time the screen comes
+ * back, as the page reads All files access (the user may have turned it off meanwhile), never during composition.
+ */
+@Composable
+private fun vpnOn(): Boolean {
+    val context = LocalContext.current
+    var vpn by remember { mutableStateOf(false) }
+    LifecycleResumeEffect(Unit) {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        vpn = connectivity?.getNetworkCapabilities(connectivity.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        onPauseOrDispose { }
+    }
+    return vpn
 }
 
 /** A failed download's sentence; with a [vpn] on, to turn it off and try again, for what a VPN may be behind. */
@@ -1014,7 +1023,7 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
             LinkHead(if (playlist?.withSong == true) DlInfo(url, playlist.title, "", playlist.songs.sumOf { it.durationSec }, playlist.songs.firstOrNull()?.thumbnail) else lookup.info, url)
             val failed = lookup.failed
             // A VPN on, and a failure it may be behind.
-            val vpn = remember(failed) { failed != null && vpnOn(context) && DownloadFailure.of(DlEnd.Failed(failed)) in VPN_MAY_CAUSE }
+            val vpn = vpnOn() && failed != null && DownloadFailure.of(DlEnd.Failed(failed)) in VPN_MAY_CAUSE
             when {
                 lookup.addon != null && lookup.addon != AddonState.Ready -> {
                     Text(stringResource(if (lookup.addon is AddonState.Outdated && playlistId(url) != null && !namesSong(url)) R.string.dl_playlist_update_first else R.string.dl_get_first), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1246,10 +1255,9 @@ fun YouTubeSearchSheet(query: String, onDismiss: () -> Unit, onStarted: () -> Un
 /** What the search found, each video a choice to download; or that it searches, found nothing, or why it failed. */
 @Composable
 private fun SearchFound(search: YouTubeSearch, onPick: (DlSearchResult) -> Unit) {
-    val context = LocalContext.current
     val found = search.results
     val failed = search.failed
-    val vpn = remember(failed) { failed != null && vpnOn(context) }
+    val vpn = vpnOn()
     val line = when {
         search.waiting -> stringResource(R.string.dl_searching)
         failed != null -> stringResource(searchFailureText(failed, vpn))
