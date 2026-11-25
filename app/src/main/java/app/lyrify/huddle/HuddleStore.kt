@@ -79,6 +79,11 @@ data class Friend(
      * a read that found none.
      */
     val notOpenedReads: Int = 0,
+    /**
+     * Who they are ([HuddleState.self]) once their KJB told it (their invite, their join, or a profile): a new invite or
+     * join from them is theirs, never a second friend (user 2026-11-25). Null from a KJB before 4.1.
+     */
+    val self: String? = null,
 ) {
     val shownName: String get() = rename ?: taken ?: name
 }
@@ -101,8 +106,8 @@ data class PendingInvite(val publicKey: String, val privateKey: String, val toke
 
 /**
  * An invite this phone is joining: its join mailbox [joinId], the exact accept [data] posted there (sent again as it is
- * when the answer was lost, so the server knows it), the friendship's keys from this side, and the inviter's [name] and
- * first [card]. Kept before the accept goes, gone once it is answered.
+ * when the answer was lost, so the server knows it), the friendship's keys from this side, and the inviter's [name],
+ * first [card] and who they are ([self]). Kept before the accept goes, gone once it is answered.
  */
 @Serializable
 data class PendingJoin(
@@ -114,6 +119,7 @@ data class PendingJoin(
     val inKey: String,
     val name: String,
     val card: Card? = null,
+    val self: String? = null,
 )
 
 /**
@@ -193,6 +199,11 @@ data class HuddleState(
     val joined: List<String> = emptyList(),
     /** Friends who left, the oldest first: the Huddle page's Past friends, each with their history kept ([PastFriend]). */
     val past: List<PastFriend> = emptyList(),
+    /**
+     * Who this phone is in Huddle: random, made once (its first invite or join, or its first sync with friends) and told
+     * to every friend, so a new invite or join from you is known as yours, never by name. A backup takes it to a new phone.
+     */
+    val self: String? = null,
     /**
      * Each friend's newest now ([Message.Now], its time as received), by friend id: worth seconds, so kept in memory only
      * ([Huddle.state] adds it), never in huddle.json or a backup.
@@ -449,6 +460,7 @@ fun HuddleState.restored(backup: HuddleState, key: BackupKey?): HuddleState {
     val joinIds = joins.map { it.joinId }.toSet()
     return copy(
         name = name ?: backup.name,
+        self = self ?: backup.self,
         friends = friends + backup.friends.filter { it.inBox !in boxes && it.id !in left },
         past = past + backup.past.filter { gone -> gone.id !in left && friends.none { it.id == gone.id } },
         invites = invites + backup.invites.filter { it.token !in tokens },

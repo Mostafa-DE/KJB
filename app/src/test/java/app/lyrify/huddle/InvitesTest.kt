@@ -83,12 +83,18 @@ class InvitesTest {
     }
 
     @Test
-    fun `joining gives both phones one friendship, mirrored, with each other's names`() {
+    fun `joining gives both phones one friendship, mirrored, with each other's names and who each is`() {
         val (own, made) = invite(name = "Wren")
-        val read = Invites.parse(Invites.link(railway, made, random), hosts)!!
-        val joining = Invites.join(read, "Juniper", random)!!
+        val read = Invites.parse(Invites.link(railway, Invite(made.publicKey, made.token, made.name, made.card, self = "AAECAwQFBgcICQoLDA0ODw"), random), hosts)!!
+        assertEquals("AAECAwQFBgcICQoLDA0ODw", read.self)
+        val joining = Invites.join(read, "Juniper", "DxAREhMUFRYXGBkaGxwdHg", random)!!
         val joined = Invites.joined(own, made.token, joining.publicKey, joining.hello)!!
         assertEquals("Juniper", joined.name)
+        assertEquals("DxAREhMUFRYXGBkaGxwdHg", joined.self)
+        // From an older KJB, none; and anything that is not one reads as none.
+        assertNull(Invites.parse(Invites.link(railway, made, random), hosts)!!.self)
+        val odd = Invites.join(read, "Juniper", "not an id", random)!!
+        assertNull(Invites.joined(own, made.token, odd.publicKey, odd.hello)!!.self)
         assertEquals(joining.keys.outBox, joined.keys.inBox)
         assertEquals(joining.keys.inBox, joined.keys.outBox)
         assertArrayEquals(joining.keys.outKey, joined.keys.inKey)
@@ -103,8 +109,8 @@ class InvitesTest {
     fun `a hello for another invite, or with another key, is refused`() {
         val (own, made) = invite()
         val (_, other) = invite()
-        val joining = Invites.join(made, "Juniper", random)!!
-        val elsewhere = Invites.join(other, "Juniper", random)!!
+        val joining = Invites.join(made, "Juniper", null, random)!!
+        val elsewhere = Invites.join(other, "Juniper", null, random)!!
         assertNull(Invites.joined(own, made.token, elsewhere.publicKey, elsewhere.hello))
         assertNull(Invites.joined(own, made.token, joining.publicKey, elsewhere.hello))
         assertNull(Invites.joined(own, made.token, HuddleCrypto.keyPair(random).public, joining.hello))
@@ -115,7 +121,7 @@ class InvitesTest {
     fun `an invite whose key is not a point of P-256 cannot be joined`() {
         val (_, made) = invite()
         val broken = Invite(made.publicKey.copyOf().also { it[64] = (it[64] + 1).toByte() }, made.token, made.name, null)
-        assertNull(Invites.join(broken, "Juniper", random))
+        assertNull(Invites.join(broken, "Juniper", null, random))
     }
 
     @Test

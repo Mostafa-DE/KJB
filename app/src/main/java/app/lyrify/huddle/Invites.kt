@@ -8,10 +8,11 @@ import java.security.SecureRandom
 
 /**
  * An invite as its link carries it (hd-research-check.md S4 and U2): the inviter's one-off P-256 [publicKey] and random
- * [token], the [name] the inviter goes by, and the first [card] when the invite was made from a song. Nothing of it
+ * [token], the [name] the inviter goes by, the first [card] when the invite was made from a song, and who the inviter is
+ * ([self], their [HuddleState.self]; none from an older KJB), so a friend's new invite is known as theirs. Nothing of it
  * reaches Huddle's server: it all travels after the link's `#`, which a browser never sends.
  */
-class Invite(val publicKey: ByteArray, val token: ByteArray, val name: String, val card: Card?)
+class Invite(val publicKey: ByteArray, val token: ByteArray, val name: String, val card: Card?, val self: String? = null)
 
 /** The keys of one friendship, from this phone's side: a mailbox and a key each way, the same on both phones mirrored. */
 class PairKeys(val outBox: String, val inBox: String, val outKey: ByteArray, val inKey: ByteArray)
@@ -19,8 +20,8 @@ class PairKeys(val outBox: String, val inBox: String, val outKey: ByteArray, val
 /** What joining sends to the invite's join mailbox ([Invites.joinId]): this phone's [publicKey] and its sealed [hello]; and the friendship's [keys]. */
 class Joining(val publicKey: ByteArray, val hello: ByteArray, val keys: PairKeys)
 
-/** A friend who joined an invite: the [name] they gave, and the friendship's [keys]. */
-class Joined(val name: String, val keys: PairKeys)
+/** A friend who joined an invite: the [name] they gave, the friendship's [keys], and who they are ([self]; none from an older KJB). */
+class Joined(val name: String, val keys: PairKeys, val self: String?)
 
 /**
  * Invites and the friendships they make, with no account and no server call to invite (hd-research-check.md S4):
@@ -44,12 +45,16 @@ object Invites {
     /** The longest name, in characters. */
     const val NAME_MAX: Int = 40
 
+    /** Who a phone is in Huddle ([HuddleState.self]): 16 random bytes, base64url; anything else a friend tells is none. */
+    val SELF: Regex = Regex("[A-Za-z0-9_-]{22}")
+
     /** [invite]'s link on [host], Huddle's address that KJB opens links of (AndroidManifest.xml, App Links). */
     fun link(host: String, invite: Invite, random: SecureRandom): String {
         val details = JsonObject(
             buildMap {
                 put(NAME_KEY, JsonPrimitive(invite.name))
                 invite.card?.let { put(CARD_KEY, Messages.cardJson(it)) }
+                invite.self?.let { put(SELF_KEY, JsonPrimitive(it)) }
             },
         )
         val sealed = HuddleCrypto.seal(inviteKey(invite.token), details.toString().encodeToByteArray(), invite.publicKey, random)
@@ -70,7 +75,7 @@ object Invites {
         val details = HuddleCrypto.open(inviteKey(token), bytes.copyOfRange(HEADER_BYTES, bytes.size), key)?.let { jsonObject(it.decodeToString()) } ?: return null
         val name = details.text(NAME_KEY)?.let(::cleanName) ?: return null
         val card = (details[CARD_KEY] as? JsonObject)?.let { Messages.cardOf(it) ?: return null }
-        return Invite(key, token, name, card)
+        return Invite(key, token, name, card, details.text(SELF_KEY)?.takeIf(SELF::matches))
     }
 
     /**
@@ -79,12 +84,15 @@ object Invites {
      */
     fun joinId(token: ByteArray, publicKey: ByteArray): String = HuddleCrypto.encode(HuddleCrypto.hkdf(token, ByteArray(0), JOIN_INFO + publicKey, HuddleCrypto.KEY_BYTES))
 
-    /** Joining [invite] as [name]: a key pair of this phone's own, the friendship's keys, and the sealed hello; null when the invite's key is not one. */
-    fun join(invite: Invite, name: String, random: SecureRandom): Joining? {
+    /**
+     * Joining [invite] as [name], who this phone is ([self]) in the hello: a key pair of this phone's own, the friendship's
+     * keys, and the sealed hello; null when the invite's key is not one.
+     */
+    fun join(invite: Invite, name: String, self: String?, random: SecureRandom): Joining? {
         val own = HuddleCrypto.keyPair(random)
         val secret = HuddleCrypto.agree(own.private, invite.publicKey) ?: return null
         val keys = pairKeys(secret, invite.token, inviterKey = invite.publicKey, joinerKey = own.public, inviter = false)
-        val hello = JsonObject(mapOf(NAME_KEY to JsonPrimitive(name))).toString().encodeToByteArray()
+        val hello = JsonObject(listOfNotNull(NAME_KEY to JsonPrimitive(name), self?.let { SELF_KEY to JsonPrimitive(it) }).toMap()).toString().encodeToByteArray()
         return Joining(own.public, HuddleCrypto.seal(keys.outKey, hello, joinId(invite.token, invite.publicKey).encodeToByteArray(), random), keys)
     }
 
@@ -96,8 +104,9 @@ object Invites {
         val secret = HuddleCrypto.agree(own.private, joinerKey) ?: return null
         val keys = pairKeys(secret, token, inviterKey = own.public, joinerKey = joinerKey, inviter = true)
         val opened = HuddleCrypto.open(keys.inKey, hello, joinId(token, own.public).encodeToByteArray()) ?: return null
-        val name = jsonObject(opened.decodeToString())?.text(NAME_KEY)?.let(::cleanName) ?: return null
-        return Joined(name, keys)
+        val hello = jsonObject(opened.decodeToString()) ?: return null
+        val name = hello.text(NAME_KEY)?.let(::cleanName) ?: return null
+        return Joined(name, keys, hello.text(SELF_KEY)?.takeIf(SELF::matches))
     }
 
     /**
@@ -126,6 +135,7 @@ object Invites {
     private const val HEADER_BYTES: Int = 1 + HuddleCrypto.PUBLIC_KEY_BYTES + TOKEN_BYTES
     private const val NAME_KEY = "n"
     private const val CARD_KEY = "c"
+    private const val SELF_KEY = "w"
     private val JOIN_INFO = "KJB Huddle 1 join".encodeToByteArray()
     private val INVITE_INFO = "KJB Huddle 1 invite".encodeToByteArray()
     private val PAIR_INFO = "KJB Huddle 1 pair".encodeToByteArray()

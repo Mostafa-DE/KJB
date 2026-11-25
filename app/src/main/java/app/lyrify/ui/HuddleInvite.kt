@@ -84,6 +84,7 @@ import app.lyrify.huddle.Friend
 import app.lyrify.huddle.Invited
 import app.lyrify.huddle.Invites
 import app.lyrify.huddle.Match
+import app.lyrify.huddle.friendBy
 import app.lyrify.huddle.match
 import kotlin.math.abs
 import kotlinx.coroutines.launch
@@ -265,7 +266,8 @@ private fun TicketFact(@DrawableRes icon: Int, text: String, bold: Boolean = fal
  * hopping between them, "<name> invites you to Huddle", the song that came with it (found in your library or not), what
  * joining means in plain words (they see what you play and you see theirs; stop sharing or listen privately any time),
  * and your name the first time. Join and play <song> joins and plays it; Join only joins; Not now keeps the link. Someone
- * else's invite used already, one expired, your own, or no answer from Huddle says so. [onPlay]: the card to open.
+ * else's invite used already, one expired, your own, one from a friend already, or no answer from Huddle says so. [onPlay]:
+ * the card to open.
  */
 @Composable
 internal fun AcceptInviteSheet(link: String, onDismiss: () -> Unit, onPlay: (String) -> Unit) {
@@ -277,6 +279,13 @@ internal fun AcceptInviteSheet(link: String, onDismiss: () -> Unit, onPlay: (Str
     val invite = remember(link) { huddle.parse(link) }
     if (invite == null) {
         HelpSheet(stringResource(R.string.huddle_title), stringResource(R.string.huddle_accept_bad), onDismiss = onDismiss)
+        return
+    }
+    // From a friend already, a new invite of theirs or the same one again (user 2026-11-25): nothing to join. Read as the
+    // sheet opens, so the friend a Join makes never turns the sheet into this.
+    val already = remember(invite) { state.friendBy(invite) }
+    if (already != null) {
+        HelpSheet(stringResource(R.string.huddle_title), stringResource(R.string.huddle_already, already.shownName), onDismiss = onDismiss)
         return
     }
     val matcher = rememberSongMatcher()

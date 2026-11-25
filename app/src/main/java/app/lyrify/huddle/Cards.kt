@@ -48,9 +48,10 @@ sealed interface Message {
 
     /**
      * The friend's [name], sent whenever they set it, and whether yours is the name of another of their friends
-     * ([taken]: pick another, so they can tell you apart). The server keeps only the newest one waiting.
+     * ([taken]: pick another, so they can tell you apart). The server keeps only the newest one waiting. [self]: who they
+     * are ([HuddleState.self], from KJB 4.1; none from an older KJB), so a new invite or join from them is known as theirs.
      */
-    data class Profile(override val id: String, override val at: Long, val name: String, val taken: Boolean = false) : Message
+    data class Profile(override val id: String, override val at: Long, val name: String, val taken: Boolean = false, val self: String? = null) : Message
 
     /**
      * What the friend's player does now ([state]), at [positionMs] in [song], told [at]: at each play, pause, resume, skip,
@@ -160,7 +161,7 @@ object Messages {
             SHARE -> (root[CARD_KEY] as? JsonObject)?.let(::cardOf)?.let { Message.Share(id, at, it) }
             PLAY -> (root[SONG_KEY] as? JsonObject)?.let(::songOf)?.let { Message.Play(id, at, it, favourite = root.flag(FAVOURITE_KEY) == true) }
             BYE -> Message.Bye(id, at)
-            PROFILE -> root.text(NAME_KEY)?.let(Invites::cleanName)?.let { Message.Profile(id, at, it, taken = root.flag(TAKEN_KEY) == true) }
+            PROFILE -> root.text(NAME_KEY)?.let(Invites::cleanName)?.let { Message.Profile(id, at, it, taken = root.flag(TAKEN_KEY) == true, self = root.text(SELF_KEY)?.takeIf(Invites.SELF::matches)) }
             NOW -> {
                 val song = (root[SONG_KEY] as? JsonObject)?.let(::songOf) ?: return null
                 // A state a newer KJB tells, or no place: not this version's.
@@ -212,6 +213,7 @@ object Messages {
                     put(KIND_KEY, JsonPrimitive(PROFILE))
                     put(NAME_KEY, JsonPrimitive(message.name))
                     if (message.taken) put(TAKEN_KEY, JsonPrimitive(true))
+                    message.self?.let { put(SELF_KEY, JsonPrimitive(it)) }
                 }
                 is Message.Now -> {
                     put(KIND_KEY, JsonPrimitive(NOW))
@@ -273,6 +275,7 @@ object Messages {
     private const val STATE_KEY = "e"
     private const val POSITION_KEY = "p"
     private const val COVER_KEY = "j"
+    private const val SELF_KEY = "w"
     private const val TITLE_KEY = "t"
     private const val ARTIST_KEY = "a"
     private const val ALBUM_KEY = "l"

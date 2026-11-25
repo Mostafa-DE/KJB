@@ -28,6 +28,7 @@ class CardsTest {
             Message.Bye("m6", 1_700_000_000_005),
             Message.Profile("m8", 1_700_000_000_007, "Juniper"),
             Message.Profile("m9", 1_700_000_000_008, "Juniper Vale", taken = true),
+            Message.Profile("m10", 1_700_000_000_009, "Juniper", self = "AAECAwQFBgcICQoLDA0ODw"),
         ).forEach { message -> assertEquals(message, Messages.decode(Messages.encode(message))) }
     }
 

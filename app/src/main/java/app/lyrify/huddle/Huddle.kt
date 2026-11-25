@@ -98,7 +98,7 @@ sealed interface Accepted {
     /** Friends now; [received]: the id of the card that came with the invite, in your inbox. */
     data class Joined(val friend: Friend, val received: String? = null) : Accepted
 
-    /** Already friends through this invite: a second tap on the link. */
+    /** Already friends: through this invite (a second tap on the link), or with whoever made it, a friend's new invite ([friendBy]). */
     data class Already(val friend: Friend) : Accepted
 
     /** Someone else used the invite first. */
@@ -241,7 +241,7 @@ class Huddle(
                 state.copy(
                     name = clean,
                     friends = state.friends.map { it.copy(asksNewName = false) },
-                    outbox = state.outbox.filterNot { it.kind == Kind.PROFILE } + state.friends.mapNotNull { profile(it, clean, now) },
+                    outbox = state.outbox.filterNot { it.kind == Kind.PROFILE } + state.friends.mapNotNull { profile(it, clean, state.self, now) },
                 )
             }
         }
@@ -255,6 +255,7 @@ class Huddle(
      */
     suspend fun invite(card: Card?): Invited {
         val name = now().name ?: return Invited.NoName
+        val self = self() ?: return Invited.NoAnswer
         val pair = HuddleCrypto.keyPair(random)
         val token = ByteArray(Invites.TOKEN_BYTES).also(random::nextBytes)
         val inLink = card?.takeIf { Messages.cardJson(it).toString().encodeToByteArray().size <= LINK_CARD_MAX_BYTES }
@@ -264,7 +265,7 @@ class Huddle(
             server.deleteInvite(pending.owner)
             return Invited.NoAnswer
         }
-        return Invited.Link(Invites.link(host, Invite(pair.public, token, name, inLink), random))
+        return Invited.Link(Invites.link(host, Invite(pair.public, token, name, inLink, self), random))
     }
 
     /**
@@ -287,15 +288,16 @@ class Huddle(
     suspend fun accept(invite: Invite): Accepted {
         val state = now()
         val joinId = Invites.joinId(invite.token, invite.publicKey)
-        state.friends.firstOrNull { it.joinId == joinId }?.let { return Accepted.Already(it) }
+        state.friendBy(invite)?.let { return Accepted.Already(it) }
         if (state.invites.any { it.token == HuddleCrypto.encode(invite.token) }) return Accepted.Own
         val name = state.name ?: return Accepted.NoName
         val earlier = state.joins.firstOrNull { it.joinId == joinId }
         val join = earlier ?: run {
+            val self = self() ?: return Accepted.NoAnswer
             // A parsed invite's key is a point of the curve (Invites.parse), so this joins; one that is not cannot be joined by anyone.
-            val joining = Invites.join(invite, name, random) ?: return Accepted.Taken
+            val joining = Invites.join(invite, name, self, random) ?: return Accepted.Taken
             val keys = joining.keys
-            val made = PendingJoin(joinId, HuddleCrypto.encode(joining.publicKey + joining.hello), keys.outBox, keys.inBox, HuddleCrypto.encode(keys.outKey), HuddleCrypto.encode(keys.inKey), invite.name, invite.card)
+            val made = PendingJoin(joinId, HuddleCrypto.encode(joining.publicKey + joining.hello), keys.outBox, keys.inBox, HuddleCrypto.encode(keys.outKey), HuddleCrypto.encode(keys.inKey), invite.name, invite.card, invite.self)
             if (!storage.change { it.copy(joins = (it.joins + made).takeLast(JOINS_MAX)) }) return Accepted.NoAnswer
             made
         }
@@ -312,17 +314,17 @@ class Huddle(
             JoinAnswer.JOINED -> Unit
         }
         val now = clock()
-        var friend = friendOf(join.name, join.outBox, join.inBox, join.outKey, join.inKey, joinId)
+        var friend = friendOf(join.name, join.outBox, join.inBox, join.outKey, join.inKey, joinId).copy(self = join.self)
         val card = join.card?.let { Received(newId(MESSAGE_ID_BYTES), friend.id, now, it) }
         var asked = false
         // The same join answered twice (a second tap, the sheet again after a turn of the phone): one friend.
         var already: Friend? = null
         val kept = storage.change { state ->
-            already = state.friends.firstOrNull { it.joinId == joinId }
+            already = state.friendBy(invite)
             if (already != null) return@change state.copy(joins = state.joins.filterNot { it.joinId == joinId })
             // The inviter is the newcomer to this phone's list: a name taken here is asked for again, as on theirs.
             friend = newcomer(friend, state.friends)
-            val ask = friend.taken?.let { state.name?.let { name -> profile(friend, name, now) } }
+            val ask = friend.taken?.let { state.name?.let { name -> profile(friend, name, state.self, now) } }
             asked = ask != null
             state.copy(
                 friends = state.friends + friend,
@@ -377,6 +379,8 @@ class Huddle(
      * ([HuddleServer.inbox]).
      */
     suspend fun sync(waitMs: Long = 0): Boolean {
+        // Friends from before KJB 4.1 learn who you are at the first sync.
+        if (now().let { it.self == null && it.friends.isNotEmpty() }) self()
         // `and`, not `&&`: a step without an answer never keeps the next from running.
         val asked = one.withLock { joins() and flushNow() }
         return fetch(waitMs) and asked
@@ -699,9 +703,26 @@ class Huddle(
     private fun newcomer(friend: Friend, friends: List<Friend>): Friend =
         friend.copy(taken = if (friends.any { sameName(it.shownName, friend.name) }) standIn(friend.name, friends) else null)
 
-    /** Your [name] for [friend], and whether theirs is taken in your list ([Friend.taken]), sealed for their mailbox. */
-    private fun profile(friend: Friend, name: String, now: Long): Outgoing? =
-        outgoing(friend, Message.Profile(newId(MESSAGE_ID_BYTES), now, name, taken = friend.taken != null), Kind.PROFILE, notBefore = now)
+    /** Your [name] for [friend], whether theirs is taken in your list ([Friend.taken]), and who you are ([self]), sealed for their mailbox. */
+    private fun profile(friend: Friend, name: String, self: String?, now: Long): Outgoing? =
+        outgoing(friend, Message.Profile(newId(MESSAGE_ID_BYTES), now, name, taken = friend.taken != null, self = self), Kind.PROFILE, notBefore = now)
+
+    /**
+     * Who this phone is ([HuddleState.self]): made once and told to every friend with your name ([Message.Profile]), so
+     * their KJB knows a new invite or join from you (user 2026-11-25); null when it could not be written.
+     */
+    private suspend fun self(): String? {
+        val made = newId(SELF_BYTES)
+        val at = clock()
+        val kept = storage.change { state ->
+            if (state.self != null) {
+                state
+            } else {
+                state.copy(self = made, outbox = state.outbox.filterNot { it.kind == Kind.PROFILE } + state.name?.let { name -> state.friends.mapNotNull { profile(it, name, made, at) } }.orEmpty())
+            }
+        }
+        return now().self.takeIf { kept }
+    }
 
     /** The join [joinId] answered for good (taken, or gone): nothing is left to send again. */
     private suspend fun endJoin(joinId: String) {
@@ -739,10 +760,15 @@ class Huddle(
                         // Not a hello for this invite: the slot is used up, so the invite ends and nobody is added.
                         log("huddle: an accept that does not open, invite ended")
                         if (forget(listOf(invite))) server.deleteInvite(invite.owner)
+                    } else if (joined.self != null && now().friends.any { it.self == joined.self }) {
+                        // A friend already, whose KJB did not know the invite was yours (user 2026-11-25): the slot is used up and
+                        // nobody is added; their KJB lets its new one go once it learns who you are ([twinless]).
+                        log("huddle: an accept from a friend already, invite ended")
+                        if (forget(listOf(invite))) server.deleteInvite(invite.owner)
                     } else {
                         val joinId = Invites.joinId(HuddleCrypto.decode(invite.token) ?: continue, HuddleCrypto.decode(invite.publicKey) ?: continue)
                         val keys = joined.keys
-                        val friend = friendOf(joined.name, keys.outBox, keys.inBox, HuddleCrypto.encode(keys.outKey), HuddleCrypto.encode(keys.inKey), joinId)
+                        val friend = friendOf(joined.name, keys.outBox, keys.inBox, HuddleCrypto.encode(keys.outKey), HuddleCrypto.encode(keys.inKey), joinId).copy(self = joined.self)
                         val card = invite.card?.let { outgoing(friend, Message.Share(newId(MESSAGE_ID_BYTES), now, it), Kind.CARD, notBefore = now) }
                         // The card the link carried reached them with it: kept first, so the invite goes only once it is (or
                         // at the next sync); a friend who could not be written takes it back.
@@ -750,7 +776,7 @@ class Huddle(
                         if (linked != null && !keep(listOf(linked))) continue
                         val kept = storage.change { state ->
                             val named = newcomer(friend, state.friends)
-                            val ask = named.taken?.let { state.name?.let { name -> profile(named, name, now) } }
+                            val ask = named.taken?.let { state.name?.let { name -> profile(named, name, state.self, now) } }
                             state.copy(
                                 friends = state.friends + named,
                                 invites = state.invites.filterNot { it.token == invite.token },
@@ -980,12 +1006,25 @@ class Huddle(
             // Another friend's name: a stand-in of that one, not of the name they had.
             else -> standIn(profile.name, others)
         }
-        val updated = friend.copy(name = profile.name, taken = taken, asksNewName = profile.taken)
-        val answer = name?.takeIf { (profile.name != friend.name && taken != null) || (friend.taken != null && taken == null) }?.let { profile(updated, it, now) }
+        val updated = friend.copy(name = profile.name, taken = taken, asksNewName = profile.taken, self = profile.self ?: friend.self)
+        val answer = name?.takeIf { (profile.name != friend.name && taken != null) || (friend.taken != null && taken == null) }?.let { profile(updated, it, self, now) }
         return copy(
             friends = friends.map { if (it.id == friend.id) updated else it },
             outbox = if (answer == null) outbox else outbox.filterNot { it.kind == Kind.PROFILE && it.box == friend.outBox } + answer,
-        )
+        ).twinless()
+    }
+
+    /**
+     * This state without a second friend who is one you had already ([Friend.self], user 2026-11-25): from a new invite
+     * one of you joined before their KJB knew who the other was. The one added first stays, with your history; the other
+     * goes quietly (no past friend, nothing sent), as the friend's KJB lets its own go once it learns who you are.
+     */
+    private fun HuddleState.twinless(): HuddleState {
+        val twins = friends.filterIndexed { at, friend -> friend.self != null && friends.take(at).any { it.self == friend.self } }
+        if (twins.isEmpty()) return this
+        val ids = twins.map { it.id }.toSet()
+        val boxes = twins.map { it.outBox }.toSet()
+        return copy(friends = friends - twins.toSet(), plays = plays.filterNot { it.friend in ids }, outbox = outbox.filterNot { it.box in boxes }, joined = joined - ids)
     }
 
     private fun newId(bytes: Int): String = HuddleCrypto.encode(ByteArray(bytes).also(random::nextBytes))
@@ -1052,9 +1091,21 @@ class Huddle(
         private const val MESSAGE_ID_BYTES: Int = 16
         private const val FRIEND_ID_BYTES: Int = 8
 
+        /** Who a phone is ([HuddleState.self]): as [Invites.SELF] reads it. */
+        private const val SELF_BYTES: Int = 16
+
         /** An invite's owner id: random, as the server's ids are 32 bytes (43 characters). */
         private const val OWNER_ID_BYTES: Int = 32
     }
+}
+
+/**
+ * The friend [invite] is from, already: its own join (a second tap on the link), or who made it ([Invite.self]: a new
+ * invite from a friend, user 2026-11-25), never by name; null for someone new.
+ */
+fun HuddleState.friendBy(invite: Invite): Friend? {
+    val joinId = Invites.joinId(invite.token, invite.publicKey)
+    return friends.firstOrNull { it.joinId == joinId || (invite.self != null && it.self == invite.self) }
 }
 
 /** Whether two names are one in a friend list: case aside (both are clean already, [Invites.cleanName]). */
