@@ -327,6 +327,55 @@ class DlLookupTest {
     }
 
     @Test
+    fun `a playlist's own link with an add-on too old for playlists is never looked up, and says it needs an update`() = runTest {
+        listOf(
+            "https://www.youtube.com/playlist?list=PLq7",
+            "https://music.youtube.com/playlist?list=OLAK5uy_m4dE&si=x9",
+            "https://www.youtube.com/watch?list=PLq7",
+        ).forEach { url ->
+            calls.clear()
+            val lookup = DlLookup { DlConnection.Open(session(api = 1)) }
+
+            // It would open every video of the playlist, minutes on the phone, and then save one of its songs.
+            assertEquals(url, AddonState.Outdated(1), lookup.start(url, events))
+            assertEquals(url, listOf("unbind"), calls)
+            lookup.close()
+            assertEquals("let go of once", listOf("unbind"), calls)
+        }
+        assertEquals(emptyList<DlFailure>(), failures)
+    }
+
+    @Test
+    fun `a song's link with a list, or a playlist's with an add-on new enough, is looked up as ever`() = runTest {
+        val old = DlLookup { DlConnection.Open(session(api = 1)) }
+        // The old add-on takes the song alone (--no-playlist), in seconds.
+        assertEquals(AddonState.Ready, old.start("https://www.youtube.com/watch?v=abc123def45&list=PLq7", events))
+        old.close()
+        val recent = DlLookup { DlConnection.Open(session(api = DL_SEARCH_API)) }
+        assertEquals(AddonState.Ready, recent.start("https://www.youtube.com/playlist?list=PLq7", events))
+        recent.close()
+
+        assertEquals(listOf("info", "foreground", "unbind", "stopService", "info", "foreground", "unbind", "stopService"), calls)
+    }
+
+    @Test
+    fun `a search or lookup that fails is logged by its kind, never its words or its link`() = runTest {
+        val logs = mutableListOf<String>()
+        val searchDeath = CompletableDeferred<Unit>()
+        val search = DlLookup({ logs += it }) { DlConnection.Open(session(FakePort(answers = false), api = DL_SEARCH_API, death = searchDeath)) }
+        val lookupDeath = CompletableDeferred<Unit>()
+        val lookup = DlLookup({ logs += it }) { DlConnection.Open(session(death = lookupDeath)) }
+
+        search.search(DlSearch("paper lantern"), searchEvents)
+        searchDeath.complete(Unit)
+        lookup.start("https://video.example.com/w/quiet-harbour", events)
+        lookupDeath.complete(Unit)
+
+        assertEquals(listOf(DlFailure.ENGINE, DlFailure.ENGINE), failures)
+        assertEquals(listOf("downloads: search failed (ENGINE)", "downloads: lookup failed (ENGINE)"), logs)
+    }
+
+    @Test
     fun `an add-on that cannot be bound says why`() = runTest {
         val lookup = DlLookup { DlConnection.Closed(AddonState.Missing) }
 

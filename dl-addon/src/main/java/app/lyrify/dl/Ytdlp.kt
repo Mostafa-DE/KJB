@@ -288,8 +288,9 @@ object YtdlpLines {
 
     /**
      * Each kind's patterns, in the order the kinds are read: a full phone first, then no network, then a playlist no one
-     * but its owner can list (before no video: both say "does not exist"), then no video, then a site that refuses this
-     * network or client (a VPN's address), then a site that changed.
+     * but its owner can list (before no video: both say "does not exist"), then no video, then a video only for adults who
+     * sign in (before a site that refuses: both say "sign in to confirm"), then a site that refuses this network or client
+     * (a VPN's address), then a site that changed.
      */
     private val KINDS: List<Pair<DlFailure, List<Pattern>>> = listOf(
         DlFailure.NO_ROOM to patterns("no-space" to "no space left", "enospc" to "enospc", "errno-28" to "errno 28"),
@@ -306,6 +307,7 @@ object YtdlpLines {
             "removed" to "has been removed", "not-exist" to "does not exist", "invalid-url" to "is not a valid url", "404" to "http error 404",
             "no-formats" to "no video formats found",
         ),
+        DlFailure.AGE_RESTRICTED to patterns("confirm-age" to "confirm your age"),
         DlFailure.BLOCKED to patterns("sign-in" to "sign in to confirm", "not-a-bot" to "not a bot", "429" to "http error 429", "too-many-requests" to "too many requests"),
         DlFailure.SITE_CHANGED to patterns(
             "unable-to-extract" to "unable to extract", "403" to "http error 403", "nsig" to "nsig", "signature" to "signature",

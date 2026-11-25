@@ -41,6 +41,8 @@
     <!-- The page -->
     <string name="dl_link">Link</string>
     <string name="dl_link_hint">Paste a link</string>
+    <string name="dl_link_or_search">Link or search</string>
+    <string name="dl_link_or_search_hint">Paste a link, or search YouTube for a song</string>
     <string name="dl_paste">Paste</string>
     <string name="dl_look_up">Look up</string>
     <string name="dl_now">Now</string>
@@ -89,6 +91,10 @@
     <string name="dl_failed_not_found_detail">There is no video at that link: it was removed, it is private, or the site is not one KJB can save from.</string>
     <string name="dl_failed_site_detail">The site changed. KJB updated the downloader and tried again; Retry later, when the downloader has caught up.</string>
     <string name="dl_failed_site_newest_detail">The site changed, and KJB\'s downloader is already the newest. Retry later, when the downloader catches up.</string>
+    <string name="dl_failed_age">Age-restricted</string>
+    <string name="dl_failed_age_detail">YouTube shows this video only to adults who sign in. KJB does not sign in to YouTube, so it can\'t save it.</string>
+    <string name="dl_vpn_on">A VPN is on. YouTube often refuses downloads over a VPN.</string>
+    <string name="dl_failed_vpn_detail">A VPN is on, and YouTube often refuses it. Turn off the VPN and try again.</string>
     <string name="dl_failed_blocked_detail">The site refused this connection. If you use a VPN, turn it off and Retry, or try again later.</string>
     <string name="dl_failed_room_detail">Your phone has no room left for it. Free some space, then Retry.</string>
     <string name="dl_failed_hand_off_detail">The file did not reach KJB whole, so nothing was kept. Retry goes on from what was downloaded.</string>
@@ -171,6 +177,7 @@
     <string name="dl_search_update">Searching YouTube and saving playlists need a newer Downloads add-on.</string>
     <string name="dl_search_get_first">Searching YouTube needs the Downloads add-on. Get it on the Downloads page.</string>
     <string name="dl_search_update_first">Searching YouTube needs a newer Downloads add-on. Update it on the Downloads page.</string>
+    <string name="dl_playlist_update_first">Saving a playlist needs a newer Downloads add-on. Update it on the Downloads page.</string>
     <string name="dl_open_downloads">Open Downloads</string>
 
     <!-- Settings > Downloads -->

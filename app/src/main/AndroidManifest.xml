@@ -60,6 +60,9 @@
          service of type dataSync (FOREGROUND_SERVICE_DATA_SYNC above), with the progress and Cancel in its notification
          (POST_NOTIFICATIONS, asked on the first download). Getting the add-on uses the install permissions above. -->
     <uses-permission android:name="${dlAddonPackage}.permission.BIND_DL" />
+    <!-- Whether a VPN is on (NetworkCapabilities.TRANSPORT_VPN): YouTube often refuses a VPN's address, so the Downloads
+         page says so, and a failure says to turn it off. A normal permission; WorkManager's manifest asks for it too. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- player: permissions -->
     <!-- KJB's own player (player/PlaybackService): a foreground service of type mediaPlayback while music plays, as

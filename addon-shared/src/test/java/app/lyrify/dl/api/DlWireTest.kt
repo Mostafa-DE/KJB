@@ -50,10 +50,11 @@ class DlWireTest {
     }
 
     @Test
-    fun `a failure kind a later add-on adds reads as unknown in an older KJB, and BLOCKED reads here`() {
+    fun `a failure kind a later add-on adds reads as unknown in an older KJB, and BLOCKED and AGE_RESTRICTED read here`() {
         // KJB 3.0's DlWire.end, the same as this one: a kind it does not know fails the read, a failure of an unknown kind.
         assertEquals(DlEnd.Failed(DlFailure.UNKNOWN), DlWire.end("""{"type":"failed","failure":"SOMETHING_LATER","updated":false}"""))
         assertEquals(DlEnd.Failed(DlFailure.BLOCKED), DlWire.end(DlWire.encode(DlEnd.Failed(DlFailure.BLOCKED))))
+        assertEquals(DlEnd.Failed(DlFailure.AGE_RESTRICTED), DlWire.end(DlWire.encode(DlEnd.Failed(DlFailure.AGE_RESTRICTED))))
     }
 
     @Test
@@ -124,6 +125,30 @@ class DlWireTest {
         assertEquals("OLAK5uy_m4dE", playlistId("https://music.youtube.com/playlist?list=OLAK5uy_m4dE"))
         listOf("https://www.youtube.com/watch?v=abc123def45", "https://www.youtube.com/watch?v=abc123def45&list=", "https://video.example.com/v?playlist=3&alist=x", "not a link")
             .forEach { assertNull(it, playlistId(it)) }
+    }
+
+    @Test
+    fun `a link names a song by its v= or its youtu-be address, never by its list alone`() {
+        assertTrue(namesSong("https://www.youtube.com/watch?v=abc123def45&list=PLq7&index=3"))
+        assertTrue(namesSong("https://music.youtube.com/watch?list=OLAK5uy_m4dE&v=abc123def45"))
+        assertTrue(namesSong("https://youtu.be/abc123def45?si=x9&list=RDabc123def45"))
+        // A video's id in the path (the review of 97305f27): a Short, a live stream, an embedded video.
+        assertTrue(namesSong("https://www.youtube.com/shorts/abc123def45?list=PLq7"))
+        assertTrue(namesSong("https://www.youtube.com/live/abc123def45?list=PLq7"))
+        assertTrue(namesSong("https://www.youtube.com/embed/abc123def45?list=PLq7"))
+        assertTrue(namesSong("https://www.youtube.com/Shorts/abc123def45?list=PLq7"))
+        listOf(
+            "https://youtu.be/?list=PLq7",
+            "https://www.youtube.com/watch?v=&list=PLq7",
+            "https://www.youtube.com/shorts/?list=PLq7",
+            "https://www.youtube.com/Embed/VideoSeries?list=PLq7",
+            "https://www.youtube.com/playlist?list=PLq7",
+            "https://music.youtube.com/playlist?list=OLAK5uy_m4dE&si=x9",
+            "https://www.youtube.com/watch?list=PLq7",
+            "https://www.youtube.com/embed/videoseries?list=PLq7",
+            "https://www.youtube.com/watch?vv=abc&list=PLq7",
+            "not a link",
+        ).forEach { assertFalse(it, namesSong(it)) }
     }
 
     @Test

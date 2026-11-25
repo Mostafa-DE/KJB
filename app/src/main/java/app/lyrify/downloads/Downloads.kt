@@ -66,6 +66,9 @@ enum class DownloadFailure {
 
     /** The site refused this connection: a VPN's address, or too many requests. */
     BLOCKED,
+
+    /** A video YouTube shows only to adults who sign in, which KJB never does. */
+    AGE_RESTRICTED,
     NO_ROOM,
 
     /** The file did not reach KJB whole. */
@@ -100,6 +103,7 @@ enum class DownloadFailure {
             // before its lookup said it is a playlist.
             DlFailure.PRIVATE_PLAYLIST -> NOT_FOUND
             DlFailure.BLOCKED -> BLOCKED
+            DlFailure.AGE_RESTRICTED -> AGE_RESTRICTED
             DlFailure.NO_ROOM -> NO_ROOM
             DlFailure.HAND_OFF -> HAND_OFF
             DlFailure.ENGINE -> ADDON_GONE

@@ -224,6 +224,20 @@ class YtdlpTest {
     }
 
     @Test
+    fun `an age-restricted video is told apart from a site that refuses this network`() {
+        // yt-dlp 2026.11.23's words for one of its own test videos, checked on the laptop: "sign in to confirm" as YouTube's
+        // word to a VPN's address, but no VPN or later try changes it.
+        val age = "ERROR: [youtube] Tq9kXw3Lm0A: Sign in to confirm your age. This video may be inappropriate for some users. Use --cookies-from-browser or " +
+            "--cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies."
+        assertEquals(YtdlpError(DlFailure.AGE_RESTRICTED, "confirm-age", "youtube"), YtdlpLines.diagnose(age))
+        assertEquals(
+            YtdlpError(DlFailure.BLOCKED, "sign-in", "youtube"),
+            YtdlpLines.diagnose("ERROR: [youtube] Zq9kXw3Lm0A: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication."),
+        )
+        assertEquals(YtdlpError(DlFailure.BLOCKED, "sign-in", "youtube"), YtdlpLines.diagnose("ERROR: [youtube] Zq9kXw3Lm0A: Sign in to confirm you're not a bot"))
+    }
+
+    @Test
     fun `a playlist no one but its owner can list is told apart from a video that is gone`() {
         mapOf(
             // Liked music, a private playlist and a deleted one: yt-dlp 2026.11.23's words, YouTube's after "YouTube said".

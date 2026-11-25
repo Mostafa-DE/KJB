@@ -18,6 +18,7 @@ import app.lyrify.dl.api.DlUpdate
 import app.lyrify.dl.api.PublicAddresses
 import app.lyrify.dl.api.isDownloadKey
 import app.lyrify.dl.api.isWebLink
+import app.lyrify.dl.api.namesSong
 import app.lyrify.dl.api.playlistId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -40,7 +41,6 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.InetAddress
-import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -88,7 +88,8 @@ object UpdatePolicy {
 
     /**
      * Failures a newer yt-dlp may fix: a site that changed, a link it does not know yet, and what it did not say. Never a
-     * site that refuses this network ([DlFailure.BLOCKED]): an update does not change who asks.
+     * site that refuses this network ([DlFailure.BLOCKED]): an update does not change who asks; nor a video only for adults
+     * who sign in ([DlFailure.AGE_RESTRICTED]).
      */
     private val FIXABLE = setOf(DlFailure.SITE_CHANGED, DlFailure.NOT_FOUND, DlFailure.UNKNOWN)
 
@@ -449,14 +450,36 @@ class DlRuns(
      * names a playlist too (&list=, a Mix started from it) is the song, its playlist listed first and told with the quick
      * info (a partial info) before the song's full info, which has it too.
      */
-    fun info(url: String, events: InfoEvents): Long = lookup { id -> lookUp(id, url, events) }
+    fun info(url: String, events: InfoEvents): Long = lookup { id ->
+        lookUp(
+            id,
+            url,
+            object : InfoEvents by events {
+                override fun onFailed(end: DlEnd.Failed) {
+                    log("lookup $id: failed (${end.failure})")
+                    events.onFailed(end)
+                }
+            },
+        )
+    }
 
     /**
      * Searches YouTube for [search] and returns its id at once: a lookup of words, which yt-dlp answers with YouTube's
      * list and opens none of it. One that is not valid (null) is refused. It never updates yt-dlp: the download picked
      * from it does when that is due.
      */
-    fun search(search: DlSearch?, events: SearchEvents): Long = lookup { id -> find(id, search, events) }
+    fun search(search: DlSearch?, events: SearchEvents): Long = lookup { id ->
+        find(
+            id,
+            search,
+            object : SearchEvents by events {
+                override fun onFailed(end: DlEnd.Failed) {
+                    log("lookup $id: failed (${end.failure})")
+                    events.onFailed(end)
+                }
+            },
+        )
+    }
 
     /** Starts a lookup's (or a search's) [body] and returns its id at once: [busy] from now until its end. */
     private fun lookup(body: suspend (id: Long) -> Unit): Long {
@@ -511,7 +534,7 @@ class DlRuns(
         // private one, Liked music) leaves the song as it is, logged by its kind; a Mix yt-dlp cannot list answers with the
         // song's own info. A link with a list and no song (/playlist, watch?list=, embed/videoseries) is the playlist's own.
         var found: DlInfo? = null
-        if (list != null && URI(url).let { it.host?.lowercase() == "youtu.be" || it.rawQuery.orEmpty().split('&').any { field -> field.startsWith("v=") } }) {
+        if (list != null && namesSong(url)) {
             val listing = answer(id, { DlArgs.info(it, songs, playlist = true) }, url)
             if (listing is YtdlpExit.Failed) failure("lookup $id", listing)
             val out = (listing as? YtdlpExit.Done)?.out
@@ -533,7 +556,7 @@ class DlRuns(
             when {
                 info != null -> events.onInfo(info)
                 exit is YtdlpExit.Failed -> events.onFailed(DlEnd.Failed(failure("lookup $id", exit)))
-                else -> events.onFailed(DlEnd.Failed(DlFailure.UNKNOWN))
+                else -> events.onFailed(unanswered(id, exit))
             }
         }
     }
@@ -552,8 +575,17 @@ class DlRuns(
                 val reasons = exit.err.lines().joinToString("\n") { it.replaceFirst(words, "") }
                 events.onFailed(DlEnd.Failed(failure("lookup $id", exit.copy(err = reasons))))
             }
-            else -> events.onFailed(DlEnd.Failed(DlFailure.UNKNOWN))
+            else -> events.onFailed(unanswered(id, exit))
         }
+    }
+
+    /**
+     * Lookup [id]'s yt-dlp ended with no answer read and no error: killed by the phone (low on memory), or its answer not
+     * the JSON asked for. Logged by which, never what it said.
+     */
+    private fun unanswered(id: Long, exit: YtdlpExit?): DlEnd.Failed {
+        log("lookup $id: yt-dlp ${if (exit == YtdlpExit.Killed) "was killed" else "answered nothing readable"}")
+        return DlEnd.Failed(DlFailure.UNKNOWN)
     }
 
     /**

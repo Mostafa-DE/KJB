@@ -92,6 +92,27 @@ fun playlistId(url: String): String? {
 }
 
 /**
+ * Whether a link names a song: a `v=` with an id in its query (watch?v=...&list=...), or a video's id in its path
+ * (youtu.be/<id>, /shorts/<id>, /live/<id>, /embed/<id>). A link with a list and no song (/playlist, watch?list=,
+ * embed/videoseries) is the playlist's own.
+ */
+fun namesSong(url: String): Boolean {
+    val uri = try {
+        URI(url)
+    } catch (_: URISyntaxException) {
+        return false
+    }
+    val path = uri.path.orEmpty().split('/')
+    // The words before an id are read without case; the id keeps its own.
+    val id = if (uri.host?.lowercase() == "youtu.be") {
+        path.getOrNull(1)
+    } else {
+        path.getOrNull(2)?.takeIf { path[1].lowercase() in setOf("shorts", "live", "embed") && !it.equals("videoseries", ignoreCase = true) }
+    }
+    return !id.isNullOrEmpty() || uri.rawQuery.orEmpty().split('&').any { it.startsWith("v=") && it.length > 2 }
+}
+
+/**
  * Whether a link's host is out on the internet, so a shared link never makes the add-on (or KJB, for a cover) reach this
  * phone, the home or office network, or a cloud's metadata address: not loopback, unspecified, private (10/8, 172.16/12,
  * 192.168/16, carrier NAT 100.64/10, fc00::/7), link-local (169.254/16, fe80::/10), multicast or broadcast. An IPv6 form of
@@ -325,6 +346,12 @@ enum class DlFailure {
      * bot", HTTP 429). No update fixes it; another network or a later try may. An older KJB reads it as [UNKNOWN].
      */
     BLOCKED,
+
+    /**
+     * A video YouTube shows only to adults who sign in ("sign in to confirm your age"): the add-on never signs in, so no
+     * update, network or later try saves it. An older KJB reads it as [UNKNOWN].
+     */
+    AGE_RESTRICTED,
 
     /** No room on the phone: in the add-on's cache, or where KJB saves. */
     NO_ROOM,

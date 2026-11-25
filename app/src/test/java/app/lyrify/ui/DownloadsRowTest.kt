@@ -65,13 +65,16 @@ class DownloadsRowTest {
 
     @Test
     fun `a failure's words follow the add-on's kind and whether it really updated the downloader`() {
-        fun sentence(failure: DlFailure, updated: Boolean) = failureSentence(DownloadFailure.of(DlEnd.Failed(failure, updated)))
+        fun sentence(failure: DlFailure, updated: Boolean) = failureSentence(DownloadFailure.of(DlEnd.Failed(failure, updated)), vpn = false)
         fun label(failure: DlFailure, updated: Boolean) = DownloadNotices.failureLabel(DownloadFailure.of(DlEnd.Failed(failure, updated)))
 
         // A VPN's address refused: the same words, updated or not.
         assertEquals(R.string.dl_failed_blocked_detail, sentence(DlFailure.BLOCKED, updated = false))
         assertEquals(R.string.dl_failed_blocked_detail, sentence(DlFailure.BLOCKED, updated = true))
         assertEquals(R.string.dl_failed_blocked, label(DlFailure.BLOCKED, updated = false))
+        // An age-restricted video: never the VPN's words, which would send the user to turn off a VPN they do not have.
+        assertEquals(R.string.dl_failed_age_detail, sentence(DlFailure.AGE_RESTRICTED, updated = false))
+        assertEquals(R.string.dl_failed_age, label(DlFailure.AGE_RESTRICTED, updated = false))
         // "Updated the downloader and tried again" only when it was.
         assertEquals(R.string.dl_failed_site_detail, sentence(DlFailure.SITE_CHANGED, updated = true))
         assertEquals(R.string.dl_failed_site_newest_detail, sentence(DlFailure.SITE_CHANGED, updated = false))
@@ -87,19 +90,42 @@ class DownloadsRowTest {
 
     @Test
     fun `a search that failed says why in dl1's words where they fit, else to try again or update the downloader`() {
-        assertEquals(R.string.dl_failed_offline_detail, searchFailureText(DlFailure.OFFLINE))
-        assertEquals(R.string.dl_failed_blocked_detail, searchFailureText(DlFailure.BLOCKED))
+        assertEquals(R.string.dl_failed_offline_detail, searchFailureText(DlFailure.OFFLINE, vpn = false))
+        assertEquals(R.string.dl_failed_blocked_detail, searchFailureText(DlFailure.BLOCKED, vpn = false))
         // A search makes no update of its own, so "KJB updated the downloader" or "already the newest" would not be true.
         DlFailure.entries.filter { it != DlFailure.OFFLINE && it != DlFailure.BLOCKED }.forEach {
-            assertEquals(it.name, R.string.dl_failed_unknown_detail, searchFailureText(it))
+            assertEquals(it.name, R.string.dl_failed_unknown_detail, searchFailureText(it, vpn = false))
         }
     }
 
     @Test
-    fun `the search field always has a name TalkBack reads, also once its words fill it`() {
+    fun `with a VPN on, a failed search, lookup or download says to turn it off, but not for what no VPN changes`() {
+        // The owner's VPN made YouTube refuse a search and an album (user feedback 81, 82): the words said neither.
+        val vpnMayCause = listOf(
+            DownloadFailure.OFFLINE, DownloadFailure.NOT_FOUND, DownloadFailure.SITE_CHANGED, DownloadFailure.SITE_CHANGED_NEWEST,
+            DownloadFailure.BLOCKED, DownloadFailure.STALLED, DownloadFailure.UNKNOWN,
+        )
+        vpnMayCause.forEach { assertEquals(it.name, R.string.dl_failed_vpn_detail, failureSentence(it, vpn = true)) }
+        (DownloadFailure.entries - vpnMayCause.toSet()).forEach { assertEquals(it.name, failureSentence(it, vpn = false), failureSentence(it, vpn = true)) }
+        DownloadFailure.entries.forEach { assertTrue(it.name, failureSentence(it, vpn = false) != R.string.dl_failed_vpn_detail) }
+
+        // A refused search reads as an unknown failure, as everywhere in KJB (DownloadFailure.of).
+        listOf(DlFailure.OFFLINE, DlFailure.NOT_FOUND, DlFailure.SITE_CHANGED, DlFailure.BLOCKED, DlFailure.REFUSED, DlFailure.UNKNOWN)
+            .forEach { assertEquals(it.name, R.string.dl_failed_vpn_detail, searchFailureText(it, vpn = true)) }
+        // An add-on that died or a yt-dlp that never started: no VPN does that (the second review of this lane).
+        listOf(DlFailure.ENGINE, DlFailure.AGE_RESTRICTED, DlFailure.NO_ROOM, DlFailure.HAND_OFF, DlFailure.LOCAL_ADDRESS)
+            .forEach { assertEquals(it.name, searchFailureText(it, vpn = false), searchFailureText(it, vpn = true)) }
+    }
+
+    @Test
+    fun `the search fields always have a name TalkBack reads, also once their words fill them`() {
         // No Compose renderer in these tests (ThemeTokensTest), so it is read from the source. The placeholder shows only
-        // while the field is empty, and the search sheet opens with the words in it: the label is what names it.
+        // while a field is empty, and the search sheet opens with the words in it: the label is what names it. The page's
+        // one box for a link or words (4.1) takes its label as a String; the sheet's field is labelled.
         val screen = File("src/main/java/app/lyrify/ui/DownloadsScreen.kt").readText()
-        assertTrue(Regex("""private fun SearchField\([^\n]*label: String,""").containsMatchIn(screen))
+        assertTrue(Regex("""internal fun LinkOrSearchField\((?:\n[^\n]*){0,5}\n\s+label: String,""").containsMatchIn(screen))
+        val box = screen.substringAfter("internal fun LinkOrSearchField(").substringBefore("\n}\n")
+        assertTrue("the box hands its label to its field", Regex("""LyrifyField\((?:\n[^\n]*){0,5}\n\s+label = label,""").containsMatchIn(box))
+        assertTrue(Regex("""value = words,\n[^\n]*\n[^\n]*\n\s+label = stringResource\(R\.string\.dl_search_hint\),""").containsMatchIn(screen))
     }
 }
