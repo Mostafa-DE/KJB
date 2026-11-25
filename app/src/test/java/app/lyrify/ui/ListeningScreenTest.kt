@@ -124,9 +124,13 @@ class ListeningScreenTest {
             "MenuRow(stringResource(R.string.insights_leave_out), R.drawable.ic_visibility_off, {",
             "onOpen(Page.InsightsLeftOut)",
             "Page.InsightsLeftOut -> LeftOutPage(back)",
-            "StatsGraph.stats(context).mostPlayed(Int.MAX_VALUE)",
             "leftOutOfInsights = if (out) others + song.ref else others",
         ).forEach { assertTrue(it, listening.contains(it)) }
+        // The songs played are read once the library is there and again when it changes, as Most played's rows are: read
+        // while it loads, Most played has none, and the page would say nothing was played until reopened.
+        val page = listening.substringAfter("private fun LeftOutPage(").substringBefore("\n}\n")
+        assertTrue(page.contains("produceState<List<SongPlays>?>(null, ui.library) { value = ui.library?.let { StatsGraph.stats(context).mostPlayed(Int.MAX_VALUE) } }"))
+        assertFalse(page.contains("produceState<List<SongPlays>?>(null) {"))
         // The row is Hidden songs' row with a switch in place of its button, one TalkBack stop that switches it.
         val row = source("LibraryHiding.kt").substringAfter("internal fun HiddenRow(").substringBefore("\n}\n")
         assertTrue(row.contains("Modifier.toggleable(switch, role = Role.Switch) { onClick() }"))

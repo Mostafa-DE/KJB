@@ -350,7 +350,8 @@ private fun LeftOutPage(onBack: () -> Unit) {
     val context = LocalContext.current
     val change = rememberSettingsChange()
     val leftOut = ui.settings.library.leftOutOfInsights
-    val played by produceState<List<SongPlays>?>(null) { value = StatsGraph.stats(context).mostPlayed(Int.MAX_VALUE) }
+    // Read once the library is there, and again when it changes, as Most played's rows are: while it loads there is none.
+    val played by produceState<List<SongPlays>?>(null, ui.library) { value = ui.library?.let { StatsGraph.stats(context).mostPlayed(Int.MAX_VALUE) } }
     val songs = remember(ui.library, played) { ui.library?.let { library -> played?.mapNotNull { plays -> library.song(plays.song.path)?.let { it to plays.count } } } }
     val left = remember(ui.library, leftOut) { leftOut.mapTo(HashSet()) { ui.library?.resolver?.find(it)?.path ?: it.path } }
     ListeningFrame(stringResource(R.string.insights_leave_out), onBack) { padding ->
