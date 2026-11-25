@@ -233,6 +233,22 @@ class InsightsCacheTest {
     }
 
     @Test
+    fun `a page is worked out again at once when a song is left out of Insights or let back in`() = runBlocking {
+        var leftOut = emptyList<SongRef>()
+        val stats = PlayStats(FakePlayLog(history), { library }, Dispatchers.Unconfined, leftOut = { leftOut })
+        val first = stats.page(ListeningPeriod.MONTH, now, calendar)
+        assertSame(first, stats.page(ListeningPeriod.MONTH, now, calendar))
+
+        leftOut = listOf(songs[1].ref)
+        val without = stats.page(ListeningPeriod.MONTH, now, calendar)
+        assertEquals(runBlocking { PlayStats(FakePlayLog(history), { library }, Dispatchers.Unconfined, leftOut = { leftOut }).page(ListeningPeriod.MONTH, now, calendar) }, without)
+        assertTrue(checkNotNull(without.cards.time).totals.plays < checkNotNull(first.cards.time).totals.plays)
+
+        leftOut = emptyList()
+        assertEquals(first, stats.page(ListeningPeriod.MONTH, now, calendar))
+    }
+
+    @Test
     fun `a month's story is worked out once, and again when a play in it or before it is written`() = runBlocking {
         val log = FakePlayLog(history)
         val stats = stats(log)
@@ -416,6 +432,9 @@ class InsightsCacheTest {
         assertTrue(graph.contains("WatchedPlayLog(SqlPlayLog(PlaysDb(context.applicationContext, name = BOOK_PLAYS, log = log), log = log)) { startedAt -> stats?.booksChanged(startedAt) }"))
         // Seen at once by the threads that write.
         assertTrue(graph.contains("@Volatile\n    private var stats: PlayStats? = null"))
+        // The page names the plays' playlists by the user's playlists, and leaves out the songs Settings say (IN3).
+        assertTrue(graph.contains("playlists = lists.playlists,"))
+        assertTrue(graph.contains("leftOut = { settings.settings.first().library.leftOutOfInsights },"))
     }
 
     private companion object {

@@ -118,6 +118,10 @@ sealed interface Page {
     @Serializable @SerialName("topList")
     data class TopList(val kind: TopKind) : ListeningPages
 
+    /** Leave songs out of Insights, from its menu (ListeningScreen.kt, IN3). */
+    @Serializable @SerialName("insightsLeftOut")
+    data object InsightsLeftOut : ListeningPages
+
     // A month's recap and the list of them are stories now (FullScreen.Story, the Insights redesign): a page kept
     // from before reads as none and is dropped.
 

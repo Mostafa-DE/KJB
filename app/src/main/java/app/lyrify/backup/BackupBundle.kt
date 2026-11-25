@@ -396,9 +396,10 @@ object BackupBundle {
         snapshot.tones?.let { state -> state.tones.values.forEach { add(it.songPath) } }
         snapshot.duplicates?.let { choices -> (choices.notDuplicates + choices.reviewed).forEach { key -> key.split(',').mapNotNull { it.toLongOrNull()?.let(pathOf) }.forEach(::add) } }
         snapshot.coversTags?.let { memory -> memory.albums.forEach { album -> album.songs.forEach { add(it.path) } } }
-        // Hidden songs and those held out of suggestions, so another phone finds them and keeps them so.
+        // Hidden songs, those left out of Insights and those held out of suggestions, so another phone finds them and keeps
+        // them so.
         snapshot.settings?.let { settings ->
-            settings.library.hiddenSongs.forEach { add(it.path) }
+            (settings.library.hiddenSongs + settings.library.leftOutOfInsights).forEach { add(it.path) }
             (settings.suggestions.never + settings.suggestions.notNow).forEach { add(it.song.path) }
         }
         snapshot.books?.let { state -> state.books.values.forEach { entry -> addAll(entry.parts + listOfNotNull(entry.partPath)) }; addAll(state.marks.songs + state.marks.notSongs) }
@@ -431,15 +432,15 @@ object BackupBundle {
 
     /**
      * The settings without Settings > Backup, and Start when connected's devices by their names only: Android links each
-     * device to one phone (Companion Device Manager), so the user picks them again there. Hidden songs, and the songs held
-     * out of suggestions, without their ids. With the AI switch, when known.
+     * device to one phone (Companion Device Manager), so the user picks them again there. Hidden songs, those left out of
+     * Insights and the songs held out of suggestions, without their ids. With the AI switch, when known.
      */
     private fun settings(settings: Settings, ai: Boolean?): String {
         val bare = settings.copy(
             backup = BackupSettings(),
             playback = settings.playback.copy(connectDevices = emptyList()),
-            // Hidden songs and held ones by their paths only, as a MediaStore id names a file on this phone alone.
-            library = settings.library.copy(hiddenSongs = settings.library.hiddenSongs.map(::bare)),
+            // Hidden songs, those left out and held ones by their paths only, as a MediaStore id names a file on this phone alone.
+            library = settings.library.copy(hiddenSongs = settings.library.hiddenSongs.map(::bare), leftOutOfInsights = settings.library.leftOutOfInsights.map(::bare)),
             suggestions = settings.suggestions.copy(
                 never = settings.suggestions.never.map { it.copy(song = bare(it.song)) },
                 notNow = settings.suggestions.notNow.map { it.copy(song = bare(it.song)) },

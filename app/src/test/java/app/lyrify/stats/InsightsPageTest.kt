@@ -1,11 +1,14 @@
 package app.lyrify.stats
 
+import app.lyrify.audio.OutputKind
 import app.lyrify.library.Library
+import app.lyrify.library.Playlist
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.VOLUME
 import app.lyrify.library.song
 import app.lyrify.player.SourceKind
+import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
 import app.lyrify.suggestions.FriendPlay
 import kotlinx.coroutines.Dispatchers
@@ -86,6 +89,7 @@ class InsightsPageTest {
         interactions: List<Interaction> = emptyList(),
         sources: PageSources = PageSources(),
         favourites: List<SongRef> = emptyList(),
+        leftOut: List<SongRef> = emptyList(),
     ) = PlayStats(
         FakePlayLog(plays.sortedBy { it.startedAt }, interactions),
         { library },
@@ -93,6 +97,7 @@ class InsightsPageTest {
         books = FakePlayLog(books),
         favourites = { favourites },
         sources = { from -> sources.copy(friendPlays = sources.friendPlays.filter { from == null || it.at >= from }) },
+        leftOut = { leftOut },
     )
 
     /** [card], which must show. */
@@ -749,6 +754,105 @@ class InsightsPageTest {
         assertEquals(FavouritesCard(added = 2, mostPlayed = copper), page(plays, sources = PageSources(favouriteAdded = dates), favourites = favourites).cards.favourites)
         assertEquals(FavouritesCard(added = 4, mostPlayed = tide), page(plays, ListeningPeriod.ALL_TIME, sources = PageSources(favouriteAdded = dates), favourites = favourites).cards.favourites)
         assertNull(page(plays, ListeningPeriod.WEEK, sources = PageSources(favouriteAdded = dates), favourites = favourites).cards.favourites)
+    }
+
+    // Where you listen, top playlists (KJB v4: plays keep both from then on), and the songs left out of Insights
+
+    /** A play of [song] that counted (or not), heard on [output] (none: a play from before), from [playlist] when given. */
+    private fun heardOn(song: Song, startedAt: Long, output: OutputKind?, playlist: String? = null, counted: Boolean = true) =
+        play(song, startedAt, counted = counted).copy(start = PlayStart(StartedBy.AUTO, if (playlist == null) SourceKind.ALBUM else SourceKind.PLAYLIST, false, null, output, playlist))
+
+    @Test
+    fun `where you listen splits the plays by the output they were heard on, headphones wired or USB, from 10 plays that keep any`() {
+        val plays = List(4) { heardOn(copper, nov(3) + it * HOUR, OutputKind.BLUETOOTH) } +
+            List(2) { heardOn(tide, nov(4) + it * HOUR, OutputKind.WIRED) } + heardOn(tide, nov(4, "18:00"), OutputKind.USB) +
+            heardOn(harbour, nov(5), OutputKind.SPEAKER) + heardOn(talk, nov(5, "14:00"), OutputKind.SPEAKER) + heardOn(north, nov(6), OutputKind.CAR) +
+            // Left out: a play that did not count, one from before plays kept where they were heard, another kind of
+            // output (a dock, a screen: no row, but real listening toward the 10), and a play of October.
+            heardOn(kite, nov(7), OutputKind.SPEAKER, counted = false) + play(kite, nov(8)) + heardOn(kite, nov(9), OutputKind.OTHER) + heardOn(kite, oct(3), OutputKind.SPEAKER)
+
+        assertEquals(OutputsCard(speaker = 2, headphones = 3, bluetooth = 4, car = 1), page(plays).cards.outputs)
+        assertEquals(OutputsCard(speaker = 3, headphones = 3, bluetooth = 4, car = 1), page(plays, ListeningPeriod.ALL_TIME).cards.outputs)
+        // Changed on purpose (IN4, lead 2026-11-25): a dock's or a screen's play counts toward the 10, so nine on the
+        // four rows and one on a dock show the card.
+        assertEquals(OutputsCard(speaker = 2, headphones = 3, bluetooth = 3, car = 1), page(plays.drop(1)).cards.outputs)
+        // Nine plays that keep one: the card waits for more (the plays from before the update have none).
+        assertNull(page(plays.drop(1).filterNot { it.start?.output == OutputKind.OTHER }).cards.outputs)
+        // Only docks and screens: no row to draw, so no card.
+        assertNull(page(List(12) { heardOn(kite, nov(10) + it * HOUR, OutputKind.OTHER) }).cards.outputs)
+    }
+
+    @Test
+    fun `top playlists rank the playlists the music came from, the most played first, from 10 such plays of 2 playlists`() {
+        val late = Playlist("p-late", "Late Walks", listOf(copper.ref, harbour.ref), createdAt = 1_000)
+        val gym = Playlist("p-gym", "Gym", listOf(north.ref), createdAt = 2_000)
+        val lates = List(6) { heardOn(copper, nov(3) + it * HOUR, OutputKind.SPEAKER, "p-late") }
+        val gyms = List(4) { heardOn(north, nov(4) + it * HOUR, OutputKind.BLUETOOTH, "p-gym") }
+        // Left out: a playlist since deleted, a play that did not count, a podcast, and a play of October.
+        val others = listOf(
+            heardOn(kite, nov(5), OutputKind.SPEAKER, "p-gone"),
+            heardOn(copper, nov(6), OutputKind.SPEAKER, "p-late", counted = false),
+            heardOn(talk, nov(7), OutputKind.SPEAKER, "p-late"),
+            heardOn(north, oct(3), OutputKind.SPEAKER, "p-gym"),
+        )
+        val sources = PageSources(playlists = listOf(gym, late))
+
+        assertEquals(
+            PlaylistsCard(listOf(Top(late, 6, 6 * 120_000L, lates.last().startedAt), Top(gym, 4, 4 * 120_000L, gyms.last().startedAt))),
+            page(lates + gyms + others, sources = sources).cards.playlists,
+        )
+        assertNull(page(lates + gyms.drop(1) + others, sources = sources).cards.playlists)
+        assertNull(page(lates + List(4) { heardOn(copper, nov(10) + it * HOUR, OutputKind.SPEAKER, "p-late") }, sources = sources).cards.playlists)
+    }
+
+    @Test
+    fun `a song left out of Insights leaves every card and the stories, found again after a move, and still counts for Most played`() {
+        val plays = plays(copper, 10, nov(3)) + plays(kite, 5, nov(4)) + plays(kite, 12, oct(3))
+        // Left out before its file moved: found again by its id.
+        val stats = stats(plays, emptyList(), library, leftOut = listOf(SongRef(VOLUME + "Music/Old/Kite Season.mp3", kite.ref.mediaStoreId)))
+
+        val page = runBlocking { stats.page(ListeningPeriod.MONTH, now, ammanCalendar) }
+
+        assertEquals(Totals(10 * 120_000L, 10, 1, 1, 1), shown(page.cards.time).totals)
+        assertEquals(emptyList<RecapMonth>(), page.cards.recaps)
+        assertEquals(emptyList<YearMonth>(), runBlocking { stats.recaps(now, amman) })
+        assertEquals(listOf(kite.path, copper.path), runBlocking { stats.mostPlayed() }.map { it.song.path })
+        // Let back in, it counts again (a loose song: no album).
+        assertEquals(Totals(15 * 120_000L, 15, 2, 2, 1), shown(page(plays).cards.time).totals)
+    }
+
+    @Test
+    fun `a hidden song and a podcast episode Insights count can be found to leave out, and leave Your time once left out`() {
+        val hiding = Library.of(listOf(copper, kite, talk), Settings(library = LibrarySettings(hiddenSongs = listOf(kite.ref))))
+        val plays = plays(copper, 10, nov(3)) + plays(kite, 5, nov(4)) + plays(talk, 2, nov(5))
+        // Insights count both while they are in: the hidden song's plays and the episode's.
+        assertEquals(17, shown(page(plays, library = hiding).cards.time).totals.plays)
+        // The page lists every song played (everySong), the hidden song and the episode too.
+        assertEquals(setOf(copper.path, kite.path, talk.path), runBlocking { stats(plays, emptyList(), hiding).everySong() }.keys)
+
+        val time = runBlocking { stats(plays, emptyList(), hiding, leftOut = listOf(kite.ref, talk.ref)).page(ListeningPeriod.MONTH, now, ammanCalendar) }.cards.time
+
+        assertEquals(Totals(10 * 120_000L, 10, 1, 1, 1), shown(time).totals)
+    }
+
+    @Test
+    fun `a song left out of Insights is never named on Read along, New favourites or Your searches, nor counted there`() {
+        val plays = plays(copper, 10, nov(3)) + plays(kite, 5, nov(4))
+        val opened = listOf(lyrics(kite, nov(5)), lyrics(kite, nov(6)), lyrics(kite, nov(7)), lyrics(copper, nov(8)))
+        val searches = listOf(search("kite", nov(20, "10:00"), Target(TargetKind.SONG, kite.path)), search("copper", nov(20, "11:00")))
+        val dates = mapOf(kite.path to nov(5), copper.path to nov(6))
+        val stats = stats(plays, emptyList(), library, opened + searches, PageSources(favouriteAdded = dates), listOf(kite.ref, copper.ref), leftOut = listOf(kite.ref))
+
+        val cards = runBlocking { stats.page(ListeningPeriod.MONTH, now, ammanCalendar) }.cards
+
+        assertEquals(LyricsCard(opened = 1, most = copper, mostTimes = 1, syncedPlays = 0, plays = 10), cards.lyrics)
+        assertEquals(FavouritesCard(added = 1, mostPlayed = copper), cards.favourites)
+        assertEquals(SearchesCard(1, tapped = 0, played = 0, words = listOf(WordCount("copper", 1)), songs = 0, artists = 0, albums = 0, others = 0), cards.searches)
+        // Let back in, it is named again.
+        val all = page(plays, interactions = opened + searches, sources = PageSources(favouriteAdded = dates), favourites = listOf(kite.ref, copper.ref)).cards
+        assertEquals(kite, all.lyrics?.most)
+        assertEquals(2, all.favourites?.added)
+        assertEquals(1, all.searches?.songs)
     }
 
     // Books and podcasts

@@ -339,6 +339,19 @@
     <string name="insights_looked_for">What you looked for</string>
     <string name="insights_searches_private">Your words stay hidden until you tap, and never go in a story or a picture. Remove a search from Recent searches and its words go from here too.</string>
 
+    <!-- Where you listen and Top playlists (lanes in3, in4): from what each play keeps since KJB v4. -->
+    <string name="insights_where_title">Where you listen</string>
+    <!-- Wired and USB headphones, one row; the other rows read as the equalizer's outputs. -->
+    <string name="insights_where_headphones">Headphones</string>
+    <string name="insights_playlists_title">Top playlists</string>
+
+    <!-- Leave songs out of Insights: the page's menu and its page (lane in3). -->
+    <string name="insights_leave_out">Leave songs out of Insights</string>
+    <string name="insights_leave_out_line">Sleep sounds, a child\u2019s songs: they still play and count for Most played, but not here</string>
+    <string name="insights_leave_out_sentence">Switch on a song to keep it out of every Insights card and story. It still plays, and still counts for Most played, Recently played and suggestions.</string>
+    <string name="insights_leave_out_empty_title">Nothing played yet</string>
+    <string name="insights_leave_out_empty">The songs you play show here, the most played first.</string>
+
     <!-- Books and podcasts. -->
     <string name="insights_spoken_line">Counted in real minutes: 2x counts half</string>
     <string name="insights_in_books">in books</string>

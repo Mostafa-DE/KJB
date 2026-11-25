@@ -179,7 +179,7 @@ internal fun TopArtists(card: TopCard<Artist>, period: PagePeriod, onOpen: (Page
                         }
                         val share = row.top.plays.toFloat() / first.top.plays.coerceAtLeast(1)
                         Canvas(Modifier.fillMaxWidth().height(8.dp)) {
-                            val grown = phase(clock.ms(), RACE_DELAY_MS + n * RACE_STEP_MS, RACE_MS, Motion.Rise)
+                            val grown = phase(clock.ms(), GROW_DELAY_MS + n * GROW_STEP_MS, GROW_MS, Motion.Rise)
                             drawRoundRect(if (n == 0) insights.series[1] else insights.series[0], size = Size(size.width * share * grown, size.height), cornerRadius = CornerRadius(4.dp.toPx()))
                         }
                     }
@@ -276,7 +276,7 @@ internal fun TopSongs(card: TopCard<Song>, settings: Settings, onOpen: (Page) ->
                         Text(pluralStringResource(R.plurals.insights_plays_word, row.top.plays), style = FigureLabel.copy(fontSize = 11.5.sp), color = colors.onSurfaceVariant)
                         val share = row.top.plays.toFloat() / first.top.plays.coerceAtLeast(1)
                         Canvas(Modifier.padding(top = 4.dp).fillMaxWidth().height(4.dp)) {
-                            val grown = phase(clock.ms(), RACE_DELAY_MS + n * RACE_STEP_MS, RACE_MS, Motion.Rise)
+                            val grown = phase(clock.ms(), GROW_DELAY_MS + n * GROW_STEP_MS, GROW_MS, Motion.Rise)
                             drawRoundRect(insights.series[1].copy(alpha = 0.85f), size = Size(size.width * share * grown, size.height), cornerRadius = CornerRadius(2.dp.toPx()))
                         }
                     }
@@ -640,11 +640,12 @@ private val RowTitle = body(15f, 19, 600)
 /** The plays column of a top song's row: room for "1,048" and the short bar under it. */
 private val CountColumn = 56.dp
 
-private const val RACE_MS = 900
+/** The mockup's growing bars (growx): the top lists' race and Where you listen. */
+internal const val GROW_MS = 900
 
-private const val RACE_DELAY_MS = 200
+internal const val GROW_DELAY_MS = 200
 
-private const val RACE_STEP_MS = 110
+internal const val GROW_STEP_MS = 110
 
 private const val POP_MS = 560
 

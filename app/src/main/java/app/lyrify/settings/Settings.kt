@@ -119,6 +119,11 @@ data class LibrarySettings(
      * phone and their plays stay counted. In the order hidden, each once.
      */
     val hiddenSongs: List<SongRef> = emptyList(),
+    /**
+     * "Leave songs out of Insights" (the Insights page's menu, KJB v4.1): songs whose plays leave every Insights card and
+     * story; they still play and count for Most played, Recently played and Suggestions. Each once, as [hiddenSongs].
+     */
+    val leftOutOfInsights: List<SongRef> = emptyList(),
     /** "Artists with several names": how the lists read a tag that names several artists. */
     val artistSplit: ArtistSplit = ArtistSplit(),
     /**
@@ -444,6 +449,7 @@ object SettingsJson {
                             ),
                             "listPeriods" to JsonObject(it.listPeriods.entries.associate { (list, period) -> list.name to JsonPrimitive(period.name) }),
                             "hiddenSongs" to JsonArray(it.hiddenSongs.map { song -> obj("path" to song.path, "id" to song.mediaStoreId?.let(::JsonPrimitive)).withoutNulls() }),
+                            "leftOutOfInsights" to JsonArray(it.leftOutOfInsights.map { song -> obj("path" to song.path, "id" to song.mediaStoreId?.let(::JsonPrimitive)).withoutNulls() }),
                             "artistSplit" to it.artistSplit.let { split ->
                                 obj("enabled" to split.enabled, "separators" to JsonArray(split.separators.map(::JsonPrimitive)), "exceptions" to JsonArray(split.exceptions.map(::JsonPrimitive)))
                             },
@@ -555,7 +561,8 @@ object SettingsJson {
                     listSorts = (it["listSorts"] as? JsonObject)?.let(::listSorts) ?: d.library.listSorts,
                     // Before the chips Recently played showed all time: so it opens there, unless the phone has a chip.
                     listPeriods = (it["listPeriods"] as? JsonObject)?.let(::listPeriods) ?: (mapOf(SongList.RECENTLY_PLAYED to ListPeriod.ALL_TIME) + d.library.listPeriods),
-                    hiddenSongs = (it["hiddenSongs"] as? JsonArray)?.let(::hiddenSongs) ?: d.library.hiddenSongs,
+                    hiddenSongs = (it["hiddenSongs"] as? JsonArray)?.let(::songs) ?: d.library.hiddenSongs,
+                    leftOutOfInsights = (it["leftOutOfInsights"] as? JsonArray)?.let(::songs) ?: d.library.leftOutOfInsights,
                     artistSplit = (it["artistSplit"] as? JsonObject)?.let { split -> artistSplit(split, d.library.artistSplit) } ?: d.library.artistSplit,
                     opensOn = if ("opensOn" in it) it.choiceOrNull<LibraryTab>("opensOn") else d.library.opensOn,
                     findSimilarOnline = it.flag("findSimilarOnline", d.library.findSimilarOnline),
@@ -651,10 +658,11 @@ object SettingsJson {
     }.toMap()
 
     /**
-     * The hidden songs as stored, each by its path with MediaStore's id as a hint (the library finds a song renamed or
-     * moved by it, as it finds a playlist's), the first entry of each path; a bare path reads as one without an id.
+     * Songs a setting keeps (Hidden songs, those left out of Insights) as stored, each by its path with MediaStore's id as
+     * a hint (the library finds a song renamed or moved by it, as it finds a playlist's), the first entry of each path; a
+     * bare path reads as one without an id.
      */
-    private fun hiddenSongs(stored: JsonArray): List<SongRef> = stored.mapNotNull { item ->
+    private fun songs(stored: JsonArray): List<SongRef> = stored.mapNotNull { item ->
         val song = item as? JsonObject ?: return@mapNotNull item.text()?.takeIf(String::isNotBlank)?.let(::SongRef)
         val path = song["path"]?.text()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
         SongRef(path, (song["id"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull)
@@ -663,7 +671,7 @@ object SettingsJson {
     /** A song held out of suggestions as stored: its path, its id hint when known, and its time. */
     private fun heldSong(held: HeldSong): JsonObject = obj("path" to held.song.path, "id" to held.song.mediaStoreId?.let(::JsonPrimitive), "at" to JsonPrimitive(held.at)).withoutNulls()
 
-    /** Songs held out of suggestions as stored, as [hiddenSongs] reads its songs, and each with its time: one without is left out. */
+    /** Songs held out of suggestions as stored, as [songs] reads them, and each with its time: one without is left out. */
     private fun heldSongs(stored: JsonArray): List<HeldSong> = stored.mapNotNull { item ->
         val held = item as? JsonObject ?: return@mapNotNull null
         val path = held["path"]?.text()?.takeIf(String::isNotBlank) ?: return@mapNotNull null

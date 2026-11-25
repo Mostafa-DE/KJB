@@ -7,6 +7,7 @@ import app.lyrify.books.Book
 import app.lyrify.library.Library
 import app.lyrify.library.Playlist
 import app.lyrify.library.Song
+import app.lyrify.library.SongRef
 import app.lyrify.suggestions.FriendPlay
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -59,9 +60,9 @@ data class InsightsPage(val period: PagePeriod, val cards: InsightsCards)
 /**
  * What the Insights page reads besides the logs, for one page: the interaction log's rows in the period ([interactions]),
  * the date each favourite was added ([favouriteAdded], by path), the songs with synced lyrics ([synced], by path), when
- * each bookmark was made ([bookmarks]) and each finished book last played ([finishedBooks]), and Huddle's history, past
+ * each bookmark was made ([bookmarks]) and each finished book last played ([finishedBooks]), Huddle's history, past
  * friends too: the [friends]' names, their plays from the period's start ([friendPlays]) and the songs of every card
- * between you ([shared]). None of it leaves the phone.
+ * between you ([shared]), and the user's [playlists], to name the plays' playlists by. None of it leaves the phone.
  */
 data class PageSources(
     val interactions: List<Interaction> = emptyList(),
@@ -72,6 +73,7 @@ data class PageSources(
     val friends: List<FriendName> = emptyList(),
     val friendPlays: List<FriendPlay> = emptyList(),
     val shared: List<SharedSong> = emptyList(),
+    val playlists: List<Playlist> = emptyList(),
 )
 
 /** A friend ([id]) by the [name] you see them by, [past] once they left. */
@@ -82,7 +84,8 @@ data class SharedSong(val card: String, val friend: String, val at: Long, val se
 
 /**
  * The page of [kind] with [bounds] (null: all time), set against the period [before] it, as of [now] in the phone's
- * [calendar], from [data] and [sources] joined with [library] now (null while it is read: only the time is known).
+ * [calendar], from [data] and [sources] joined with [library] now (null while it is read: only the time is known). The
+ * songs left out of Insights ([InsightsData.leftOut]) leave every card.
  */
 @Suppress("LongParameterList")
 fun insightsPageOf(
@@ -95,10 +98,15 @@ fun insightsPageOf(
     calendar: PhoneCalendar,
     library: Library?,
 ): InsightsPage {
+    val kept = data.copy(
+        plays = leftIn(data.plays, data.leftOut, library) { it.song },
+        skips = leftIn(data.skips, data.leftOut, library) { it.song },
+        favourites = leftIn(data.favourites, data.leftOut, library) { it },
+    )
     val zone = calendar.zone
     val going = bounds == null || now < bounds.until
     val today = dayOf(now, zone).date
-    val firstDay = bounds?.let { dayOf(it.from, zone).date } ?: data.plays.firstOrNull()?.let { dayOf(it.startedAt, zone).date } ?: today
+    val firstDay = bounds?.let { dayOf(it.from, zone).date } ?: kept.plays.firstOrNull()?.let { dayOf(it.startedAt, zone).date } ?: today
     val period = PagePeriod(
         kind = kind,
         bounds = bounds,
@@ -108,7 +116,9 @@ fun insightsPageOf(
         before = before,
         beforeUntil = before?.let { previous -> bounds?.let { samePointIn(previous, it, now, zone) } },
     )
-    return InsightsPage(period, PageWork(data, sources, period, now, calendar, library).cards())
+    // Read along and Your searches name a song by the interaction log's rows: a left-out song's go too.
+    val read = sources.copy(interactions = leftIn(sources.interactions, data.leftOut, library) { it.target?.takeIf { target -> target.kind == TargetKind.SONG }?.key?.let(::SongRef) })
+    return InsightsPage(period, PageWork(kept, read, period, now, calendar, library).cards())
 }
 
 /**
@@ -118,7 +128,7 @@ fun insightsPageOf(
  * How you listen, [moments], New to you ([found]), Back again ([comebacks]) and the favourites still quiet ([forgotten]),
  * You and your friends, Read along, New favourites, Your searches, Where you listen ([outputs]), Top playlists, Books
  * and podcasts, Your library, your listening type ([traits]) and Milestones and badges. Where you listen and Top
- * playlists stay null (hidden) until a later lane keeps what they need with each play.
+ * playlists read what plays keep since KJB v4, so they fill in from the update on.
  */
 data class InsightsCards(
     val recaps: List<RecapMonth> = emptyList(),
@@ -368,12 +378,12 @@ data class SpokenCard(
 )
 
 /**
- * Where you listen (a later lane keeps the output each play was heard on; null until then): the plays heard on the
- * phone's [speaker], on [headphones], over [bluetooth] and in the [car].
+ * Where you listen: the plays that counted heard on the phone's [speaker], on [headphones] (wired or USB), over
+ * [bluetooth] (earbuds, a speaker, a car's own Bluetooth) and in the [car] (Android Auto, a car's media centre).
  */
 data class OutputsCard(val speaker: Int, val headphones: Int, val bluetooth: Int, val car: Int)
 
-/** Top playlists (a later lane keeps the playlist each play came from; null until then): each one's plays, the most first. */
+/** Top playlists: each playlist's music plays that counted, its real minutes and its last play, the most played first. */
 data class PlaylistsCard(val rows: List<Top<Playlist>>)
 
 /**

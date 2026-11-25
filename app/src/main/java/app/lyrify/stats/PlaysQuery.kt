@@ -121,17 +121,20 @@ object StatsGraph {
         val library = LibraryGraph.repository(context).state
         val playlists = LibraryGraph.playlists(context)
         val ledger = LedgerRepository(app)
+        val settings = Lyrify.settings(context)
         PlayStats(
             store(context),
             library = { (library.value as? LibraryState.Ready)?.library },
             books = bookLog(context),
             favourites = { playlists.state.first().favouriteSongs },
             sources = { from ->
-                // Huddle's history (past friends too), Favourites' dates, the lyrics written or found, bookmarks and books.
+                // Huddle's history (past friends too), Favourites' dates, the lyrics written or found, bookmarks, books and
+                // the playlists, by which Top playlists names the plays' playlists.
                 val huddle = HuddleGraph.huddle(app)
                 val friends = huddle.state.first()
+                val lists = playlists.state.first()
                 PageSources(
-                    favouriteAdded = playlists.state.first().favouriteAdded,
+                    favouriteAdded = lists.favouriteAdded,
                     synced = ledger.ledger.first().entries.filterValues { it.status.written || it.status == LyricsStatus.EXISTING }.keys,
                     bookmarks = PlayerExtras.of(app).state.value.bookmarks.values.flatten().map { it.addedAt }.filter { it > 0 },
                     finishedBooks = BooksGraph.store(app).state.value.books.values.filter { it.finished }.mapNotNull { it.lastPlayedAt },
@@ -140,8 +143,10 @@ object StatsGraph {
                     shared = huddle.everyCard().filter { (it as? Sent)?.delivered != false }.flatMap { kept ->
                         kept.card.songs.map { song -> SharedSong(kept.id, kept.friend, kept.at, kept is Sent, song.title, song.artist, song.durationMs.takeIf { it > 0 }) }
                     },
+                    playlists = lists.playlists,
                 )
             },
+            leftOut = { settings.settings.first().library.leftOutOfInsights },
         )
     }.also { stats = it }
 

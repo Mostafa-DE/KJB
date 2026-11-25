@@ -26,8 +26,8 @@ import java.time.ZoneOffset
 /**
  * What Insights are worked out from, all time: the [plays] heard here, the oldest first, the book log's ([books]), each
  * song's totals with an import's plays ([everPlayed]: what was ever played, here or in the app imported from), and the
- * [favourites]; for the Insights page also the quick skips the log keeps apart ([skips], [LoggedPlay.isShort]) and an
- * import's plays ([imports]).
+ * [favourites]; for the Insights page also the quick skips the log keeps apart ([skips], [LoggedPlay.isShort]), an
+ * import's plays ([imports]) and the songs left out of Insights ([leftOut], [leftIn]).
  */
 data class InsightsData(
     val plays: List<LoggedPlay>,
@@ -36,7 +36,22 @@ data class InsightsData(
     val favourites: List<SongRef> = emptyList(),
     val skips: List<LoggedPlay> = emptyList(),
     val imports: List<LoggedPlay> = emptyList(),
+    val leftOut: List<SongRef> = emptyList(),
 )
+
+/**
+ * [items] (plays, favourites, the interaction log's rows) without those of the songs left out of Insights ([leftOut]:
+ * "Leave songs out of Insights", in the page's menu), each item's [song] found as the library finds it, a file moved or
+ * renamed since too (by its path alone without a library); an item of no song stays. They still count for Most played,
+ * Recently played and Suggestions, which never read through here.
+ */
+internal fun <T> leftIn(items: List<T>, leftOut: List<SongRef>, library: Library?, song: (T) -> SongRef?): List<T> {
+    if (leftOut.isEmpty()) return items
+    fun pathOf(song: SongRef): String = library?.resolver?.find(song)?.path ?: song.path
+    val out = leftOut.mapTo(HashSet(), ::pathOf)
+    val kept = HashMap<String, Boolean>()
+    return items.filter { item -> song(item)?.let { ref -> kept.getOrPut(ref.path) { pathOf(ref) !in out } } ?: true }
+}
 
 /** A period's totals: the time heard and the plays that counted (both ledgers), and the songs, artists and albums played (music). */
 data class Totals(val heardMs: Long, val plays: Int, val songs: Int, val artists: Int, val albums: Int)

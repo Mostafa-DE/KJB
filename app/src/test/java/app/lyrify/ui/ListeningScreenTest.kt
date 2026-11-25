@@ -18,6 +18,7 @@ import app.lyrify.ui.InsightsCardKind.LIBRARY
 import app.lyrify.ui.InsightsCardKind.LYRICS
 import app.lyrify.ui.InsightsCardKind.MILESTONES
 import app.lyrify.ui.InsightsCardKind.MOMENTS
+import app.lyrify.ui.InsightsCardKind.OUTPUTS
 import app.lyrify.ui.InsightsCardKind.PRIVATE
 import app.lyrify.ui.InsightsCardKind.SEARCHES
 import app.lyrify.ui.InsightsCardKind.SONGS
@@ -58,7 +59,8 @@ class ListeningScreenTest {
     @Test
     fun `every card shows in the mockup's order when the page has it`() {
         assertEquals(
-            listOf(STORIES, TIME, FOR_YOU, DAYS, CLOCK, ARTISTS, SONGS, ALBUMS, TASTE, HOW, MOMENTS, FOUND, FRIENDS, LYRICS, SEARCHES, SPOKEN, LIBRARY, TRAITS, MILESTONES, PRIVATE),
+            // Changed on purpose (IN3): Where you listen and Top playlists after your searches, as the mockup has them.
+            listOf(STORIES, TIME, FOR_YOU, DAYS, CLOCK, ARTISTS, SONGS, ALBUMS, TASTE, HOW, MOMENTS, FOUND, FRIENDS, LYRICS, SEARCHES, OUTPUTS, SPOKEN, LIBRARY, TRAITS, MILESTONES, PRIVATE),
             insightsCardsOf(fakeInsightsPage().cards),
         )
     }
@@ -99,6 +101,47 @@ class ListeningScreenTest {
         assertTrue(story.contains("if (page.cards.monthSoFar != null) {"))
         assertEquals(2, Regex(Regex.escape("page.cards.yearSoFar != null")).findAll(story).count())
         assertFalse(story.contains("val going = page.cards.time != null"))
+    }
+
+    @Test
+    fun `where you listen and top playlists stand side by side with either's data, and hide cleanly until plays keep it`() {
+        val full = fakeInsightsPage().cards
+        assertTrue(OUTPUTS in insightsCardsOf(full.copy(playlists = null)))
+        assertTrue(OUTPUTS in insightsCardsOf(full.copy(outputs = null)))
+        assertFalse(OUTPUTS in insightsCardsOf(full.copy(outputs = null, playlists = null)))
+        val listening = source("ListeningScreen.kt")
+        assertTrue(listening.contains("InsightsCardKind.OUTPUTS -> WhereAndPlaylists(cards.outputs, cards.playlists, onOpen)"))
+        val tiles = source("InsightsYou.kt").substringAfter("internal fun WhereAndPlaylists(").substringBefore("\n// ")
+        // Each a bento tile as Read along's, a playlist opening its page, the outputs' bars growing as the race's do.
+        listOf("BentoTile(R.drawable.ic_headphones", "BentoTile(R.drawable.ic_queue_music", "onOpen(Page.Playlist(top.item.id))", "MosaicTile(top.item.songs, size = 34.dp, corner = 9.dp)", "GROW_DELAY_MS + k * GROW_STEP_MS")
+            .forEach { assertTrue(it, tiles.contains(it)) }
+        // Wired and USB are one row, named as the mockup names it, not the equalizer's "Wired headphones" (IN4).
+        assertTrue(tiles.contains("Triple(R.drawable.ic_headset_mic, R.string.insights_where_headphones, outputs.headphones)"))
+    }
+
+    @Test
+    fun `the page's menu opens Leave songs out of Insights, a switch for each song played, the most played first`() {
+        val listening = source("ListeningScreen.kt")
+        listOf(
+            "MenuRow(stringResource(R.string.insights_leave_out), R.drawable.ic_visibility_off, {",
+            "onOpen(Page.InsightsLeftOut)",
+            "Page.InsightsLeftOut -> LeftOutPage(back)",
+            "leftOutOfInsights = if (out) others + song.ref else others",
+        ).forEach { assertTrue(it, listening.contains(it)) }
+        // The songs played are read once the library is there and again when it changes, as Most played's rows are: read
+        // while it loads, Most played has none, and the page would say nothing was played until reopened.
+        val page = listening.substringAfter("private fun LeftOutPage(").substringBefore("\n}\n")
+        assertTrue(page.contains("produceState<Map<String, SongPlays>?>(null, ui.library) { value = ui.library?.let { StatsGraph.stats(context).everySong() } }"))
+        assertFalse(page.contains("produceState<List<SongPlays>?>(null) {"))
+        // Changed on purpose (IN4, lead 2026-11-25): every song Insights counts can be left out, so the page lists every
+        // song played, hidden ones, those in Folders to skip and podcast episodes too (everySong, found by the resolver,
+        // which knows them all), not Most played's songs; a book's parts are the book's.
+        assertFalse(page.contains("mostPlayed("))
+        assertTrue(page.contains("played?.values?.mapNotNull { plays -> library.resolver.find(plays.song)?.takeIf { library.bookOf(it.path) == null }?.let { it to plays.count } }?.sortedByDescending { it.second }"))
+        // The row is Hidden songs' row with a switch in place of its button, one TalkBack stop that switches it.
+        val row = source("LibraryHiding.kt").substringAfter("internal fun HiddenRow(").substringBefore("\n}\n")
+        assertTrue(row.contains("Modifier.toggleable(switch, role = Role.Switch) { onClick() }"))
+        assertTrue(row.contains("LyrifySwitch(switch)"))
     }
 
     @Test
@@ -159,6 +202,9 @@ class ListeningScreenTest {
         assertTrue(card.contains("if (tab != libraryOpensOn(shownLibraryTabs(read.library, (library as? LibraryState.Ready)?.library), read.library.opensOn)) return"))
         // The month turns with the phone's day, so an app kept running across the 1st shows the new month's card (Grok b-ui).
         assertTrue(card.contains("val month = remember(today) { recapMonthOf(System.currentTimeMillis(), zone) }"))
+        // The months are read again when a song is left out of Insights or let back in (IN4): a month whose plays all left
+        // has no recap, so no card.
+        assertTrue(card.contains("produceState<List<YearMonth>?>(null, month, read.library.leftOutOfInsights) {"))
         // Changed on purpose (IN2U): a tap plays the month's story; the recap pages are stories now.
         assertTrue(card.contains("nav.show(FullScreen.Story(month = month.toString()))"))
         // On its own bar item Insights has no back arrow.

@@ -37,8 +37,10 @@ in an app store.
   starts from any song, album or artist. Each one says why; Not now and Never suggest this keep a song out. KJB also
   learns slowly, in the background, which artists are like the ones you play (see "What leaves your phone").
 - Insights (Tools > Insights): your week, month, year and all time against the time before, your top songs, artists
-  and albums, when and how you listen, milestones, a monthly recap, a story to play through and pictures to share.
-  Worked out on your phone and kept there.
+  and albums, when and how you listen, where you listen (speaker, headphones, Bluetooth, the car) and your top
+  playlists, milestones, a monthly recap, a story to play through and pictures to share. Leave songs out of Insights
+  (its menu) keeps a song such as sleep sounds out of them; it still counts for Most played. Worked out on your phone
+  and kept there.
 
 **Huddle**
 

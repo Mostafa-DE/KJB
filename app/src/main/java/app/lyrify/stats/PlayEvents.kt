@@ -108,9 +108,9 @@ enum class StartedBy {
 /**
  * What the player knew as a play began: how ([by]), the kind of list its queue came from ([source]; null without a
  * queue), whether that queue was shuffled, and the song's [songKey]. Since KJB v4, for Insights' Where you listen and Top
- * playlists (their cards come later), also the kind of [output] the sound came out of (the car while one is connected),
- * never a device's name or address, and the playlist's id when the queue came from one ([playlistId]; never another
- * list's key, which can hold a name or a path); none for a play from before.
+ * playlists (their cards since KJB v4.1), also the kind of [output] the sound came out of (the car while one is
+ * connected), never a device's name or address, and the playlist's id when the queue came from one ([playlistId]; never
+ * another list's key, which can hold a name or a path); none for a play from before.
  */
 data class PlayStart(
     val by: StartedBy,
