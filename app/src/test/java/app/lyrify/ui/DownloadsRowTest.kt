@@ -122,6 +122,8 @@ class DownloadsRowTest {
         // one box for a link or words (4.1) takes its label as a String; the sheet's field is labelled.
         val screen = File("src/main/java/app/lyrify/ui/DownloadsScreen.kt").readText()
         assertTrue(Regex("""internal fun LinkOrSearchField\((?:\n[^\n]*){0,5}\n\s+label: String,""").containsMatchIn(screen))
+        val box = screen.substringAfter("internal fun LinkOrSearchField(").substringBefore("\n}\n")
+        assertTrue("the box hands its label to its field", Regex("""LyrifyField\((?:\n[^\n]*){0,5}\n\s+label = label,""").containsMatchIn(box))
         assertTrue(Regex("""value = words,\n[^\n]*\n[^\n]*\n\s+label = stringResource\(R\.string\.dl_search_hint\),""").containsMatchIn(screen))
     }
 }

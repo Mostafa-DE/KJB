@@ -101,6 +101,7 @@ import app.lyrify.dl.api.DlSearchResult
 import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.DlUpdate
 import app.lyrify.dl.api.VideoChoice
+import app.lyrify.dl.api.namesSong
 import app.lyrify.dl.api.playlistId
 import app.lyrify.downloads.DlAddon
 import app.lyrify.downloads.DlLookup
@@ -346,9 +347,9 @@ private fun clipboardLink(context: Context): String? {
 
 /**
  * The page's one box, with Paste: a link in it is looked up ([onLookUp], the save sheet), and words are searched for on
- * YouTube ([onSearch], the search sheet) when the add-on [searches]; with one too old to search, only a link goes. Its
- * button and the keyboard's key say which. [label] above it, also what TalkBack names it by once it is filled, and
- * [placeholder] in it while it is empty.
+ * YouTube ([onSearch], the search sheet) as a search takes them ([DlSearch.of]) when the add-on [searches]; with one too
+ * old to search, only a link goes. Its button and the keyboard's key say which. [label] above it, also what TalkBack
+ * names it by once it is filled, and [placeholder] in it while it is empty.
  */
 @Composable
 internal fun LinkOrSearchField(
@@ -363,10 +364,10 @@ internal fun LinkOrSearchField(
     onSearch: (String) -> Unit,
 ) {
     val link = ShareLinks.parse(text).firstOrNull()
-    val words = link == null && searches
-    val usable = link != null || (words && text.isNotBlank())
+    val searching = link == null && searches
+    val usable = link != null || (searching && text.isNotBlank())
     val submit = {
-        if (link != null) onLookUp(link) else if (usable) onSearch(text)
+        if (link != null) onLookUp(link) else if (usable) onSearch(DlSearch.of(text).query)
     }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = modifier) {
         LyrifyField(
@@ -376,14 +377,14 @@ internal fun LinkOrSearchField(
             label = label,
             placeholder = placeholder,
             trailing = { ChromeIconButton(R.drawable.ic_content_paste, stringResource(R.string.dl_paste), onPaste) },
-            keyboardOptions = KeyboardOptions(keyboardType = if (searches) KeyboardType.Text else KeyboardType.Uri, imeAction = if (words) ImeAction.Search else ImeAction.Go),
+            keyboardOptions = KeyboardOptions(keyboardType = if (searches) KeyboardType.Text else KeyboardType.Uri, imeAction = if (searching) ImeAction.Search else ImeAction.Go),
             keyboardActions = KeyboardActions(onGo = { submit() }, onSearch = { submit() }),
         )
         LyrifyButton(
-            stringResource(if (words) R.string.dl_search_go else R.string.dl_look_up),
+            stringResource(if (searching) R.string.dl_search_go else R.string.dl_look_up),
             onClick = submit,
             enabled = usable,
-            icon = if (words) R.drawable.ic_search else R.drawable.ic_download,
+            icon = if (searching) R.drawable.ic_search else R.drawable.ic_download,
             modifier = Modifier.fillMaxWidth(),
         )
     }
@@ -1016,7 +1017,7 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
             val vpn = remember(failed) { failed != null && vpnOn(context) && DownloadFailure.of(DlEnd.Failed(failed)) in VPN_MAY_CAUSE }
             when {
                 lookup.addon != null && lookup.addon != AddonState.Ready -> {
-                    Text(stringResource(if (lookup.addon is AddonState.Outdated) R.string.dl_playlist_update_first else R.string.dl_get_first), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(if (lookup.addon is AddonState.Outdated && playlistId(url) != null && !namesSong(url)) R.string.dl_playlist_update_first else R.string.dl_get_first), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     LyrifyButton(stringResource(R.string.dl_open_kjb), onClick = {
                         openDownloads(context)
                         onDismiss()

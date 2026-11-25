@@ -132,7 +132,14 @@ class DlWireTest {
         assertTrue(namesSong("https://www.youtube.com/watch?v=abc123def45&list=PLq7&index=3"))
         assertTrue(namesSong("https://music.youtube.com/watch?list=OLAK5uy_m4dE&v=abc123def45"))
         assertTrue(namesSong("https://youtu.be/abc123def45?si=x9&list=RDabc123def45"))
+        // A video's id in the path (the review of 97305f27): a Short, a live stream, an embedded video.
+        assertTrue(namesSong("https://www.youtube.com/shorts/abc123def45?list=PLq7"))
+        assertTrue(namesSong("https://www.youtube.com/live/abc123def45?list=PLq7"))
+        assertTrue(namesSong("https://www.youtube.com/embed/abc123def45?list=PLq7"))
         listOf(
+            "https://youtu.be/?list=PLq7",
+            "https://www.youtube.com/watch?v=&list=PLq7",
+            "https://www.youtube.com/shorts/?list=PLq7",
             "https://www.youtube.com/playlist?list=PLq7",
             "https://music.youtube.com/playlist?list=OLAK5uy_m4dE&si=x9",
             "https://www.youtube.com/watch?list=PLq7",

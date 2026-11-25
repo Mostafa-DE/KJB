@@ -92,8 +92,9 @@ fun playlistId(url: String): String? {
 }
 
 /**
- * Whether a link names a song: a `v=` in its query (watch?v=...&list=...), or a youtu.be link (youtu.be/<id>?list=...).
- * A link with a list and no song (/playlist, watch?list=, embed/videoseries) is the playlist's own.
+ * Whether a link names a song: a `v=` with an id in its query (watch?v=...&list=...), or a video's id in its path
+ * (youtu.be/<id>, /shorts/<id>, /live/<id>, /embed/<id>). A link with a list and no song (/playlist, watch?list=,
+ * embed/videoseries) is the playlist's own.
  */
 fun namesSong(url: String): Boolean {
     val uri = try {
@@ -101,7 +102,9 @@ fun namesSong(url: String): Boolean {
     } catch (_: URISyntaxException) {
         return false
     }
-    return uri.host?.lowercase() == "youtu.be" || uri.rawQuery.orEmpty().split('&').any { it.startsWith("v=") }
+    val path = uri.path.orEmpty().split('/')
+    val id = if (uri.host?.lowercase() == "youtu.be") path.getOrNull(1) else path.getOrNull(2)?.takeIf { path[1] in setOf("shorts", "live", "embed") && it != "videoseries" }
+    return !id.isNullOrEmpty() || uri.rawQuery.orEmpty().split('&').any { it.startsWith("v=") && it.length > 2 }
 }
 
 /**

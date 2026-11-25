@@ -67,6 +67,17 @@ class LinkOrSearchDeviceTest {
     }
 
     @Test
+    fun wordsLongerThanASearchTakesAreCutAsTheSearchCutsThem() {
+        box(searches = true)
+
+        compose.onNode(hasSetTextAction()).performTextInput("  " + "paper lantern ".repeat(20))
+        compose.onNodeWithText(SEARCH).performClick()
+        compose.waitForIdle()
+
+        assertEquals(listOf("search " + ("paper lantern ".repeat(20)).trim().take(200)), asked)
+    }
+
+    @Test
     fun anAddOnTooOldToSearchTakesOnlyALink() {
         box(searches = false)
 
