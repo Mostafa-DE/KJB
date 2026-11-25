@@ -47,7 +47,7 @@ val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "55931398" // the
 /**
  * Huddle's server (huddle-server/, plan Q3.2): its Railway address (live since 2026-11-22, serving assetlinks.json for
  * the release key), and the user's own domain, added later. KJB talks to the first and opens its invite links (App
- * Links); a pasted invite may name either. The domain joins the manifest in 4.1, once it is live: on Android 11 a host
+ * Links); a pasted invite may name either. The domain joins the manifest later, once it is live: on Android 11 a host
  * that fails the check takes App Links from every host. -PhuddleHost points a test build at another server.
  */
 val huddleHost = findProperty("huddleHost")?.toString() ?: "kjb-huddle.up.railway.app"
