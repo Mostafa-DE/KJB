@@ -317,6 +317,15 @@ class HuddleScreenTest {
     }
 
     @Test
+    fun `the friends row scrolls sideways under the finger on Library's tabs, and the tabs take the swipe at its ends`() {
+        val row = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText().substringAfter("internal fun FriendsRow(").substringBefore("\n}\n")
+        // The row tells the tab pages where it is and how far it scrolls (TabPager.kt, rowKeeps), and forgets it as it goes.
+        assertTrue(row.contains("val list = rememberLazyListState()"))
+        assertTrue(row.contains("DisposableEffect(rows, list) { onDispose { rows?.remove(list) } }"))
+        assertTrue(row.contains("LazyRow(modifier.onGloballyPositioned { rows?.set(list, it.boundsInWindow()) }, state = list, contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 6.dp)"))
+    }
+
+    @Test
     fun `on the friends row a friend playing now shows their song's cover in the ring, and a paused or quiet one their letter greyed and still`() {
         val everywhere = File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText()
         val row = everywhere.substringAfter("internal fun FriendsRow(").substringBefore("\n}\n")

@@ -21,12 +21,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -43,7 +45,9 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
@@ -158,7 +162,11 @@ internal fun FriendsRow(state: HuddleState, now: Long, modifier: Modifier, onFri
     val chrome = LocalChromeColors.current
     val waiting = rememberHuddleInbox().orEmpty().filter { !it.opened }.mapTo(HashSet()) { it.friend }
     val until = state.privateUntil?.takeIf { now < it }
-    LazyRow(modifier, contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    // On Library's tabs a sideways finger on the row scrolls it, and turns the tab only at its ends (LocalSidewaysRows).
+    val list = rememberLazyListState()
+    val rows = LocalSidewaysRows.current
+    DisposableEffect(rows, list) { onDispose { rows?.remove(list) } }
+    LazyRow(modifier.onGloballyPositioned { rows?.set(list, it.boundsInWindow()) }, state = list, contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         if (until != null) {
             item(key = "private") {
                 val line = if (until == HuddleState.FOREVER) stringResource(R.string.huddle_row_private_on) else stringResource(R.string.huddle_row_private_until, DateFormat.getTimeFormat(context).format(Date(until)))

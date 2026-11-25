@@ -9,6 +9,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
@@ -61,6 +62,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,6 +70,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
@@ -594,6 +597,7 @@ fun <K : Any> TabPages(state: TabPager<K>, modifier: Modifier = Modifier, swipe:
     val density = LocalDensity.current
     val window = LocalWindowInfo.current
     val origin = remember { Kept(Offset.Zero) }
+    val rows = remember { HashMap<ScrollableState, Rect>() }
     val edge = rememberUpdatedState { at: Offset ->
         inGestureEdge(origin.value.x + at.x, window.containerSize.width.toFloat(), gestures.getLeft(density, direction).toFloat(), gestures.getRight(density, direction).toFloat())
     }
@@ -602,7 +606,15 @@ fun <K : Any> TabPages(state: TabPager<K>, modifier: Modifier = Modifier, swipe:
         // The pages take a finger themselves, before the list on the page can (tabSwipe); Compose would ask the list first.
         modifier = modifier
             .onGloballyPositioned { origin.value = it.positionInWindow() }
-            .then(if (swipe) Modifier.pointerInput(state, rtl) { swipes(state, rtl) { edge.value(it) } } else Modifier)
+            .then(
+                if (swipe) {
+                    Modifier.pointerInput(state, rtl) {
+                        swipes(state, rtl, { edge.value(it) }) { at, dx -> rows.any { (row, bounds) -> bounds.contains(origin.value + at) && rowKeeps(dx, rtl, row.canScrollBackward, row.canScrollForward) } }
+                    }
+                } else {
+                    Modifier
+                },
+            )
             // The pager's own scroll actions go with its own touch scrolling: TalkBack's move one tab, as a tap does.
             .semantics {
                 fun step(forward: Boolean): Boolean = tabStep(forward, state.pager.currentPage, state.keys.size)?.let { state.pick(it) } != null
@@ -619,7 +631,7 @@ fun <K : Any> TabPages(state: TabPager<K>, modifier: Modifier = Modifier, swipe:
     ) { at ->
         // The page's tab read there too, never from a list handed down a moment before (a page's content can be the
         // previous composition's for a frame, its index already the new tabs').
-        state.keys.getOrNull(at)?.let { tab -> CompositionLocalProvider(LocalTabCurrent provides (at == state.pager.currentPage)) { page(tab) } }
+        state.keys.getOrNull(at)?.let { tab -> CompositionLocalProvider(LocalTabCurrent provides (at == state.pager.currentPage), LocalSidewaysRows provides rows) { page(tab) } }
     }
 }
 
@@ -628,9 +640,10 @@ fun <K : Any> TabPages(state: TabPager<K>, modifier: Modifier = Modifier, swipe:
  * it catches them where they are, and a tap there stops them on the nearer tab and taps nothing under it; moved more
  * sideways than upright past the slop ([tabSwipe]), it drags the pages, every finger theirs meanwhile, and at the lift
  * they settle on the tab its speed and place give ([tabFlingPage]); more upright, it is the list's (caught pages settle
- * on the nearer tab). A finger landing in the system's gesture [edge] is left alone. [rtl]: the next tab is to the left.
+ * on the nearer tab). A finger landing in the system's gesture [edge] is left alone, and one a row under it [keeps] (it
+ * scrolls that way, [rowKeeps]) is the row's. [rtl]: the next tab is to the left.
  */
-private suspend fun PointerInputScope.swipes(state: TabPager<*>, rtl: Boolean, edge: (Offset) -> Boolean) {
+private suspend fun PointerInputScope.swipes(state: TabPager<*>, rtl: Boolean, edge: (Offset) -> Boolean, keeps: (Offset, Float) -> Boolean) {
     val minVelocity = TAB_FLING.toPx()
     val maxVelocity = viewConfiguration.maximumFlingVelocity
     val slop = viewConfiguration.touchSlop
@@ -670,6 +683,8 @@ private suspend fun PointerInputScope.swipes(state: TabPager<*>, rtl: Boolean, e
                     // Upright: the list's; caught pages settle on the nearer tab meanwhile.
                     TabSwipe.LEAVE -> break
                     TabSwipe.TAKE -> {
+                        // A row under the finger that scrolls that way keeps it (rowKeeps).
+                        if (keeps(down.position, moved.x)) break
                         dragging = true
                         val pages = finger ?: state.swipe(null, minVelocity).also { finger = it }
                         pages.trySend(TabFinger.Move(forward(moved.x - sign(moved.x) * slop)))
@@ -696,6 +711,19 @@ private const val LANDING_SLACK = 0.001f
 
 /** The pages settling on a tab: as Compose's pager settles, without overshoot. */
 private val TabSettle = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = 1f)
+
+/**
+ * The rows on [TabPages]' pages that scroll sideways themselves (Library's friends row), each with where it is in the
+ * window: a sideways finger on one is the row's while it can scroll that way ([rowKeeps]). Null off the tab pages.
+ */
+val LocalSidewaysRows = staticCompositionLocalOf<MutableMap<ScrollableState, Rect>?> { null }
+
+/**
+ * Whether a row that scrolls sideways keeps a finger moved [dx] px across it, as ViewPager asks its children before it
+ * swipes: while the row can still scroll that way ([back] towards its start, [forward] towards its end; [rtl]: its start
+ * on the right), else the tabs take it, at the row's end (user 2026-11-25: Library's friends row never scrolled).
+ */
+fun rowKeeps(dx: Float, rtl: Boolean, back: Boolean, forward: Boolean): Boolean = if ((dx < 0f) != rtl) forward else back
 
 /** Whether the tab page around this is the one shown: only it answers the dock tapped again (it goes to its top). */
 val LocalTabCurrent = compositionLocalOf { true }

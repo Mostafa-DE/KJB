@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import kotlin.math.abs
 
 /**
@@ -174,6 +175,26 @@ class TabPagerTest {
         assertFalse(inGestureEdge(x = 540f, width = 1080f, start = 72f, end = 72f))
         // Three-button navigation: no gesture edge.
         assertFalse(inGestureEdge(x = 2f, width = 1080f, start = 0f, end = 0f))
+    }
+
+    @Test
+    fun `a sideways swipe on a row that scrolls sideways is the row's while it can scroll that way, and the tabs' at its end`() {
+        // Left to right: a finger going left scrolls the row on, one going right scrolls it back (user 2026-11-25).
+        assertTrue(rowKeeps(dx = -30f, rtl = false, back = false, forward = true))
+        assertFalse(rowKeeps(dx = -30f, rtl = false, back = true, forward = false))
+        assertTrue(rowKeeps(dx = 30f, rtl = false, back = true, forward = false))
+        assertFalse(rowKeeps(dx = 30f, rtl = false, back = false, forward = true))
+        // Right to left, the row's start on the right.
+        assertTrue(rowKeeps(dx = 30f, rtl = true, back = false, forward = true))
+        assertFalse(rowKeeps(dx = -30f, rtl = true, back = false, forward = true))
+        assertTrue(rowKeeps(dx = -30f, rtl = true, back = true, forward = false))
+        // The pages ask the rows under the finger before they take it, and give every page the rows' list.
+        val pager = File("src/main/java/app/lyrify/ui/TabPager.kt").readText()
+        val swipes = pager.substringAfter("private suspend fun PointerInputScope.swipes(").substringBefore("\n}\n")
+        assertTrue(swipes.contains("TabSwipe.TAKE -> {\n                        // A row under the finger that scrolls that way keeps it (rowKeeps).\n                        if (keeps(down.position, moved.x)) break"))
+        val pages = pager.substringAfter("fun <K : Any> TabPages(").substringBefore("\n}\n")
+        assertTrue(pages.contains("rows.any { (row, bounds) -> bounds.contains(origin.value + at) && rowKeeps(dx, rtl, row.canScrollBackward, row.canScrollForward) }"))
+        assertTrue(pages.contains("LocalSidewaysRows provides rows"))
     }
 
     @Test
