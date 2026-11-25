@@ -7,6 +7,8 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
+import androidx.media3.common.Timeline
+import androidx.media3.common.Tracks
 import androidx.media3.common.util.UnstableApi
 import app.lyrify.books.inBook
 import com.google.common.util.concurrent.Futures
@@ -31,6 +33,14 @@ fun sessionView(port: PlayerPort, playing: Boolean, book: QueueBook, repeat: Rep
             SessionView(port.loaded, port.index, port.positionMs, playing, !inBook && book.current?.shuffled == true, if (inBook) Repeat.OFF else repeat, book = inBook)
         }
     }
+
+/**
+ * How long the session says the song [item] is: as long as the library says, whichever song plays, so a song change keeps
+ * the session's timeline as it was. Media3 sends each new timeline whole to the phone's media session, and from there to
+ * System UI, Bluetooth and the car: a queue of 7,000 songs once or twice per Next. Only the song [playing] that the
+ * library has no length for is as long as it decoded ([decodedMs]; C.TIME_UNSET until known).
+ */
+fun sessionLengthMs(item: MediaItem, playing: Boolean, decodedMs: Long): Long = item.mediaMetadata.durationMs ?: if (playing) decodedMs else C.TIME_UNSET
 
 /**
  * A controller's move (Auto's or Bluetooth's queue view): the songs the player holds ([loaded]) from [fromIndex] until
@@ -170,12 +180,19 @@ class LyrifyPlayer(
      */
     private var discontinuity: Int? = null
 
-    /** A controller's seek is going on: Media3 tells of it itself. */
+    /**
+     * A controller's seek is going on: Media3 tells of it itself, and reads the state as the seek returns ([handleSeek]).
+     * Whatever changes meanwhile (the queue following the song starting, Crossfade's second player) waits for that read:
+     * the session reads the state once in a Next's own turn.
+     */
     private var seeking = false
+
+    /** The timeline last handed to the session ([getState]), handed again while the songs and lengths it was made of stay. */
+    private var kept: KeptTimeline? = null
 
     init {
         engine.addListener(object : EngineListener {
-            override fun onChanged() = invalidateState()
+            override fun onChanged() = changed()
 
             override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
                 discontinuity = startedDiscontinuity(lap, natural) ?: return
@@ -190,8 +207,10 @@ class LyrifyPlayer(
         })
     }
 
-    /** The queue model or the settings changed: the session reads the state again. */
-    fun changed() = invalidateState()
+    /** The queue model, the settings or the engine changed: the session reads the state again, once a seek going on returns. */
+    fun changed() {
+        if (!seeking) invalidateState()
+    }
 
     override fun getState(): State {
         val view = sessionView(engine, engine.isPlaying, core.book.value, core.repeat.value)
@@ -214,22 +233,33 @@ class LyrifyPlayer(
         if (items.isEmpty() || view.index < 0) return state.setPlaybackState(Player.STATE_IDLE).build()
         discontinuity?.let { reason -> state.setPositionDiscontinuity(reason, engine.positionMs) }
         discontinuity = null
+        // The engine's songs as they were (the same list: GaplessEngine keeps it until they change) and the same lengths
+        // are the timeline as it was, handed again: nothing to build, and Media3's compare ends at once. Only a song the
+        // library has no length for, playing, takes the decoded one ([sessionLengthMs]).
         val decoded = engine.durationMs
-        val playlist = items.mapIndexed { i, item ->
-            val length = if (i == view.index && decoded != C.TIME_UNSET) decoded else item.mediaMetadata.durationMs ?: C.TIME_UNSET
-            MediaItemData.Builder(item.mediaId)
-                .setMediaItem(item)
-                .setDurationUs(if (length == C.TIME_UNSET) C.TIME_UNSET else length * 1_000)
-                .setIsSeekable(true)
-                .build()
+        val decodedAt = view.index.takeIf { items[it].mediaMetadata.durationMs == null }?.let { it to decoded }
+        val timeline = kept?.takeIf { it.items === items && it.decodedAt == decodedAt }?.timeline
+        if (timeline != null) {
+            state.setPlaylist(timeline, Tracks.EMPTY, null)
+        } else {
+            state.setPlaylist(
+                items.mapIndexed { i, item ->
+                    val length = sessionLengthMs(item, i == view.index, decoded)
+                    MediaItemData.Builder(item.mediaId)
+                        .setMediaItem(item)
+                        .setDurationUs(if (length == C.TIME_UNSET) C.TIME_UNSET else length * 1_000)
+                        .setIsSeekable(true)
+                        .build()
+                },
+            )
         }
         return state
             .setPlaybackState(engine.playbackState)
-            .setPlaylist(playlist)
             .setCurrentMediaItemIndex(view.index)
             .setContentPositionMs { engine.positionMs }
             .setContentBufferedPositionMs { engine.bufferedMs }
             .build()
+            .also { built -> kept = KeptTimeline(items, decodedAt, built.timeline) }
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
@@ -323,6 +353,12 @@ class LyrifyPlayer(
         Repeat.ALL -> Player.REPEAT_MODE_ALL
         Repeat.ONE -> Player.REPEAT_MODE_ONE
     }
+
+    /**
+     * A timeline made of the engine's [items] (that very list), with the place and decoded length of the song playing
+     * when the library has no length for it ([decodedAt], null when it has one).
+     */
+    private class KeptTimeline(val items: List<MediaItem>, val decodedAt: Pair<Int, Long>?, val timeline: Timeline)
 
     private companion object {
         /** Previous restarts the song once it has played this long, as the player's own Previous does. */

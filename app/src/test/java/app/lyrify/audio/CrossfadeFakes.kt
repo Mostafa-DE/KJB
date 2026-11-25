@@ -39,7 +39,8 @@ class LoadError : PlaybackException("unreadable", null, ERROR_CODE_IO_FILE_NOT_F
  * decoded, [tagOf] long as the library says, and ending at [endOf] (a file shorter than it says); a load or a jump to
  * another song buffers for [BUFFER_MS] first; playing moves the position at its speed, and the end of a song goes on as
  * ExoPlayer does (the next song, Repeat one's lap, the end of the queue, or a pause at the end when asked). It tells its
- * listeners as GaplessEngine does. [calls] notes what it was asked, for the Off path.
+ * listeners as GaplessEngine does. [calls] notes what it was asked, for the Off path; [handed] counts the songs it was
+ * handed (each one a media source ExoPlayer makes on the main thread) and [most] the most it held at once.
  */
 class FakeSlot(
     val number: Int,
@@ -54,6 +55,8 @@ class FakeSlot(
         private set
     var pauseAtEnd: Boolean = false
         private set
+    override var pausedAtEnd: Boolean = false
+        private set
     var focusHandled: Boolean = true
         private set
     var sessionId: Int = 100 + number
@@ -65,8 +68,29 @@ class FakeSlot(
     var gapless: Boolean = true
         private set
 
-    override var loaded: List<Long> = emptyList()
+    var handed: Long = 0
         private set
+    var most: Int = 0
+        private set
+
+    /**
+     * The song ExoPlayer's playback thread went on to at a song's end before the main thread heard of it (CR2), from
+     * [goOnAhead]; null while the two agree. An edit taking it out makes the thread go on, as Media3 1.11.1 does, with the
+     * first song after it, in the list before that edit, that the edit left, from its start ([restartedAhead]); with
+     * none, playback ends ([endedAhead]). A Replace (another file) starts it again.
+     */
+    var ahead: Long? = null
+        private set
+    var restartedAhead: Boolean = false
+        private set
+    var endedAhead: Boolean = false
+        private set
+
+    override var loaded: List<Long> = emptyList()
+        private set(value) {
+            field = value
+            most = maxOf(most, value.size)
+        }
     override var index: Int = -1
         private set
     override var playWhenReady: Boolean = false
@@ -91,8 +115,11 @@ class FakeSlot(
 
     override val isPlaying: Boolean get() = playWhenReady && playbackState == Player.STATE_READY
     override val positionMs: Long get() = if (isPlaying) base + ((clock() - since) * playbackParameters.speed).toLong() else base
+    /** Kept until its songs change, as GaplessEngine keeps them. */
+    private var kept: Pair<List<Long>, List<MediaItem>>? = null
     override val items: List<MediaItem>
-        get() = loaded.map { uid -> MediaItem.Builder().setMediaId("$uid").setMediaMetadata(MediaMetadata.Builder().setDurationMs(tagOf(uid)).build()).build() }
+        get() = kept?.takeIf { it.first === loaded }?.second
+            ?: loaded.map { uid -> MediaItem.Builder().setMediaId("$uid").setMediaMetadata(MediaMetadata.Builder().setDurationMs(tagOf(uid)).build()).build() }.also { kept = loaded to it }
     override val isLoading: Boolean get() = playbackState == Player.STATE_BUFFERING
     override val suppression: Int get() = Player.PLAYBACK_SUPPRESSION_REASON_NONE
     override val audioSessionId: Int get() = sessionId
@@ -102,13 +129,10 @@ class FakeSlot(
 
     override fun load(items: List<Projected>, index: Int, positionMs: Long) {
         calls += "load ${items.map { it.uid }} $index $positionMs"
+        handed += items.size
         loadUids(items.map { it.uid }, index, positionMs)
     }
 
-    override fun loadItems(items: List<MediaItem>, index: Int, positionMs: Long) {
-        calls += "loadItems ${items.map { it.mediaId }} $index $positionMs"
-        loadUids(items.map { it.mediaId.toLong() }, index, positionMs)
-    }
 
     private fun loadUids(uids: List<Long>, at: Int, positionMs: Long) = changing {
         loaded = uids
@@ -126,16 +150,71 @@ class FakeSlot(
     override fun apply(edit: Edit) = changing {
         calls += "apply $edit"
         val playing = uid
+        val before = loaded
         val list = loaded.toMutableList()
         when (edit) {
             is Edit.Remove -> list.subList(edit.at, edit.at + edit.count).clear()
-            is Edit.Insert -> list.addAll(edit.at, edit.items.map { it.uid })
+            is Edit.Insert -> list.addAll(edit.at, edit.items.map { it.uid }).also { handed += edit.items.size }
             is Edit.Move -> list.add(edit.to, list.removeAt(edit.from))
             is Edit.Replace -> list[edit.at] = edit.item.uid
             is Edit.Refresh -> Unit
         }
         loaded = list
         index = list.indexOf(playing)
+        when (edit) {
+            is Edit.Remove -> walkAhead(before, (edit.at until edit.at + edit.count).toSet())
+            is Edit.Replace -> if (before[edit.at] == ahead) restartedAhead = true
+            is Edit.Insert, is Edit.Move, is Edit.Refresh -> Unit
+        }
+    }
+
+    /** Headphones out: the player pauses itself, as ExoPlayer does with audio becoming noisy. */
+    fun unplugged() = changing {
+        anchor(positionMs)
+        playWhenReady = false
+        pausedAtEnd = false
+    }
+
+    /**
+     * The player went past the songs it holds before the main thread heard of them (songs shorter than its delay): it
+     * ended on the last of them, as ExoPlayer does at the end of its list. The main thread hears that song start and the
+     * end together, the end last, as ExoPlayer tells them: told even when a listener moved the player on hearing the start.
+     */
+    fun runsOut() = changing {
+        val from = index
+        index = loaded.lastIndex
+        anchor(lengthOf(loaded[index]))
+        playbackState = Player.STATE_ENDED
+        if (index != from) emit { it.onSongStarted(loaded[index], lap = false, natural = true) }
+        emit { it.onEnded() }
+    }
+
+    /** The song playing ends on the playback thread, which goes on to the next song held; the main thread hears nothing yet. */
+    fun goOnAhead() {
+        ahead = loaded.getOrNull(index + 1) ?: loaded.firstOrNull()?.takeIf { repeat == Repeat.ALL }
+    }
+
+    /** The main thread hears where the playback thread went ([ahead]): that song started, as at a song's natural end. */
+    fun wentOn() = changing {
+        val now = checkNotNull(ahead)
+        ahead = null
+        index = loaded.indexOf(now)
+        anchor(0)
+        emit { it.onSongStarted(now, lap = false, natural = true) }
+    }
+
+    /** The songs at [goneAt] of [before] were taken out: the playback thread goes on as Media3 does if its song was one. */
+    private fun walkAhead(before: List<Long>, goneAt: Set<Int>) {
+        val now = ahead ?: return
+        val at = before.indexOf(now)
+        if (at !in goneAt) return
+        restartedAhead = true
+        ahead = (at + 1 until at + before.size).asSequence()
+            .takeWhile { repeat == Repeat.ALL || it < before.size }
+            .map { it % before.size }
+            .firstOrNull { it !in goneAt }
+            ?.let(before::get)
+        if (ahead == null) endedAhead = true
     }
 
     override fun seek(index: Int, positionMs: Long) = changing {
@@ -145,7 +224,7 @@ class FakeSlot(
         val other = index != this.index
         this.index = index
         anchor(positionMs)
-        if (other || playbackState == Player.STATE_IDLE) {
+        if (other || playbackState == Player.STATE_IDLE || playbackState == Player.STATE_ENDED) {
             error = null
             buffer()
         }
@@ -160,6 +239,7 @@ class FakeSlot(
 
     override fun setPlayWhenReady(play: Boolean) = changing {
         calls += "play $play"
+        pausedAtEnd = false
         if (play && playbackState == Player.STATE_IDLE && loaded.isNotEmpty()) buffer()
         anchor(positionMs)
         playWhenReady = play
@@ -238,6 +318,7 @@ class FakeSlot(
                 pauseAtEnd -> {
                     anchor(length)
                     playWhenReady = false
+                    pausedAtEnd = true
                 }
                 repeat == Repeat.ONE -> {
                     anchor(over)
@@ -340,6 +421,14 @@ class Heard : EngineListener {
     val events = mutableListOf<String>()
     val starts get() = events.filter { it.startsWith("start") }
 
+    /** How often the session was told to read the state again. */
+    var changes: Int = 0
+        private set
+
+    override fun onChanged() {
+        changes++
+    }
+
     override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
         events += "start $uid" + (if (lap) " lap" else "") + (if (natural) " natural" else "")
     }
@@ -388,18 +477,20 @@ class FadeRig(
     val clock: () -> Long = { scope.testScheduler.currentTime }
     val queue: Queue = QueueBook().play(songs.map { it.ref }, 0, source, now = 1).book.current!!
     val uids: List<Long> = queue.items.map { it.uid }
-    private val byUid: Map<Long, Song> = queue.items.associate { item -> item.uid to songs.first { it.ref == item.song } }
+    private val byUid: Map<Long, Song> = songs.associateBy { it.ref }.let { byRef -> queue.items.associate { item -> item.uid to byRef.getValue(item.song) } }
+    private val placeOf: Map<Long, Int> = uids.withIndex().associate { (at, uid) -> uid to at }
     val slots = mutableListOf<FakeSlot>()
     val focus = FakeFocus()
     var mayFade: (Long, Long) -> Boolean = { _, _ -> true }
     var speeds: (Long) -> PlaybackParameters? = { null }
     var places: (Long, Long) -> Long? = { _, _ -> null }
     val heard = Heard()
-    private fun decoded(uid: Long): Long = files[uids.indexOf(uid)] ?: songOf(uid).durationMs
+    private fun decoded(uid: Long): Long = files[placeOf.getValue(uid)] ?: songOf(uid).durationMs
     val engine = CrossfadeEngine(
         newSlot = {
-            FakeSlot(slots.size, clock, ::decoded, tagOf = { songOf(it).durationMs }, endOf = { ends[uids.indexOf(it)] ?: decoded(it) }).also { slots += it }
+            FakeSlot(slots.size, clock, ::decoded, tagOf = { songOf(it).durationMs }, endOf = { ends[placeOf.getValue(it)] ?: decoded(it) }).also { slots += it }
         },
+        itemOf = { item -> MediaItem.Builder().setMediaId("${item.uid}").setMediaMetadata(MediaMetadata.Builder().setDurationMs(item.song.durationMs).build()).build() },
         rules = object : FadeRules {
             override fun mayFade(from: Long, to: Long): Boolean = this@FadeRig.mayFade(from, to)
 

@@ -3,6 +3,7 @@ package app.lyrify.audio
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.util.UnstableApi
@@ -131,6 +132,7 @@ class CrossfadeDeviceTest {
         val made = mutableListOf<GaplessEngine>()
         val engine = CrossfadeEngine(
             newSlot = { GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.uris(context)) }.also { made += it } },
+            itemOf = { mediaItemOf(it, LibrarySettings(), CarCovers.uris(context)) },
             rules = AnyFade,
             focusOf = { control -> MediaFocus(context, Looper.getMainLooper(), control) },
             scope = scope,
@@ -186,20 +188,37 @@ class CrossfadeDeviceTest {
     }
 
     /**
-     * Songs long enough that nothing waits on a second player yet at the Next (the next song loads 5 s before its 6 s fade,
-     * 9 s into a 20 s song), so the Next makes the one player it fades in on. With the next song waiting, the Next lets
-     * that player go and makes another (CrossfadeEngineTest covers it), so the count would not be the Next's alone.
+     * A Next by hand in a queue of the whole library (7,000 songs, the two tones in turn), as the user plays with Crossfade
+     * on (PW2): the song waits on the second player a moment after Play, holding it and the two after it, so the Next makes
+     * no player and hands none the queue, and fades it in over the short fade. Its main-thread time goes to the log for a
+     * bench phone (before PW2 it made an ExoPlayer and handed it all 7,000 songs).
      */
     @Test
-    fun aNextByHandFadesOverAShortFadeAndPlaysOn() {
-        val songs = listOf(song(tone("kjb-skip-1.wav", 20, 440.0), "Skip One", 20), song(tone("kjb-skip-2.wav", 20, 660.0), "Skip Two", 20))
-        val built = build(songs, seconds = 6)
+    fun aNextByHandInALibrarySizedQueuePlaysTheSongWaitingAndMakesNoPlayer() {
+        val tones = listOf(song(tone("kjb-skip-1.wav", 60, 440.0), "Skip One", 60), song(tone("kjb-skip-2.wav", 60, 660.0), "Skip Two", 60))
+        val built = build(List(QUEUED) { tones[it % 2] }, seconds = 6)
         onMain { built.engine.setPlayWhenReady(true) }
         assertTrue("never played", waitFor(3_000) { built.engine.isPlaying })
-        SystemClock.sleep(500)
-        onMain { built.engine.seek(1, 0) }
+        assertTrue("the next song never waited", waitFor(3_000) { built.made.size == 2 })
+        SystemClock.sleep(2_000)
+        // Waiting, it loaded a few seconds of its song (a chunk of the file at most), not ExoPlayer's 50 s.
+        val waited = onMain { built.made[1].bufferedMs }
+        Log.i(TAG, "PW2 measure: the song waiting had $waited ms loaded")
+        assertTrue("the song waiting loaded $waited ms", waited < 20_000)
+        val tookNs = onMain {
+            val started = SystemClock.elapsedRealtimeNanos()
+            built.engine.seek(1, 0)
+            SystemClock.elapsedRealtimeNanos() - started
+        }
+        Log.i(TAG, "PW2 measure: a crossfade Next in a $QUEUED-song queue took %.2f ms on the main thread".format(tookNs / 1e6))
         assertEquals(1, onMain { built.engine.index })
+        assertEquals("players made by the Next", 2, built.made.size)
+        assertTrue("a player held the queue", onMain { built.made.all { it.loaded.size <= SONGS_HELD } })
         assertTrue("the next song never played", waitFor(2_000) { built.engine.isPlaying && built.engine.positionMs > 400 })
-        assertEquals(2, built.made.size)
+    }
+
+    private companion object {
+        const val TAG = "KJB-PW2"
+        const val QUEUED = 7_000
     }
 }

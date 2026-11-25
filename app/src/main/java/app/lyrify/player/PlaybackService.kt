@@ -37,6 +37,7 @@ import app.lyrify.audio.MediaFocus
 import app.lyrify.audio.OutputKind
 import app.lyrify.audio.OutputRoutesPart
 import app.lyrify.audio.QueueFadeRules
+import app.lyrify.audio.memoryLow
 import app.lyrify.audio.readOutput
 import app.lyrify.auto.CarBrowse
 import app.lyrify.auto.CarCovers
@@ -60,6 +61,7 @@ import app.lyrify.library.search.SearchGraph
 import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.media.QueueSweep
+import app.lyrify.media.SessionSnapshot
 import app.lyrify.settings.Settings
 import app.lyrify.stats.PlayEnd
 import app.lyrify.stats.PlayEvents
@@ -180,10 +182,12 @@ class PlaybackService : MediaLibraryService() {
         library = LibraryGraph.repository(this).state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
         val levels = Levels()
         val main = Handler(mainLooper)
-        // One gapless player; with Crossfade on, a second one around each fade (A2), in the same audio session. Focus is
-        // the engine's then.
+        // One gapless player; with Crossfade on, a second one in the same audio session (A2), waiting with the song a
+        // Next goes to while the music plays, each holding a few songs of the queue the engine holds (PW2). Focus is the
+        // engine's then.
         engine = CrossfadeEngine(
             newSlot = { GaplessEngine(this, settings::value, levels, ::mediaItem) },
+            itemOf = ::mediaItem,
             rules = QueueFadeRules(core, PlayerExtras.of(this), settings::value) { bookSpeed() },
             focusOf = { control -> MediaFocus(this, mainLooper, control) },
             scope = scope,
@@ -216,19 +220,22 @@ class PlaybackService : MediaLibraryService() {
             DefaultMediaNotificationProvider.Builder(this).setChannelName(R.string.player_channel).build().apply { setSmallIcon(R.drawable.ic_stat_kjb) },
         )
 
-        // The queue model, the library and the settings, applied to the engine; the session reads them again.
+        // The queue model, the library and the settings, applied to the engine; the session reads them again. A song
+        // starting, Next or Previous only moves the place, where the player is already: nothing to apply or read again.
         scope.launch {
             var queueId: String? = null
             var jumps = -1L
-            combine(core.ready.filter { it }, core.book, library) { _, book, songs -> book to songs }.collect { (book, songs) ->
-                // Another queue or a jump moves the player: the play counter hears where the song playing was.
-                if (book.currentId != queueId || book.jumps != jumps) heardSoFar()
-                if (book.currentId != queueId) failedInARow = 0
-                queueId = book.currentId
-                jumps = book.jumps
-                if (songs != null) bridge.sync(book, ::playable)
-                player.changed()
-            }
+            combine(core.ready.filter { it }, core.book, library) { _, book, songs -> book to songs }
+                .distinctUntilChanged { (was, wasSongs), (now, songs) -> songs === wasSongs && movedOnly(was, now) }
+                .collect { (book, songs) ->
+                    // Another queue or a jump moves the player: the play counter hears where the song playing was.
+                    if (book.currentId != queueId || book.jumps != jumps) heardSoFar()
+                    if (book.currentId != queueId) failedInARow = 0
+                    queueId = book.currentId
+                    jumps = book.jumps
+                    if (songs != null) bridge.sync(book, ::playable)
+                    player.changed()
+                }
         }
         // A book never repeats (books/BookPlayback.kt): its queue plays to its end whatever Repeat says.
         scope.launch {
@@ -267,6 +274,12 @@ class PlaybackService : MediaLibraryService() {
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
+
+    /** The phone wants memory back: Crossfade's second player, waiting with the next song, is let go (PW2). */
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (::engine.isInitialized && memoryLow(level)) engine.trimMemory()
+    }
 
     /** Each update Media3 makes to the media notification; once they stop, [repost] posts it once more. */
     override fun onUpdateNotificationAsync(session: MediaSession, startInForegroundRequired: Boolean): ListenableFuture<Void> {
@@ -353,17 +366,23 @@ class PlaybackService : MediaLibraryService() {
         io.launch { sweep.run() }
         var warned = false
         scope.launch {
-            combine(core.book, library) { book, songs -> if (songs == null) null else ownSnapshot(book.current, ::find) }
-                .distinctUntilChanged()
-                .collect { snapshot ->
-                    if (snapshot == null) return@collect
-                    if (Environment.isExternalStorageManager()) {
-                        sweep.submit(snapshot)
-                    } else if (!warned) {
-                        warned = true
-                        Log.w(LOG_TAG, "All files access is off: no lookups for own songs")
-                    }
+            // The book and library the last snapshot was made of: a song starting, Next or Previous keeps its songs.
+            var made: Pair<QueueBook, Library>? = null
+            var snapshot: SessionSnapshot? = null
+            combine(core.book, library) { book, songs -> book to songs }.collect { (book, songs) ->
+                val moved = made.let { it != null && songs === it.second && movedOnly(it.first, book) }
+                made = songs?.let { book to it }
+                val now = songs?.let { ownSnapshot(book.current, ::find, before = snapshot.takeIf { moved }) }
+                if (now == snapshot) return@collect
+                snapshot = now
+                if (now == null) return@collect
+                if (Environment.isExternalStorageManager()) {
+                    sweep.submit(now)
+                } else if (!warned) {
+                    warned = true
+                    Log.w(LOG_TAG, "All files access is off: no lookups for own songs")
                 }
+            }
         }
     }
 

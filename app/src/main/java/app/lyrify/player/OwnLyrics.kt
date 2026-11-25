@@ -15,10 +15,15 @@ import app.lyrify.media.SessionTrack
 /**
  * [queue] as a session snapshot: its songs on the phone (found with [find]), each by its uid, the current one (or the
  * next on the phone) active. Each names its file by path ([SessionTrack.mediaUri]), so [ownFiles] needs no guessing. A
- * book's queue has none: a book never gets lyrics (books/).
+ * book's queue has none: a book never gets lyrics (books/). [before] is the snapshot of the same songs from before only
+ * the place moved ([movedOnly], the same library): its songs are kept as they are, the same list, and only the current
+ * one is picked again.
  */
-fun ownSnapshot(queue: Queue?, find: (SongRef) -> Song?): SessionSnapshot {
+fun ownSnapshot(queue: Queue?, find: (SongRef) -> Song?, before: SessionSnapshot? = null): SessionSnapshot {
     if (queue == null || inBook(queue)) return SessionSnapshot.EMPTY
+    // The same songs: one scan for the current one. One not on the phone is not among them; the next one that is is
+    // looked for as below.
+    if (before != null) before.queue.firstOrNull { it.queueId == queue.current?.uid }?.let { entry -> return before.copy(current = entry.track, activeQueueId = entry.queueId) }
     val projected = projection(queue, find)
     val start = startOf(queue, projected)
     if (start < 0) return SessionSnapshot.EMPTY

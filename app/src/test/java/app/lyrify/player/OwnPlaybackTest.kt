@@ -1,6 +1,8 @@
 package app.lyrify.player
 
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import app.lyrify.auto.DEFAULT_COVER
 import app.lyrify.auto.coverPath
@@ -25,6 +27,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
@@ -66,6 +69,35 @@ class OwnPlaybackTest {
         val bookSource = QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Folder Book/|Folder Book", "Folder Book")
         val queues = QueueBook().play(songs.take(3).map { it.ref }, 0, bookSource, now = 1).book
         assertEquals(SessionSnapshot.EMPTY, ownSnapshot(queues.current, find))
+    }
+
+    @Test
+    fun `Next or Previous keeps the sweep's songs as they were, the same list, and picks the current one again`() {
+        val gone = songs[6].ref
+        val onPhone: (SongRef) -> Song? = { ref -> if (ref == gone) null else find(ref) }
+        var finds = 0
+        val counted: (SongRef) -> Song? = { ref ->
+            finds++
+            onPhone(ref)
+        }
+        val playlist = QueueSource(SourceKind.PLAYLIST, "playlist:harbour", "Harbour Glass")
+        var book = QueueBook().play(songs.take(10).map { it.ref }, 2, playlist, now = 1).book
+        val first = ownSnapshot(book.current, counted)
+        var snapshot = first
+        finds = 0
+        // Next twice, then Previous: the book follows the player (QueueBook.at), its songs and the library as they were.
+        listOf(3, 4, 3).forEach { index ->
+            book = book.at(book.current!!.items[index].uid, now = 10L + index)
+            snapshot = ownSnapshot(book.current, counted, before = snapshot)
+            assertEquals(ownSnapshot(book.current, onPhone), snapshot)
+            assertSame(first.queue, snapshot.queue)
+        }
+        assertEquals(0, finds)
+        // On to a song not on the phone: the next one that is, as a snapshot made anew picks it.
+        book = book.at(book.current!!.items[6].uid, now = 20)
+        snapshot = ownSnapshot(book.current, counted, before = snapshot)
+        assertEquals(songs[7].path, snapshot.current?.mediaUri)
+        assertEquals(ownSnapshot(book.current, onPhone), snapshot)
     }
 
     @Test
@@ -186,6 +218,31 @@ class OwnPlaybackTest {
         val view = sessionView(StillPort(uids, 1, 12_000), playing = true, book = book, repeat = Repeat.ALL)
         assertEquals(SessionView(uids, 1, 12_000, playing = true, shuffled = true, repeat = Repeat.ALL), view)
         assertEquals(SessionView(emptyList(), -1, 0, playing = false, shuffled = false, repeat = Repeat.ONE), sessionView(StillPort(emptyList(), -1, 0), playing = true, book = QueueBook(), repeat = Repeat.ONE))
+    }
+
+    /** A song as the session holds it: its uid, and its length as the library says (null: the library has none). */
+    private fun held(uid: Long, libraryMs: Long?): MediaItem =
+        MediaItem.Builder().setMediaId(uid.toString()).setMediaMetadata(MediaMetadata.Builder().setDurationMs(libraryMs).build()).build()
+
+    @Test
+    fun `every song is as long to the session as the library says, the one playing too, so Next and Previous keep its timeline`() {
+        // Decoded, a song is a few ms off the library's length (an encoder's delay and padding left out).
+        val items = (1L..7L).map { held(it, 200_000 + it) }
+        fun lengths(playing: Int, decodedMs: Long = 200_007L + playing) = items.mapIndexed { i, item -> sessionLengthMs(item, i == playing, decodedMs) }
+        assertEquals(items.map { it.mediaMetadata.durationMs }, lengths(2))
+        // Next, then Previous: the same lengths, so the same timeline, and Media3 sends the controllers no queue.
+        assertEquals(lengths(2), lengths(3))
+        assertEquals(lengths(3), lengths(2))
+        // Before the new song's length is decoded too.
+        assertEquals(lengths(2), lengths(3, decodedMs = C.TIME_UNSET))
+    }
+
+    @Test
+    fun `a song the library has no length for is as long as it decoded while it plays, of unknown length otherwise`() {
+        val unknown = held(5, libraryMs = null)
+        assertEquals(181_000L, sessionLengthMs(unknown, playing = true, decodedMs = 181_000))
+        assertEquals(C.TIME_UNSET, sessionLengthMs(unknown, playing = true, decodedMs = C.TIME_UNSET))
+        assertEquals(C.TIME_UNSET, sessionLengthMs(unknown, playing = false, decodedMs = 181_000))
     }
 
     @Test

@@ -15,8 +15,10 @@ import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.audio.AudioRendererEventListener
 import androidx.media3.exoplayer.audio.AudioSink
@@ -37,6 +39,15 @@ import app.lyrify.library.displayTitle
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
 import java.io.File
+
+/**
+ * A player that does not play (the song a Next goes to, waiting on Crossfade's second player, or one paused) loads this
+ * much ahead at most, not ExoPlayer's 50 s: it starts at once from it and loads on as it plays.
+ */
+const val PAUSED_BUFFER_MS: Long = 5_000
+
+/** Whether a player loads on, [playing] or not, with [bufferedMs] loaded ahead ([PAUSED_BUFFER_MS]). */
+fun keepsLoading(playing: Boolean, bufferedMs: Long): Boolean = playing || bufferedMs < PAUSED_BUFFER_MS
 
 /** What an engine tells the service: a song starting (a new one, or again for Repeat one), seeks, play and pause, the end, errors. */
 interface EngineListener {
@@ -112,11 +123,12 @@ interface PlaybackEngine : PlayerPort {
 }
 
 /**
- * One ExoPlayer holding the queue playing: media audio attributes with audio focus (it pauses when another app takes
- * focus and comes back after a short loss), pause on becoming noisy (headphones out), a local wake lock, and gapless
- * playback as ExoPlayer does it (MP3 with LAME or iTunes gapless info, FLAC, M4A with an edit list). Its audio sink runs
- * the audio chain ([AudioChain]) with float output off, so the chain always runs. The crossfade engine (A2) holds one,
- * or two around a fade, each with its own chain.
+ * One ExoPlayer holding the queue playing (a few songs of it while Crossfade is on): media audio attributes with audio
+ * focus (it pauses when another app takes focus and comes back after a short loss), pause on becoming noisy (headphones
+ * out), a local wake lock, and gapless playback as ExoPlayer does it (MP3 with LAME or iTunes gapless info, FLAC, M4A
+ * with an edit list). Its audio sink runs the audio chain ([AudioChain]) with float output off, so the chain always runs.
+ * The crossfade engine (A2) holds one, or two while the music plays (the song a Next goes to waiting on the second),
+ * each with its own chain.
  */
 @OptIn(UnstableApi::class)
 class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLevels, private val itemOf: (Projected) -> MediaItem) : FadeSlot {
@@ -124,6 +136,7 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
     private val listeners = mutableListOf<EngineListener>()
 
     private val player: ExoPlayer = ExoPlayer.Builder(context, ChainRenderers(context, settings, levels), DefaultMediaSourceFactory(context, extractors))
+        .setLoadControl(PausedLoadControl())
         .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
         .setHandleAudioBecomingNoisy(true)
         .setWakeMode(C.WAKE_MODE_LOCAL)
@@ -159,6 +172,11 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
                 listeners.forEach { it.onPlayingChanged(isPlaying) }
             }
 
+            // Heard before onEvents, so the engine reads it with the pause.
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                pausedAtEnd = !playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_END_OF_MEDIA_ITEM
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) listeners.forEach { it.onEnded() }
             }
@@ -170,10 +188,18 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
         })
     }
 
-    override val loaded: List<Long> get() = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId.toLongOrNull() ?: -1 }
+    /**
+     * The songs ExoPlayer holds, and their uids, read once after each change and kept: a Next read them about 20 times,
+     * each a walk over the whole queue on the main thread (PW2). Only this engine changes them, and each change drops
+     * them first ([changeSongs]), so a listener reading them as ExoPlayer tells of the change reads the new ones.
+     */
+    private var heldItems: List<MediaItem>? = null
+    private var heldUids: List<Long>? = null
+
+    override val loaded: List<Long> get() = heldUids ?: items.map { it.mediaId.toLongOrNull() ?: -1 }.also { heldUids = it }
     override val index: Int get() = if (player.mediaItemCount == 0) -1 else player.currentMediaItemIndex
     override val positionMs: Long get() = player.currentPosition
-    override val items: List<MediaItem> get() = (0 until player.mediaItemCount).map(player::getMediaItemAt)
+    override val items: List<MediaItem> get() = heldItems ?: (0 until player.mediaItemCount).map(player::getMediaItemAt).also { heldItems = it }
     override val playWhenReady: Boolean get() = player.playWhenReady
     override val playbackState: Int get() = player.playbackState
     override val isPlaying: Boolean get() = player.isPlaying
@@ -192,18 +218,14 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
 
     override fun load(items: List<Projected>, index: Int, positionMs: Long) {
         if (items.isEmpty() || index < 0) {
-            player.clearMediaItems()
+            changeSongs { player.clearMediaItems() }
             return
         }
-        loadItems(items.map(itemOf), index, positionMs)
-    }
-
-    override fun loadItems(items: List<MediaItem>, index: Int, positionMs: Long) {
-        player.setMediaItems(items, index, positionMs)
+        changeSongs { player.setMediaItems(items.map(itemOf), index, positionMs) }
         player.prepare()
     }
 
-    override fun apply(edit: Edit) {
+    override fun apply(edit: Edit) = changeSongs {
         when (edit) {
             is Edit.Remove -> player.removeMediaItems(edit.at, edit.at + edit.count)
             is Edit.Insert -> player.addMediaItems(edit.at, edit.items.map(itemOf))
@@ -219,6 +241,13 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
             // uris are the same (canUpdateMediaItem), so the song playing goes on undisturbed.
             is Edit.Refresh -> player.replaceMediaItems(edit.at, edit.at + edit.items.size, edit.items.map(itemOf))
         }
+    }
+
+    /** [change] made to ExoPlayer's songs: the kept ones go first, and are read again at the next read. */
+    private fun changeSongs(change: () -> Unit) {
+        heldItems = null
+        heldUids = null
+        change()
     }
 
     override fun seek(index: Int, positionMs: Long) {
@@ -274,6 +303,9 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
         player.pauseAtEndOfMediaItems = pause
     }
 
+    override var pausedAtEnd: Boolean = false
+        private set
+
     override fun setFocusHandled(handled: Boolean) = player.setAudioAttributes(player.audioAttributes, handled)
 
     override fun setAudioSessionId(id: Int) {
@@ -282,6 +314,16 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
 
     override fun addListener(listener: EngineListener) {
         listeners += listener
+    }
+
+    /**
+     * ExoPlayer's own load control, but a player that does not play loads only [PAUSED_BUFFER_MS] ahead ([keepsLoading]):
+     * the song a Next goes to, waiting on Crossfade's second player, holds a chunk of its file, not 50 s of it. A file is
+     * read in chunks of about 1 MB, each asked for here.
+     */
+    private class PausedLoadControl : DefaultLoadControl() {
+        override fun shouldContinueLoading(parameters: LoadControl.Parameters): Boolean =
+            super.shouldContinueLoading(parameters) && keepsLoading(parameters.playWhenReady, Util.usToMs(parameters.bufferedDurationUs))
     }
 
     /**

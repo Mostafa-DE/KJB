@@ -253,6 +253,31 @@ class QueueBridgeTest {
     }
 
     @Test
+    fun `a song starting, Next or Previous only moves the place, which the player has already, so nothing goes to the bridge`() {
+        var book = QueueBook().play(refs.take(6), 1, playlistSource, now = 1).book
+        val id = book.currentId!!
+        bridge.sync(book, find)
+        // The player moves on, by itself or with Next and Previous, and the book follows it (the service's Follower), its
+        // place saved too: the service hands the bridge none of these.
+        listOf(2, 3, 2, 1).forEach { index ->
+            val before = book
+            port.index = index
+            book = book.at(book.current!!.items[index].uid, now = 2L + index).place(index, 4_000)
+            assertTrue("song $index", movedOnly(before, book))
+            bridge.sync(book, find)
+        }
+        assertEquals(listOf("load"), port.calls)
+        // Anything else is more: a tap inside the queue (a jump), a Play next song starting (no longer waiting as one), an
+        // edit, Shuffle, another queue.
+        assertFalse(movedOnly(book, book.jump(id, 5, now = 9).book))
+        val next = book.playNext(listOf(refs[7]), picked, now = 10)!!.book
+        assertFalse(movedOnly(next, next.at(next.current!!.items[2].uid, now = 11)))
+        assertFalse(movedOnly(book, book.move(id, 0, 5)))
+        assertFalse(movedOnly(book, book.toggleShuffle(Random(2))))
+        assertFalse(movedOnly(book, book.play(refs.take(3), 0, folderSource, now = 12).book))
+    }
+
+    @Test
     fun `a tap inside the queue moves the player there, from the start`() {
         var book = QueueBook().play(refs, 0, playlistSource, now = 1).book
         bridge.sync(book, find)
