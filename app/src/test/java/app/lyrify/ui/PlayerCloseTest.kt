@@ -11,7 +11,21 @@ import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import app.lyrify.library.SongRef
+import app.lyrify.player.PlayerUi
+import app.lyrify.player.Queue
+import app.lyrify.player.QueueBook
+import app.lyrify.player.QueueItem
+import app.lyrify.player.QueueSource
+import app.lyrify.player.Repeat
+import app.lyrify.player.SourceKind
 import coil3.memory.MemoryCache
+import coil3.request.ImageRequest
+import coil3.request.Options
+import coil3.request.transformations
+import coil3.size.Precision
+import coil3.size.Scale
+import coil3.size.pxOrElse
 import coil3.size.Size as ImageSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.plus
@@ -386,8 +400,8 @@ class PlayerCloseTest {
         // transformations), where every other size is kept.
         val own = MemoryCache.Key(PATH)
         assertNotEquals(own, stored)
-        // The player's cover keeps Coil's own key, so it loads and keeps its own size (and finds the one the bar prewarmed),
-        // and starts on the bar's bitmap meanwhile.
+        // The player's cover keeps Coil's own key, so it loads and keeps its own size (and finds the one read ahead at
+        // the player's size), and starts on the bar's bitmap meanwhile.
         val player = songCoverRequest(context, art, CoverAt.PLAYER)
         assertEquals(null, player.memoryCacheKey)
         assertEquals(emptyMap<String, String>(), player.memoryCacheKeyExtras)
@@ -426,6 +440,117 @@ class PlayerCloseTest {
         assertEquals("$PATH#3", backdropCoverKey(changed).key)
         assertEquals(backdropCoverKey(changed), backdropRequest(context, changed).let { MemoryCache.Key(checkNotNull(it.memoryCacheKey), it.memoryCacheKeyExtras) })
         assertEquals(MemoryCache.Key("$PATH#3"), backdropRequest(context, changed).placeholderMemoryCacheKey)
+    }
+
+    // Covers read ahead (PW3)
+
+    @Test
+    fun `a cover read ahead is kept under the key each screen looks up, at the size it draws`() {
+        val context = object : ContextWrapper(null) {}
+        val read = SongArt(PATH, mediaStoreId = 7L, version = 2)
+        // The screens name the song by its path and version (the id does not change its key: coverKey).
+        val shown = SongArt(PATH, version = 2)
+        val requests = coverAheadRequests(context, read, playerPx = 945, barPx = 100)
+        assertEquals(3, requests.size)
+        val (player, bar, backdrop) = requests
+        // The player's cover and the swipe's neighbour: Coil's own key for the song, at the player's size.
+        assertEquals(storedUnder(songCoverRequest(context, shown, CoverAt.PLAYER)), storedUnder(player))
+        assertEquals(storedUnder(songCoverRequest(context, shown)), storedUnder(player))
+        assertEquals(ImageSize(945, 945), runBlocking { player.sizeResolver.size() })
+        // The Now bar's, under the bar's own key at the orb's size.
+        assertEquals(storedUnder(songCoverRequest(context, shown, CoverAt.BAR)), storedUnder(bar))
+        assertEquals(ImageSize(100, 100), runBlocking { bar.sizeResolver.size() })
+        // The backdrop's, under its own key at its own size.
+        assertEquals(storedUnder(backdropRequest(context, shown)), storedUnder(backdrop))
+        assertEquals(ImageSize(BACKDROP_PX, BACKDROP_PX), runBlocking { backdrop.sizeResolver.size() })
+        // Three bitmaps, none taking another's place; each read by the library's id, so MediaStore is asked once.
+        assertEquals(3, setOf(storedUnder(player), storedUnder(bar), storedUnder(backdrop)).size)
+        assertEquals(listOf(read, read, read), listOf(player.data, bar.data, backdrop.data))
+        // Inexact, as AsyncImage asks for the screens (AsyncImagePainter.updateRequest): a larger bitmap of the song
+        // already in memory is a hit, never read again.
+        assertEquals(listOf(Precision.INEXACT, Precision.INEXACT, Precision.INEXACT), requests.map { it.precision })
+        // Fit, every song's request: SongArtFetcher sizes a cover by its longer side (MediaStore samples by it), so
+        // Coil's memory check measures that side too; the screens still crop it (ContentScale.Crop draws).
+        val screens = listOf(songCoverRequest(context, shown, CoverAt.PLAYER), songCoverRequest(context, shown, CoverAt.BAR), songCoverRequest(context, shown), backdropRequest(context, shown))
+        assertEquals(List(7) { Scale.FIT }, (requests + screens).map { it.defined.scale })
+    }
+
+    @Test
+    fun `a cover smaller than asked is the whole picture, so any larger size of the song finds it in memory`() {
+        // MediaStore's thumbnail never grows a cover and cuts one down only to at least the size asked, as an opened
+        // copy's does (coverSample): one that came back smaller on both sides is all there is. Coil hands a cover it
+        // was told is not cut down to every inexact request (MemoryCacheService.isCacheValueValidForSize), so the
+        // player's cover finds a 600 px cover read ahead at 945 px instead of reading the same 600 px again.
+        assertEquals(false, coverSampled(600, 600, px = 945))
+        assertEquals(false, coverSampled(944, 500, px = 945))
+        // Cut down, or exactly the size asked: a larger request may get more, so it reads.
+        assertEquals(true, coverSampled(1_170, 1_170, px = 945))
+        assertEquals(true, coverSampled(945, 500, px = 945))
+        assertEquals(true, coverSampled(500, 1_000, px = 945))
+    }
+
+    @Test
+    fun `after a Next or a Previous every cover the screens draw for the new song is already in memory, whatever its shape`() {
+        // Counted on Coil's keys and sizes: the read ahead while each song plays, then what the player's cover, its
+        // backdrop and the Now bar look up for the song a skip brings, each at the size it draws. The songs' covers are
+        // large, smaller than the player's, wide and tall in turn, read as MediaStore cuts them down ([thumbnail]) and
+        // marked as SongArtFetcher marks them ([coverSampled]). Before PW3 each of them missed and loaded, then faded
+        // in.
+        val context = object : ContextWrapper(null) {}
+        val queue = Queue("q", QueueSource(SourceKind.ALBUM, "album:x", "Paper Harbour"), (0 until 30).map { QueueItem(uid = it.toLong(), song = SongRef("/Music/Paper Harbour/made-up-$it.mp3")) })
+        val shapes = listOf(2_000 to 2_000, 600 to 600, 1_600 to 800, 800 to 1_200)
+        val read = mutableMapOf<MemoryCache.Key, Kept>()
+        var misses = 0
+        val steps = List(12) { SkipWay.NEXT } + List(8) { SkipWay.PREVIOUS }
+        steps.fold(queue) { now, way ->
+            val ui = PlayerUi(QueueBook(), now, now.current!!, song = null, playing = true, positionMs = 0, at = 0, speed = 1f, durationMs = 200_000, repeat = Repeat.OFF, library = null)
+            val before = read.size
+            for (request in coversAhead(ui, emptyMap()).flatMap { coverAheadRequests(context, it, playerPx = 945, barPx = 100) }) {
+                val (width, height) = shapes[now.items.indexOfFirst { it.song.path == (request.data as SongArt).path } % shapes.size]
+                val px = runBlocking { request.sizeResolver.size() }.width.pxOrElse { 0 }
+                val (keptWidth, keptHeight) = thumbnail(width, height, px)
+                read[storedUnder(request)] = Kept(keptWidth, keptHeight, coverSampled(keptWidth, keptHeight, px))
+            }
+            // Memory: one song's three covers at most are new while a song plays (the next one; the previous one played).
+            if (now !== queue) assertTrue(read.size - before <= 3)
+            val next = now.copy(index = now.items.indexOf(incoming(ui, way, positionMs = 0)))
+            val art = SongArt(next.current!!.song.path)
+            // A 1080 px wide phone at 2.625: the player's cover is its 411 dp less the 24 dp margins and 8 dp, 933 px.
+            val drawn = listOf(songCoverRequest(context, art, CoverAt.PLAYER) to 933, backdropRequest(context, art) to BACKDROP_PX, songCoverRequest(context, art, CoverAt.BAR) to 100)
+            misses += drawn.count { (request, px) -> read[storedUnder(request)]?.let { found(request, it, px) } != true }
+            next
+        }
+        println("PW3 measure: ${steps.size} skips, ${read.size} covers read ahead, $misses covers the screens loaded after a skip")
+        assertEquals("covers the screens had to load after 20 skips", 0, misses)
+    }
+
+    /** A cover's MediaStore thumbnail asked at [px]: cut down by a whole sample, never grown (loadThumbnail). */
+    private fun thumbnail(width: Int, height: Int, px: Int): Pair<Int, Int> = maxOf(1, maxOf(width / px, height / px)).let { width / it to height / it }
+
+    /**
+     * Whether Coil hands a [kept] bitmap to [request] drawn at [px] (Coil 3.6.3,
+     * MemoryCacheService.isCacheValueValidForSize, inexact as AsyncImage asks): one not cut down at once; else when its
+     * side reaches [px], within a pixel, the longer side for a request that fits, the shorter for one that fills
+     * (AsyncImage's for ContentScale.Crop when the request sets no scale).
+     */
+    private fun found(request: ImageRequest, kept: Kept, px: Int): Boolean {
+        if (!kept.sampled) return true
+        val side = if (request.defined.scale == Scale.FIT) maxOf(kept.width, kept.height) else minOf(kept.width, kept.height)
+        return side >= px - 1
+    }
+
+    /** A bitmap in the memory cache: its size, and whether it was cut down from more. */
+    private data class Kept(val width: Int, val height: Int, val sampled: Boolean)
+
+    /**
+     * The key Coil keeps [request]'s image under (Coil 3.6.3, MemoryCacheService.newCacheKey): the request's own key
+     * and extras, else the keyer's ([SongArtKeyer]) with the extras; the size joins it only with transformations, and
+     * KJB's have none.
+     */
+    private fun storedUnder(request: ImageRequest): MemoryCache.Key {
+        assertTrue(request.transformations.isEmpty())
+        val key = request.memoryCacheKey ?: SongArtKeyer().key(request.data as SongArt, Options(request.context))
+        return MemoryCache.Key(key, request.memoryCacheKeyExtras)
     }
 
     private companion object {

@@ -16,7 +16,7 @@ class NowBarTest {
     private val other = CurrentTrack(title = "Harbour Glass", artist = "Paper Lanterns", paths = listOf(PATH), resolved = true, player = samsung)
 
     /** A fake of what KJB's own player supplies (milestone P1). */
-    private fun own(playing: Boolean) = OwnNow(title = "Quiet Engines", artist = "The Lamplighters", cover = null, playing = playing, progress = 0.25f)
+    private fun own(playing: Boolean) = OwnNow(title = "Quiet Engines", artist = "The Lamplighters", cover = null, playing = playing)
 
     // Own, companion or hidden
 

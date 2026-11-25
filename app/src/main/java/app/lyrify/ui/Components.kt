@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.minimumInteractiveComponentSize
 import android.animation.ValueAnimator
 import android.content.ContentUris
+import android.app.ActivityManager
 import android.content.Context
 import android.provider.MediaStore
 import androidx.annotation.DrawableRes
@@ -134,6 +135,8 @@ import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 import coil3.request.Options
 import coil3.request.crossfade
+import coil3.size.Precision
+import coil3.size.Scale
 import coil3.size.pxOrElse
 import java.io.IOException
 import java.text.NumberFormat
@@ -840,14 +843,14 @@ class SongArtFetcher(private val art: SongArt, private val options: Options) : F
         val context = options.context
         val px = options.size.width.pxOrElse { DEFAULT_PX }
         val uri = art.mediaStoreId?.let { ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, it) } ?: audioUri(context, art.path)
-            ?: return OpenedFiles.cover(context, art.path, px)?.let { ImageFetchResult(it.asImage(), isSampled = true, dataSource = DataSource.DISK) }
+            ?: return OpenedFiles.cover(context, art.path, px)?.let { ImageFetchResult(it.asImage(), isSampled = coverSampled(it.width, it.height, px), dataSource = DataSource.DISK) }
         val bitmap = try {
             context.contentResolver.loadThumbnail(uri, android.util.Size(px, px), null)
         } catch (e: IOException) {
             // No embedded cover: the default cover shows.
             return null
         }
-        return ImageFetchResult(bitmap.asImage(), isSampled = true, dataSource = DataSource.DISK)
+        return ImageFetchResult(bitmap.asImage(), isSampled = coverSampled(bitmap.width, bitmap.height, px), dataSource = DataSource.DISK)
     }
 
     class Factory : Fetcher.Factory<SongArt> {
@@ -858,6 +861,15 @@ class SongArtFetcher(private val art: SongArt, private val options: Options) : F
         const val DEFAULT_PX = 256
     }
 }
+
+/**
+ * Whether a cover read for a [px] request, [width] by [height], was cut down from more (Coil's isSampled): only when
+ * its longer side reached [px]. MediaStore's thumbnail never grows a cover and cuts one down only to at least the size
+ * asked, as an opened copy's does ([OpenedFiles.cover]), so a smaller one is all there is: Coil then hands it to any
+ * larger request of the song from memory (MemoryCacheService.isCacheValueValidForSize) instead of reading the same
+ * picture again, and a cover read ahead at the player's size is found after the skip whatever its size (PW3).
+ */
+fun coverSampled(width: Int, height: Int, px: Int): Boolean = maxOf(width, height) >= px
 
 class SongArtKeyer : Keyer<SongArt> {
     override fun key(data: SongArt, options: Options): String = coverKey(data)
@@ -889,7 +901,9 @@ fun barCoverKey(art: SongArt): MemoryCache.Key = MemoryCache.Key(coverKey(art), 
  * A [SongCover]'s request for [model], drawn [at] the bar, in the player or elsewhere. Coil keeps a cover under its own
  * key for the song at the size it was loaded at, and a smaller one in memory never stands in for a larger request; the
  * bar's is kept apart ([barCoverKey]). A size not loaded yet starts on one already there, never on the default: the
- * player's on the bar's (as it grows out of the bar), any other on the song's own key.
+ * player's on the bar's (as it grows out of the bar), any other on the song's own key. A song's cover is asked to fit:
+ * [SongArtFetcher] sizes it by its longer side, as MediaStore cuts it down, so Coil's memory check measures that side
+ * too and a wide or tall cover is found by every size up to the one read; the screen still crops it (PW3).
  */
 fun songCoverRequest(context: Context, model: Any, at: CoverAt = CoverAt.ELSEWHERE): ImageRequest {
     val request = ImageRequest.Builder(context).data(model)
@@ -899,17 +913,20 @@ fun songCoverRequest(context: Context, model: Any, at: CoverAt = CoverAt.ELSEWHE
         CoverAt.BAR -> request.memoryCacheKey(barCoverKey(art)).placeholderMemoryCacheKey(own)
         CoverAt.PLAYER -> request.placeholderMemoryCacheKey(barCoverKey(art))
         CoverAt.ELSEWHERE -> request.placeholderMemoryCacheKey(own)
-    }.build()
+    }.scale(Scale.FIT).build()
 }
 
 /** The extra on [barCoverKey] that sets the bar's bitmap apart. */
 private const val BAR_EXTRA = "kjb#bar"
 
-/** [path]'s cover as the player's backdrop asks for it: its version in this process ([CoverVersions]) is in its key. */
+/**
+ * [path]'s cover as the player's backdrop asks for it: its version in this process ([CoverVersions]) is in its key; by
+ * the library's [mediaStoreId] when it has one, read with one MediaStore call (PW3).
+ */
 @Composable
-fun backdropArt(path: String): SongArt {
+fun backdropArt(path: String, mediaStoreId: Long? = null): SongArt {
     val versions by CoverVersions.versions.collectAsState()
-    return SongArt(path, version = versions[path] ?: 0)
+    return SongArt(path, mediaStoreId, versions[path] ?: 0)
 }
 
 /**
@@ -922,27 +939,51 @@ fun backdropCoverKey(art: SongArt): MemoryCache.Key = MemoryCache.Key(coverKey(a
 /**
  * The player's backdrop's request for [art]: [BACKDROP_PX] square (blurred, a larger one would only cost decoding),
  * kept under its own key ([backdropCoverKey]), and starting on whatever size of the song's cover is already in memory
- * while it loads: the blur hides the size.
+ * while it loads: the blur hides the size. Asked to fit, as [songCoverRequest] asks.
  */
 fun backdropRequest(context: Context, art: SongArt): ImageRequest = ImageRequest.Builder(context)
     .data(art)
     .size(BACKDROP_PX)
+    .scale(Scale.FIT)
     .memoryCacheKey(backdropCoverKey(art))
     .placeholderMemoryCacheKey(MemoryCache.Key(coverKey(art)))
     .build()
 
+/**
+ * The requests that read [art]'s cover into memory ahead of a skip, as the screens will ask for it, so each finds its
+ * own key at a size it takes and draws it in its first frame, with no fade (Coil fades no memory hit): the player's
+ * cover and the swipe's neighbour at [playerPx] (Coil's own key for the song), the Now bar's at [barPx]
+ * ([barCoverKey]), and the backdrop's ([backdropRequest]). [playerPx] is never smaller than the player draws its cover;
+ * inexact, as AsyncImage asks for theirs, so a larger bitmap of the song already in memory is not read again (PW3).
+ */
+fun coverAheadRequests(context: Context, art: SongArt, playerPx: Int, barPx: Int): List<ImageRequest> = listOf(
+    songCoverRequest(context, art, CoverAt.PLAYER).newBuilder().size(playerPx),
+    songCoverRequest(context, art, CoverAt.BAR).newBuilder().size(barPx),
+    backdropRequest(context, art).newBuilder(),
+).map { it.precision(Precision.INEXACT).build() }
+
 /** The extra on [backdropCoverKey] that sets the backdrop's bitmap apart. */
 private const val BACKDROP_EXTRA = "kjb#backdrop"
 
-/** The image loader of the whole app: song covers from MediaStore, cross-fading in. No network. */
+/**
+ * The image loader of the whole app: song covers from MediaStore, cross-fading in. No network. The covers it keeps in
+ * memory take at most [COVERS_IN_MEMORY] of the phone's ordinary heap for an app (its memory class): Coil's own share,
+ * which its default takes of the large heap KJB asks for (the manifest's largeHeap), some 100 MB on most phones (PW1).
+ */
 fun songImageLoader(context: Context): ImageLoader =
     ImageLoader.Builder(context)
         .components {
             add(SongArtKeyer())
             add(SongArtFetcher.Factory())
         }
+        .memoryCache { MemoryCache.Builder().maxSizeBytes((context.getSystemService(ActivityManager::class.java).memoryClass * BYTES_PER_MB * COVERS_IN_MEMORY).toLong()).build() }
         .crossfade(true)
         .build()
+
+/** The share of the ordinary heap the covers in memory may take ([songImageLoader]): a fifth, Coil's default share. */
+private const val COVERS_IN_MEMORY = 0.2
+
+private const val BYTES_PER_MB = 1_048_576L
 
 /** The audio file's MediaStore uri, by its path (readable for all audio with All files access). Blocking. */
 private fun audioUri(context: Context, path: String): android.net.Uri? {

@@ -118,13 +118,57 @@
     <string name="dl_audio_quality_sheet">How this download is saved. Settings keeps the one KJB uses by default.</string>
     <string name="dl_best_detail">%1$s, about %2$s</string>
 
+    <!-- A playlist's link in the share sheet (a list, an album or a Mix), and its songs on the Downloads page -->
+    <string name="dl_playlist_private">KJB can only save public playlists. This one is private, or it is gone.</string>
+    <string name="dl_ask_playlist">This song is in a playlist.</string>
+    <string name="dl_ask_mix">This song starts a Mix.</string>
+    <string name="dl_just_song">Just this song</string>
+    <plurals name="dl_whole_playlist">
+        <item quantity="one">The whole playlist (%d song)</item>
+        <item quantity="other">The whole playlist (%d songs)</item>
+    </plurals>
+    <plurals name="dl_whole_mix">
+        <item quantity="one">The whole Mix (%d song)</item>
+        <item quantity="other">The whole Mix (%d songs)</item>
+    </plurals>
+    <plurals name="dl_playlist_songs">
+        <item quantity="one">%d song</item>
+        <item quantity="other">%d songs</item>
+    </plurals>
+    <plurals name="dl_playlist_first">
+        <item quantity="one">The first %1$d of its %2$d song</item>
+        <item quantity="other">The first %1$d of its %2$d songs</item>
+    </plurals>
+    <plurals name="dl_mix_songs">
+        <item quantity="one">A Mix has no end. Here is its first %d song.</item>
+        <item quantity="other">A Mix has no end. Here are its first %d songs.</item>
+    </plurals>
+    <string name="dl_all_songs">All songs</string>
+    <plurals name="dl_save_all">
+        <item quantity="one">Save %d song</item>
+        <item quantity="other">Save all %d songs</item>
+    </plurals>
+    <plurals name="dl_save_songs">
+        <item quantity="one">Save %d song</item>
+        <item quantity="other">Save %d songs</item>
+    </plurals>
+    <plurals name="dl_playlist_saved">
+        <item quantity="one">%1$d of %2$d saved</item>
+        <item quantity="other">%1$d of %2$d saved</item>
+    </plurals>
+    <plurals name="dl_playlist_failed">
+        <item quantity="one">%d song couldn\'t be saved</item>
+        <item quantity="other">%d songs couldn\'t be saved</item>
+    </plurals>
+    <string name="dl_cancel_rest">Cancel the rest</string>
+
     <!-- YouTube search: the page's field, and the search sheet (also Huddle's Search on YouTube) -->
     <string name="dl_search">Search YouTube</string>
     <string name="dl_search_hint">Song, artist or video</string>
     <string name="dl_search_go">Search</string>
     <string name="dl_searching">Searching YouTube</string>
     <string name="dl_search_none">Nothing found. Try other words.</string>
-    <string name="dl_search_update">Searching YouTube needs a newer Downloads add-on.</string>
+    <string name="dl_search_update">Searching YouTube and saving playlists need a newer Downloads add-on.</string>
     <string name="dl_search_get_first">Searching YouTube needs the Downloads add-on. Get it on the Downloads page.</string>
     <string name="dl_search_update_first">Searching YouTube needs a newer Downloads add-on. Update it on the Downloads page.</string>
     <string name="dl_open_downloads">Open Downloads</string>

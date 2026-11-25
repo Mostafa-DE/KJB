@@ -1,10 +1,12 @@
 package app.lyrify.dl
 
 import app.lyrify.dl.api.DlInfo
+import app.lyrify.dl.api.DlPlaylist
 import app.lyrify.dl.api.DlSearchResult
 import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.VideoChoice
 import app.lyrify.dl.api.isWebLink
+import app.lyrify.dl.api.playlistId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
@@ -25,7 +27,7 @@ import kotlin.math.roundToInt
 /**
  * A link's info as VidGrab read it (its MediaInfo): yt-dlp's full info (`-J`, 7 to 14 s on the phone) and YouTube's quick
  * oEmbed info (about 0.3 s), named the same way, so the sheet can show the quick one at once and its buttons work on it.
- * And what a YouTube search found ([results]), as YouTube lists it.
+ * And what a YouTube search found ([results]) and a playlist's songs ([playlist]), as YouTube lists them.
  */
 object Info {
     private val json = Json { ignoreUnknownKeys = true }
@@ -79,9 +81,17 @@ object Info {
         return key.isNotEmpty() && key.equals(channel.replace(NAME_NOISE, ""), ignoreCase = true)
     }
 
-    /** yt-dlp's full info ([text], its -J JSON) for [url]; null when it is not that. */
+    /**
+     * yt-dlp's full info ([text], its -J JSON) for [url]: a video's, or a playlist's, its songs listed ([playlist]); null
+     * when it is not that. A playlist is its name and owner, its cover (else its first song's), its songs' length together
+     * and the quick video choices: none of its videos was opened, so there are no sizes.
+     */
     fun full(url: String, text: String): DlInfo? {
         val info = parse(text) ?: return null
+        playlist(info)?.let { list ->
+            val owner = (info.text("channel") ?: info.text("uploader")).orEmpty()
+            return DlInfo(url, list.title, owner, list.songs.sumOf { it.durationSec }, thumbnail(info) ?: list.songs.firstOrNull()?.thumbnail, partial = false, choices = QUICK_CHOICES, playlist = list)
+        }
         val rawTitle = info.text("title") ?: return null
         val (artist, title) = names(rawTitle, info.text("artist"), info.text("track"), info.text("uploader"), info.text("channel"))
         val duration = info.number("duration") ?: 0.0
@@ -112,24 +122,47 @@ object Info {
 
     /**
      * What a YouTube search found ([text]: yt-dlp's -J of a flat "ytsearchN:", a playlist whose entries are the videos as
-     * the search lists them, none opened), in its order. A video needs a web link and a title; one live now or still to
-     * come is left out, as it never ends as a file. Null when [text] is not that.
+     * the search lists them, none opened), in its order ([songs]). Null when [text] is not that.
      */
-    fun results(text: String): DlSearchResults? {
-        val entries = parse(text)?.get("entries") as? JsonArray ?: return null
-        return DlSearchResults(
-            entries.mapNotNull { element ->
-                val video = element as? JsonObject ?: return@mapNotNull null
-                val url = video.text("url")?.takeIf(::isWebLink) ?: return@mapNotNull null
-                val title = video.text("title")?.trim() ?: return@mapNotNull null
-                if (video.text("live_status") in LIVE) return@mapNotNull null
-                val channel = (video.text("channel") ?: video.text("uploader")).orEmpty().trim()
-                DlSearchResult(url, title, channel, video.number("duration")?.roundToInt() ?: 0, thumbnail(video))
-            },
-        )
+    fun results(text: String): DlSearchResults? = (parse(text)?.get("entries") as? JsonArray)?.let { DlSearchResults(songs(it)) }
+
+    /**
+     * A playlist's songs ([text]: yt-dlp's -J of a playlist, a list, an album or a Mix, its entries listed and none of
+     * them opened, `--flat-playlist`); null when it is not a playlist (a video's own info).
+     */
+    fun playlist(text: String): DlPlaylist? = parse(text)?.let(::playlist)
+
+    /**
+     * A playlist's [title], its [songs] and how many more it has than were listed (its count, when YouTube gives one: a
+     * Mix's has none); [DlPlaylist.withSong] is the lookup's to say. Null when [answer] is not a playlist.
+     */
+    private fun playlist(answer: JsonObject): DlPlaylist? {
+        val entries = answer["entries"] as? JsonArray ?: return null
+        if (answer.text("_type") != "playlist") return null
+        val count = answer.number("playlist_count")?.toInt() ?: entries.size
+        return DlPlaylist(answer.text("title").orEmpty(), songs(entries), more = (count - entries.size).coerceAtLeast(0), mix = isMix(answer.text("id")))
     }
 
-    /** A search result's thumbnail ([SMALL_THUMBNAIL]): the smallest at least that wide, else the widest; null without one. */
+    /**
+     * The videos of a flat list (a search's or a playlist's entries), in its order. A video needs a web link and a title;
+     * one live now or still to come is left out, as it never ends as a file.
+     */
+    private fun songs(entries: JsonArray): List<DlSearchResult> = entries.mapNotNull { element ->
+        val video = element as? JsonObject ?: return@mapNotNull null
+        val url = video.text("url")?.takeIf(::isWebLink) ?: return@mapNotNull null
+        val title = video.text("title")?.trim() ?: return@mapNotNull null
+        if (video.text("live_status") in LIVE) return@mapNotNull null
+        val channel = (video.text("channel") ?: video.text("uploader")).orEmpty().trim()
+        DlSearchResult(url, title, channel, video.number("duration")?.roundToInt() ?: 0, thumbnail(video))
+    }
+
+    /**
+     * Whether [playlistId] is a Mix's, which has no end: YouTube starts those with RD (a song's RD<id>, YouTube Music's
+     * RDAMVM<id>), but for YouTube Music's own playlists (RDCLAK...), which end as any list does.
+     */
+    fun isMix(playlistId: String?): Boolean = playlistId?.startsWith("RD") == true && !playlistId.startsWith("RDCLAK")
+
+    /** A video's or a playlist's thumbnail ([SMALL_THUMBNAIL]): the smallest at least that wide, else the widest; null without one. */
     private fun thumbnail(video: JsonObject): String? {
         val sized = (video["thumbnails"] as? JsonArray).orEmpty().mapNotNull { element ->
             val thumbnail = element as? JsonObject ?: return@mapNotNull null
@@ -143,7 +176,18 @@ object Info {
         val answer = parse(text) ?: return null
         val rawTitle = answer.text("title") ?: return null
         val (artist, title) = names(rawTitle, null, null, answer.text("author_name"), null)
-        return DlInfo(url, title, artist, 0, answer.text("thumbnail_url"), partial = true, choices = QUICK_CHOICES)
+        // A playlist's own link (/playlist?list=...) is a playlist from the start, its songs still to come: the sheet never
+        // offers to download its link as one song meanwhile.
+        return DlInfo(
+            url,
+            title,
+            artist,
+            0,
+            answer.text("thumbnail_url"),
+            partial = true,
+            choices = QUICK_CHOICES,
+            playlist = DlPlaylist(rawTitle).takeIf { url.substringBefore('?').endsWith("/playlist") && playlistId(url) != null },
+        )
     }
 
     /** YouTube's oEmbed address for [url]; null for any other site, which has no quick info. */

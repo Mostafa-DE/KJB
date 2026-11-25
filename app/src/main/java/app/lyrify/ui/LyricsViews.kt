@@ -9,7 +9,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.CompositingStrategy
-import coil3.request.ImageRequest
 import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.Color
 import androidx.compose.animation.core.LinearEasing
@@ -661,8 +660,9 @@ fun FullLyricsView() {
 private fun LyricsBackdrop(path: String) {
     val surface = MaterialTheme.colorScheme.background
     val context = LocalContext.current
-    // A small cover: blurred this much, a full-size one would only cost decoding time.
-    val request = remember(path) { ImageRequest.Builder(context).data(SongArt(path)).size(BACKDROP_PX).build() }
+    // A small cover: blurred this much, a full-size one would only cost decoding time. The player's backdrop's, under its
+    // own key, so it never takes the place of a size a row or the player keeps in memory (PW1).
+    val request = remember(path, context) { backdropRequest(context, SongArt(path)) }
     Box(Modifier.fillMaxSize()) {
         AsyncImage(model = request, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(52.dp).alpha(0.5f))
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(surface.copy(alpha = 0.6f), surface.copy(alpha = 0.85f), surface))))

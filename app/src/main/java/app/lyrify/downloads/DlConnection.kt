@@ -205,15 +205,36 @@ class DlSession internal constructor(
  * took the link or the words. [close] asks nothing of the add-on: a call into one the phone froze can wait for as long as
  * it stays frozen, so KJB lets go of it and stops the service it started ([DlSession.abandon]); the add-on, KJB gone,
  * stops the lookup itself (its onUnbind). A lookup has no beat of its own: the sheet shows what came, its buttons work
- * without the full info, and its going lets the add-on go.
+ * without the full info (but for a link that names a playlist, which waits for the add-on's answer), and its going lets
+ * the add-on go.
  */
 class DlLookup(private val connect: suspend () -> DlConnection) {
     private var session: DlSession? = null
     private var closed = false
 
-    /** Binds the add-on and asks it to look [url] up, heard by [events]: Ready, or why the add-on can't be used. */
-    suspend fun start(url: String, events: DlLookupEvents): AddonState =
-        ask(MIN_DL_API, { it.port.info(url, events) }) { events.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }
+    /**
+     * Binds the add-on and asks it to look [url] up, heard by [events]: Ready, or why the add-on can't be used. An add-on
+     * that dies before its full info fails the lookup as the engine: the rest would have come through a callback that died
+     * with it, and the sheet would say it looks it up for good (a link that names a playlist could never be saved).
+     */
+    suspend fun start(url: String, events: DlLookupEvents): AddonState {
+        val answered = AtomicBoolean(false)
+        val once = object : DlLookupEvents {
+            override fun onInfo(info: DlInfo) {
+                if (!info.partial) answered.set(true)
+                events.onInfo(info)
+            }
+
+            override fun onFailed(end: DlEnd.Failed) {
+                if (answered.compareAndSet(false, true)) events.onFailed(end)
+            }
+        }
+        val died = { once.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }
+        return ask(MIN_DL_API, { session ->
+            session.port.info(url, once)
+            session.death.invokeOnCompletion { died() }
+        }, died)
+    }
 
     /**
      * Binds the add-on and asks it to search YouTube for [search], heard by [events] once: Ready, or why the add-on can't

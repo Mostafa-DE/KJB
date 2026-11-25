@@ -285,14 +285,18 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     val ledger = ui.ledger
     val change = rememberSettingsChange()
     val plays = rememberPlays(settings.songSort.needsPlays)
-    // A sort by plays waits for them: never shown first in the order of a list without any.
-    val listed by produceState<List<Song>?>(null, library, ledger, settings, plays) {
-        val known = plays ?: return@produceState
-        value = withContext(Dispatchers.Default) { songsTab(library.songs, { ledger.entries[it.path]?.status }, settings, known) }
-    }
-    val songs = listed.orEmpty()
     val now = remember(library) { System.currentTimeMillis() }
-    val sections = remember(songs, settings, plays) { sectionsOf(songs, settings, now, ZoneId.systemDefault(), plays.orEmpty()) }
+    // A sort by plays waits for them: never shown first in the order of a list without any. Its headings are worked out
+    // with it, off the main thread too (PW1).
+    val listed by produceState<Pair<List<Song>, List<Triple<ListSection, Int, List<Song>>>>?>(null, library, ledger, settings, plays) {
+        val known = plays ?: return@produceState
+        value = withContext(Dispatchers.Default) {
+            val songs = songsTab(library.songs, { ledger.entries[it.path]?.status }, settings, known)
+            songs to sectionsOf(songs, settings, now, ZoneId.systemDefault(), known)
+        }
+    }
+    val songs = listed?.first.orEmpty()
+    val sections = listed?.second.orEmpty()
     val state = rememberLazyListState()
     var sorting by rememberSaveable { mutableStateOf(false) }
     ReselectToTop(reselect) { state.animateScrollToItem(0) }

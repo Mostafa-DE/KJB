@@ -218,7 +218,7 @@ private fun HeartButton(collection: FavouriteCollection, ui: LibraryUi) {
  * line of facts; behind it, [glow]'s cover blurred and faded into the page (the prototype's .abg), from under the top bar.
  */
 @Composable
-private fun Hero(title: String, meta: String, art: @Composable () -> Unit, link: (@Composable () -> Unit)? = null, glow: Any? = null) {
+private fun Hero(title: String, meta: String, art: @Composable () -> Unit, link: (@Composable () -> Unit)? = null, glow: SongArt? = null) {
     val chrome = LocalChromeColors.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -233,10 +233,15 @@ private fun Hero(title: String, meta: String, art: @Composable () -> Unit, link:
     }
 }
 
-/** The blurred cover behind a hero: 312 dp from the page's top, wider than the page so its blur has no edge; takes no space. */
+/**
+ * The blurred cover behind a hero: 312 dp from the page's top, wider than the page so its blur has no edge; takes no
+ * space. Its cover is the player's backdrop's ([backdropRequest]), small and in memory once for both: blurred this much,
+ * a cover of the glow's full width would only cost decoding and memory (PW1).
+ */
 @Composable
-private fun HeroGlow(model: Any) {
+private fun HeroGlow(art: SongArt) {
     val surface = MaterialTheme.colorScheme.background
+    val context = LocalContext.current
     val density = LocalDensity.current
     val above = WindowInsets.statusBars.getTop(density) + with(density) { HERO_BAR.roundToPx() }
     Box(
@@ -247,7 +252,7 @@ private fun HeroGlow(model: Any) {
         },
     ) {
         AsyncImage(
-            model = model,
+            model = remember(art, context) { backdropRequest(context, art) },
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize().graphicsLayer {

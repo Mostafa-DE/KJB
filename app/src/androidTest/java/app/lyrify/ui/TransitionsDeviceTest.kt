@@ -177,7 +177,7 @@ class TransitionsDeviceTest {
                             AnimatedVisibility(!open, Modifier.align(Alignment.BottomCenter), enter = EnterTransition.None, exit = ExitTransition.None) {
                                 val bar = remember(this) { Container(this@SharedTransitionLayout, this, bar = true, barTop) }
                                 CompositionLocalProvider(LocalContainer provides bar) {
-                                    NowBar(NowBarShows.Own(OwnNow("Quiet Engines", "The Lamplighters", cover = null, playing = false, progress = 0.25f)), LedgerState(), other = null, onOpen = {}, onPlayPause = {})
+                                    NowBar(NowBarShows.Own(OwnNow("Quiet Engines", "The Lamplighters", cover = null, playing = false)), LedgerState(), other = null, progress = { 0.25f }, onOpen = {}, onPlayPause = {})
                                 }
                             }
                             AnimatedVisibility(open, enter = EnterTransition.None, exit = ExitTransition.None) {

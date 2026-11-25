@@ -220,6 +220,109 @@ class BookStartTest {
         assertEquals(2, marked.current!!.index)
     }
 
+    // The player's chapter Next and Previous, a chapter's tap and the cover's swipe (BC1): a folder book's chapter is its
+    // part, so a part taken out of the book's queue goes back in, as a part started again does, and plays from its start.
+
+    @Test
+    fun `Next chapter to a part taken out of the book's queue puts it back after the part playing and plays it, up to the last chapter (BC1)`() {
+        val playing = QueueBook().play(parts.map { it.ref }, 0, bookSource(folderBook), now = 1).book.place(0, 100_000)
+        val id = playing.currentId!!
+        // The second and third parts taken out.
+        val alone = listOf(1, 2).fold(playing) { queues, gone -> queues.remove(id, queues.current!!.items.first { it.song.path == parts[gone].path }.uid)!!.book }
+        val inFirst = bookNow(folderBook, 0, 100_000, BookState())
+        val second = alone.toChapter(inFirst, nextChapter(inFirst)!!, library, now = 10).book
+        assertEquals(id, second.currentId)
+        assertEquals(parts.take(2).map { it.path }, second.current!!.items.map { it.song.path })
+        assertEquals(1, second.current!!.index)
+        assertEquals(0L, second.current!!.positionMs)
+        assertEquals(alone.jumps + 1, second.jumps)
+        // From there the last chapter, back at the end.
+        val inSecond = bookNow(folderBook, 1, 60_000, BookState())
+        val last = second.toChapter(inSecond, nextChapter(inSecond)!!, library, now = 11).book
+        assertEquals(id, last.currentId)
+        assertEquals(parts.map { it.path }, last.current!!.items.map { it.song.path })
+        assertEquals(2, last.current!!.index)
+        // The last chapter's Next goes nowhere: nothing to put back.
+        assertNull(nextChapter(bookNow(folderBook, 2, 60_000, BookState())))
+    }
+
+    @Test
+    fun `Previous chapter to a part taken out of the book's queue puts it back before the part playing and plays it, down to the first chapter (BC1)`() {
+        val playing = QueueBook().play(parts.map { it.ref }, 2, bookSource(folderBook), now = 1).book
+        val id = playing.currentId!!
+        // The first and second parts taken out.
+        val alone = listOf(0, 1).fold(playing) { queues, gone -> queues.remove(id, queues.current!!.items.first { it.song.path == parts[gone].path }.uid)!!.book }
+        // Within 3 s of a part's start Previous goes to the chapter before.
+        val inThird = bookNow(folderBook, 2, 1_000, BookState())
+        val second = alone.toChapter(inThird, previousChapter(inThird)!!, library, now = 10).book
+        assertEquals(id, second.currentId)
+        assertEquals(parts.drop(1).map { it.path }, second.current!!.items.map { it.song.path })
+        assertEquals(0, second.current!!.index)
+        assertEquals(0L, second.current!!.positionMs)
+        assertEquals(alone.jumps + 1, second.jumps)
+        // From there the first chapter, back at the top.
+        val inSecond = bookNow(folderBook, 1, 2_000, BookState())
+        val first = second.toChapter(inSecond, previousChapter(inSecond)!!, library, now = 11).book
+        assertEquals(id, first.currentId)
+        assertEquals(parts.map { it.path }, first.current!!.items.map { it.song.path })
+        assertEquals(0, first.current!!.index)
+        // The first chapter's Previous, and any Previous past 3 s, stays in the part playing (the player seeks): nothing
+        // to put back.
+        val inFirst = bookNow(folderBook, 0, 1_000, BookState())
+        assertEquals(BookPlace(0, 0), chapterPlace(inFirst, previousChapter(inFirst)!!))
+        assertEquals(2, previousChapter(bookNow(folderBook, 2, 5_000, BookState())))
+    }
+
+    @Test
+    fun `in a one-file book every chapter is in the part playing, so its own queue goes to the chapter's start, nothing put back (BC1)`() {
+        val chapters = BookState().withChapters(oneFile, "stamp", listOf(Chapter(0, 300_000, "One"), Chapter(300_000, 600_000, "Two"), Chapter(600_000, 900_000, "Three")))
+        val playing = QueueBook().play(listOf(orchard.ref), 0, bookSource(oneFile), now = 1).book.place(0, 400_000)
+        val now = bookNow(oneFile, 0, 400_000, chapters)
+        val next = playing.toChapter(now, nextChapter(now)!!, library, now = 10).book
+        assertEquals(playing.currentId, next.currentId)
+        assertEquals(playing.current!!.items, next.current!!.items)
+        assertEquals(600_000L, next.current!!.positionMs)
+        assertEquals(now.partIndex, chapterPlace(now, previousChapter(now)!!).partIndex)
+    }
+
+    @Test
+    fun `the chapter buttons, a chapter's tap and the cover's swipe all go to another part through toChapter (BC1)`() {
+        // Unit tests run in the module's folder.
+        val books = File("src/main/java/app/lyrify/ui/BooksScreen.kt").readText()
+        assertTrue(books.contains("if (place.partIndex == now.partIndex) connection.seekTo(place.positionMs) else connection.toChapter(now, index)"))
+        val connection = File("src/main/java/app/lyrify/player/PlayerConnection.kt").readText()
+        assertTrue(connection.contains("core.switch { it.toChapter(book, index, library(), core.now()) }"))
+        // The chapter buttons and the cover's swipe step through goToChapter, a chapter's tap too.
+        assertTrue(books.contains("if (target != null) goToChapter(connection, fresh, target) else if (!forward) connection.seekTo(0)"))
+        assertTrue(books.contains("goToChapter(connection, now, index)"))
+        // The swipe's cover shows the part the very same step plays.
+        val player = File("src/main/java/app/lyrify/ui/PlayerScreen.kt").readText()
+        assertTrue(player.contains("ui.book.toChapter(fresh, chapter, ui.library, now = 0)"))
+    }
+
+    @Test
+    fun `a chapter step stays in the book's queue saved under its id before PF10, as the player plays that queue as the book (BC1)`() {
+        // Queues written before PF10 name a folder book by its old id; the library still finds the book by it.
+        val old = QueueSource(SourceKind.BOOK, oldFolderBookId(folderBook.id)!!, folderBook.title)
+        val playing = QueueBook().play(parts.map { it.ref }, 0, old, now = 1).book
+        val id = playing.currentId!!
+        val without = playing.remove(id, playing.current!!.items[1].uid)!!.book
+        assertEquals(folderBook, playingBook(without.current, library)?.book)
+        val inFirst = bookNow(folderBook, 0, 100_000, BookState())
+        // The part taken out goes back into that queue and plays; no new queue.
+        val second = without.toChapter(inFirst, nextChapter(inFirst)!!, library, now = 10).book
+        assertEquals(id, second.currentId)
+        assertEquals(old, second.current!!.source)
+        assertEquals(parts.map { it.path }, second.current!!.items.map { it.song.path })
+        assertEquals(1, second.current!!.index)
+        // A part still in it: a jump in the same queue.
+        val inSecond = bookNow(folderBook, 1, 60_000, BookState())
+        val last = second.toChapter(inSecond, nextChapter(inSecond)!!, library, now = 11).book
+        assertEquals(id, last.currentId)
+        assertEquals(2, last.current!!.index)
+        assertEquals(second.queues.map { it.id }, last.queues.map { it.id })
+    }
+
     @Test
     fun `a bookmark in a book's file plays the book's own queue from that spot, from music or inside the book, never for music`() {
         // From music: the folder book's third part, 2 min in, in the book's own queue, not at the book's place.

@@ -377,7 +377,8 @@ object AiLyrics {
         withContext(Dispatchers.IO) { removeOldFiles(context) }
         if (NpuChips.supported() == null) return
         ModelHandover.startIfNeeded(context)
-        val pending = WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK).first().filterNot { it.state.isFinished }
+        // WorkManager starts on its first use (the manifest, PW1): this may be it, so on IO, not on the main thread.
+        val pending = withContext(Dispatchers.IO) { WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK).first() }.filterNot { it.state.isFinished }
         if (pending.isNotEmpty() && !preferences(context).contains(ENABLED)) choose(context, true)
         if (!choice(context).value) return
         if (loadFailures(context).paused()) _hold.value = AiHold.MODEL_FAILED
