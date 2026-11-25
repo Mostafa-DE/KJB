@@ -202,13 +202,13 @@ internal class PageWork(
 
     /**
      * Where you listen: the plays that counted (never a book's) by the kind of output they were heard on, from
-     * [MIN_TOP_PLAYS] plays that keep it (KJB v4 on: the plays from before have none); wired and USB are headphones, any
-     * other kind (a dock, a screen) none of the four.
+     * [MIN_TOP_PLAYS] plays that keep one (KJB v4 on: the plays from before have none); wired and USB are headphones, any
+     * other kind (a dock, a screen) none of the four, but real listening toward the [MIN_TOP_PLAYS]. None with no row.
      */
     private fun outputsOf(): OutputsCard? {
         val outputs = heard.filter { it.counted && kinds.of(it) != Kind.BOOK }.mapNotNull { it.start?.output }.groupingBy { it }.eachCount()
         return OutputsCard(outputs[OutputKind.SPEAKER] ?: 0, (outputs[OutputKind.WIRED] ?: 0) + (outputs[OutputKind.USB] ?: 0), outputs[OutputKind.BLUETOOTH] ?: 0, outputs[OutputKind.CAR] ?: 0)
-            .takeIf { it.speaker + it.headphones + it.bluetooth + it.car >= MIN_TOP_PLAYS }
+            .takeIf { outputs.values.sum() >= MIN_TOP_PLAYS && it.speaker + it.headphones + it.bluetooth + it.car > 0 }
     }
 
     /**

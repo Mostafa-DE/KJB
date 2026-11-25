@@ -340,8 +340,9 @@ private fun TopListPage(kind: TopKind, onBack: () -> Unit, onOpen: (Page) -> Uni
 }
 
 /**
- * Leave songs out of Insights (the page's menu): every song played, the most played first, each with its plays and a
- * switch; one switched on leaves every card and story, and still plays and counts for Most played, Recently played and
+ * Leave songs out of Insights (the page's menu): every song played that Insights count, hidden ones, those in Folders to
+ * skip and podcast episodes too (a book's parts are the book's), the most played first, each with its plays and a switch;
+ * one switched on leaves every card and story, and still plays and counts for Most played, Recently played and
  * Suggestions. A song is found again by the library after a move, so its switch stays on; the rows stay where they are.
  */
 @Composable
@@ -351,8 +352,11 @@ private fun LeftOutPage(onBack: () -> Unit) {
     val change = rememberSettingsChange()
     val leftOut = ui.settings.library.leftOutOfInsights
     // Read once the library is there, and again when it changes, as Most played's rows are: while it loads there is none.
-    val played by produceState<List<SongPlays>?>(null, ui.library) { value = ui.library?.let { StatsGraph.stats(context).mostPlayed(Int.MAX_VALUE) } }
-    val songs = remember(ui.library, played) { ui.library?.let { library -> played?.mapNotNull { plays -> library.song(plays.song.path)?.let { it to plays.count } } } }
+    val played by produceState<Map<String, SongPlays>?>(null, ui.library) { value = ui.library?.let { StatsGraph.stats(context).everySong() } }
+    // Found by the resolver, which knows the songs the library's filters hide too.
+    val songs = remember(ui.library, played) {
+        ui.library?.let { library -> played?.values?.mapNotNull { plays -> library.resolver.find(plays.song)?.takeIf { library.bookOf(it.path) == null }?.let { it to plays.count } }?.sortedByDescending { it.second } }
+    }
     val left = remember(ui.library, leftOut) { leftOut.mapTo(HashSet()) { ui.library?.resolver?.find(it)?.path ?: it.path } }
     ListeningFrame(stringResource(R.string.insights_leave_out), onBack) { padding ->
         val reduced = LocalReducedMotion.current

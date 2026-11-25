@@ -131,8 +131,13 @@ class ListeningScreenTest {
         // The songs played are read once the library is there and again when it changes, as Most played's rows are: read
         // while it loads, Most played has none, and the page would say nothing was played until reopened.
         val page = listening.substringAfter("private fun LeftOutPage(").substringBefore("\n}\n")
-        assertTrue(page.contains("produceState<List<SongPlays>?>(null, ui.library) { value = ui.library?.let { StatsGraph.stats(context).mostPlayed(Int.MAX_VALUE) } }"))
+        assertTrue(page.contains("produceState<Map<String, SongPlays>?>(null, ui.library) { value = ui.library?.let { StatsGraph.stats(context).everySong() } }"))
         assertFalse(page.contains("produceState<List<SongPlays>?>(null) {"))
+        // Changed on purpose (IN4, lead 2026-11-25): every song Insights counts can be left out, so the page lists every
+        // song played, hidden ones, those in Folders to skip and podcast episodes too (everySong, found by the resolver,
+        // which knows them all), not Most played's songs; a book's parts are the book's.
+        assertFalse(page.contains("mostPlayed("))
+        assertTrue(page.contains("played?.values?.mapNotNull { plays -> library.resolver.find(plays.song)?.takeIf { library.bookOf(it.path) == null }?.let { it to plays.count } }?.sortedByDescending { it.second }"))
         // The row is Hidden songs' row with a switch in place of its button, one TalkBack stop that switches it.
         val row = source("LibraryHiding.kt").substringAfter("internal fun HiddenRow(").substringBefore("\n}\n")
         assertTrue(row.contains("Modifier.toggleable(switch, role = Role.Switch) { onClick() }"))
