@@ -606,15 +606,7 @@ fun <K : Any> TabPages(state: TabPager<K>, modifier: Modifier = Modifier, swipe:
         // The pages take a finger themselves, before the list on the page can (tabSwipe); Compose would ask the list first.
         modifier = modifier
             .onGloballyPositioned { origin.value = it.positionInWindow() }
-            .then(
-                if (swipe) {
-                    Modifier.pointerInput(state, rtl) {
-                        swipes(state, rtl, { edge.value(it) }) { at, dx -> rows.any { (row, bounds) -> bounds.contains(origin.value + at) && rowKeeps(dx, rtl, row.canScrollBackward, row.canScrollForward) } }
-                    }
-                } else {
-                    Modifier
-                },
-            )
+            .then(if (swipe) Modifier.pointerInput(state, rtl) { swipes(state, rtl, { edge.value(it) }) { at, dx -> rowKeeps(origin.value + at, dx, rtl, rows) } } else Modifier)
             // The pager's own scroll actions go with its own touch scrolling: TalkBack's move one tab, as a tap does.
             .semantics {
                 fun step(forward: Boolean): Boolean = tabStep(forward, state.pager.currentPage, state.keys.size)?.let { state.pick(it) } != null
@@ -719,11 +711,13 @@ private val TabSettle = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiff
 val LocalSidewaysRows = staticCompositionLocalOf<MutableMap<ScrollableState, Rect>?> { null }
 
 /**
- * Whether a row that scrolls sideways keeps a finger moved [dx] px across it, as ViewPager asks its children before it
- * swipes: while the row can still scroll that way ([back] towards its start, [forward] towards its end; [rtl]: its start
- * on the right), else the tabs take it, at the row's end (user 2026-11-25: Library's friends row never scrolled).
+ * Whether one of [rows] (each with where it is in the window) under a finger [at] a place in the window, moved [dx] px
+ * across, keeps it, as ViewPager asks its children before it swipes: while that row can still scroll that way (back
+ * towards its start, forward towards its end; [rtl]: its start on the right), else the tabs take it, at the row's end
+ * (user 2026-11-25: Library's friends row never scrolled).
  */
-fun rowKeeps(dx: Float, rtl: Boolean, back: Boolean, forward: Boolean): Boolean = if ((dx < 0f) != rtl) forward else back
+fun rowKeeps(at: Offset, dx: Float, rtl: Boolean, rows: Map<ScrollableState, Rect>): Boolean =
+    rows.any { (row, bounds) -> bounds.contains(at) && if ((dx < 0f) != rtl) row.canScrollForward else row.canScrollBackward }
 
 /** Whether the tab page around this is the one shown: only it answers the dock tapped again (it goes to its top). */
 val LocalTabCurrent = compositionLocalOf { true }

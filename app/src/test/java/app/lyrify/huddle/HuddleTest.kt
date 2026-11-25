@@ -232,11 +232,14 @@ class HuddleTest {
         // Wren's KJB tells Juniper at its next sync; before Juniper's KJB reads it, Juniper joins Wren's new invite.
         assertTrue(wren.sync())
         assertNotNull(wrenState.now.self)
-        assertTrue(juniper.accept(checkNotNull(juniper.parse(link(wren)))) is Accepted.Joined)
+        assertTrue(juniper.accept(checkNotNull(juniper.parse(link(wren, song)))) is Accepted.Joined)
         assertEquals(2, juniperState.now.friends.size)
         assertTrue(wren.sync())
         assertTrue(juniper.sync())
         assertTrue(wren.sync())
+        // The card the second invite brought went with that friend: nothing kept under nobody (Grok review).
+        assertTrue(juniper.cards().isEmpty())
+        assertTrue(juniperState.now.inbox.isEmpty())
         // Each phone keeps the friend it had, with the history, and lets the newer one go: no past friend, no "Wren 2".
         assertEquals(listOf(juniperOnWren.id), wrenState.now.friends.map { it.id })
         assertEquals(listOf(wrenOnJuniper.id), juniperState.now.friends.map { it.id })
@@ -246,6 +249,55 @@ class HuddleTest {
         assertEquals(wrenState.now.self, juniperState.now.friends.single().self)
         assertEquals(juniperState.now.self, wrenState.now.friends.single().self)
         assertTrue(juniper.accept(checkNotNull(juniper.parse(link(wren)))) is Accepted.Already)
+    }
+
+    @Test
+    fun `a friend whose older KJB read your id and let it go learns it once they update`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        listOf(wrenState, juniperState).forEach { phone -> phone.change { state -> state.copy(self = null, friends = state.friends.map { it.copy(self = null) }) } }
+        // Wren updates first and tells Juniper, whose KJB 4.0 reads the profile without the id and acknowledges it.
+        assertTrue(wren.sync())
+        val told = server.waiting(juniperOnWren.outBox)
+        assertEquals(1, told.size)
+        assertTrue(server.ack(mapOf(juniperOnWren.outBox to told.single().seq)))
+        // Juniper updates: their id goes to Wren, and Wren's answer tells them Wren's (Grok review).
+        assertTrue(juniper.sync())
+        assertTrue(wren.sync())
+        assertTrue(juniper.sync())
+        assertEquals(wrenState.now.self, juniperState.now.friends.single().self)
+        assertEquals(juniperState.now.self, wrenState.now.friends.single().self)
+        assertTrue(juniper.accept(checkNotNull(juniper.parse(link(wren)))) is Accepted.Already)
+    }
+
+    @Test
+    fun `a friend's profile never changes who another friend is, so no friend can make you drop one of long standing`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val (rook, rookState) = phone("Rook")
+        assertTrue(rook.accept(checkNotNull(rook.parse(link(wren)))) is Accepted.Joined)
+        assertTrue(juniper.accept(checkNotNull(juniper.parse(link(wren)))) is Accepted.Joined)
+        assertTrue(wren.sync())
+        assertEquals(2, wrenState.now.friends.size)
+        val rookId = wrenState.now.friends.first().id
+        val juniperSelf = checkNotNull(juniperState.now.self)
+        // Rook's KJB, changed, says Rook is Juniper.
+        var lies = 0
+        suspend fun lie() {
+            val toWren = rookState.now.friends.single()
+            val sealed = HuddleCrypto.seal(HuddleCrypto.decode(toWren.outKey)!!, Messages.encode(Message.Profile("lie-${++lies}", now, "Rook", self = juniperSelf)), toWren.outBox.encodeToByteArray(), random)
+            server.send(toWren.outBox, Kind.PROFILE, HuddleCrypto.encode(sealed))
+        }
+        lie()
+        assertTrue(wren.sync())
+        assertEquals("who Rook is, once known, stays", rookState.now.self, wrenState.now.friends.first { it.id == rookId }.self)
+        assertEquals(2, wrenState.now.friends.size)
+        // A friend from before whose id Wren never learned says so: Juniper, a friend for more than a week, stays.
+        wrenState.change { state -> state.copy(friends = state.friends.map { if (it.id == rookId) it.copy(self = null) else it.copy(addedAt = it.addedAt - 8 * 24 * Huddle.HOUR_MS) }) }
+        lie()
+        assertTrue(wren.sync())
+        assertEquals(2, wrenState.now.friends.size)
     }
 
     @Test

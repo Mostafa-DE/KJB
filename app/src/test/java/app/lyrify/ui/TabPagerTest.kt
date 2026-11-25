@@ -1,7 +1,9 @@
 package app.lyrify.ui
 
 import androidx.compose.foundation.MutatePriority
+import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.font.FontWeight
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -179,21 +181,29 @@ class TabPagerTest {
 
     @Test
     fun `a sideways swipe on a row that scrolls sideways is the row's while it can scroll that way, and the tabs' at its end`() {
-        // Left to right: a finger going left scrolls the row on, one going right scrolls it back (user 2026-11-25).
-        assertTrue(rowKeeps(dx = -30f, rtl = false, back = false, forward = true))
-        assertFalse(rowKeeps(dx = -30f, rtl = false, back = true, forward = false))
-        assertTrue(rowKeeps(dx = 30f, rtl = false, back = true, forward = false))
-        assertFalse(rowKeeps(dx = 30f, rtl = false, back = false, forward = true))
+        // A row 100 to 900 px across, 200 to 400 px down the window, that can scroll on but not back (user 2026-11-25).
+        val bounds = Rect(100f, 200f, 900f, 400f)
+        val onward = mapOf<ScrollableState, Rect>(Row(canScrollBackward = false, canScrollForward = true) to bounds)
+        val inside = Offset(500f, 300f)
+        // Left to right: a finger going left on it scrolls it on; one going right, or one off the row, is the tabs'.
+        assertTrue(rowKeeps(inside, dx = -30f, rtl = false, rows = onward))
+        assertFalse(rowKeeps(inside, dx = 30f, rtl = false, rows = onward))
+        assertFalse(rowKeeps(Offset(500f, 450f), dx = -30f, rtl = false, rows = onward))
+        assertFalse(rowKeeps(Offset(50f, 300f), dx = -30f, rtl = false, rows = onward))
+        // At its end, the tabs'.
+        val atEnd = mapOf<ScrollableState, Rect>(Row(canScrollBackward = true, canScrollForward = false) to bounds)
+        assertFalse(rowKeeps(inside, dx = -30f, rtl = false, rows = atEnd))
+        assertTrue(rowKeeps(inside, dx = 30f, rtl = false, rows = atEnd))
         // Right to left, the row's start on the right.
-        assertTrue(rowKeeps(dx = 30f, rtl = true, back = false, forward = true))
-        assertFalse(rowKeeps(dx = -30f, rtl = true, back = false, forward = true))
-        assertTrue(rowKeeps(dx = -30f, rtl = true, back = true, forward = false))
-        // The pages ask the rows under the finger before they take it, and give every page the rows' list.
+        assertTrue(rowKeeps(inside, dx = 30f, rtl = true, rows = onward))
+        assertFalse(rowKeeps(inside, dx = -30f, rtl = true, rows = onward))
+        assertFalse(rowKeeps(inside, dx = -30f, rtl = false, rows = emptyMap()))
+        // The pages ask with the finger's place in the window before they take it, and give every page the rows' list.
         val pager = File("src/main/java/app/lyrify/ui/TabPager.kt").readText()
         val swipes = pager.substringAfter("private suspend fun PointerInputScope.swipes(").substringBefore("\n}\n")
         assertTrue(swipes.contains("TabSwipe.TAKE -> {\n                        // A row under the finger that scrolls that way keeps it (rowKeeps).\n                        if (keeps(down.position, moved.x)) break"))
         val pages = pager.substringAfter("fun <K : Any> TabPages(").substringBefore("\n}\n")
-        assertTrue(pages.contains("rows.any { (row, bounds) -> bounds.contains(origin.value + at) && rowKeeps(dx, rtl, row.canScrollBackward, row.canScrollForward) }"))
+        assertTrue(pages.contains("swipes(state, rtl, { edge.value(it) }) { at, dx -> rowKeeps(origin.value + at, dx, rtl, rows) }"))
         assertTrue(pages.contains("LocalSidewaysRows provides rows"))
     }
 
@@ -296,6 +306,9 @@ class TabPagerTest {
         assertEquals(0, tabAfterChange(before = three, after = listOf("To review", "Done"), heading = 2, selected = 7))
         assertEquals(0, tabAfterChange(before = emptyList(), after = three, heading = 0, selected = -1))
     }
+
+    /** A row that scrolls sideways: back towards its start, forward towards its end. */
+    private class Row(override val canScrollBackward: Boolean, override val canScrollForward: Boolean) : ScrollableState by ScrollableState({ it })
 
     private companion object {
         /** How close to the midpoint of a swipe a label may be while its ink reads under 4.5:1. */

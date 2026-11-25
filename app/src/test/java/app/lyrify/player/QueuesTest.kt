@@ -113,6 +113,19 @@ class QueuesTest {
     }
 
     @Test
+    fun `a friend's queue from before, keyed by their play's time, is the one Play along takes up again`() {
+        val old = playing(2).play(listOf(folder[0]), 0, QueueSource(SourceKind.HUDDLE, "wren:1700000000000", "Wren"), now = 2).book
+        val before = old.currentId!!
+        val left = old.play(album, 0, albumSource, now = 3).book
+        val back = left.playAlong(folder[1], 5_000, wrenSource, now = 4).book
+        assertEquals(before, back.currentId)
+        assertEquals(listOf("Rips 1", "Rips 2"), paths(back.current))
+        assertTrue(back.current!!.from(wrenSource))
+        // Another friend's, whose id only starts the same, is not theirs.
+        assertNotEquals(before, left.playAlong(folder[1], 0, QueueSource(SourceKind.HUDDLE, "friend:wre", "Wre"), now = 5).book.currentId)
+    }
+
+    @Test
     fun `a friend's queue left for another list comes back from Recent at their next Play along, the only one of theirs, and another friend has their own`() {
         val along = playing(2).playAlong(folder[0], 61_000, wrenSource, now = 2).book
         val theirs = along.currentId!!

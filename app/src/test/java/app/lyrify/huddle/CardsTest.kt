@@ -202,6 +202,9 @@ class CardsTest {
         val copy = song("Music/HG/01.mp3", title = "Paper Lantern", album = "Harbour Glass", durationMs = 201_000)
         val twin = song("Music/Copies/01.mp3", title = "Paper Lantern", album = "Harbour Glass", durationMs = 201_000)
         assertEquals(Match.Maybe(copy), SongMatcher(listOf(copy, twin)).match(lantern))
+        // Your copy by their artist at another length comes before someone else's within 2 s (Grok review).
+        val cover = song("Music/Covers/Paper Lantern.mp3", title = "Paper Lantern", artist = "Ida Moss", durationMs = 201_000)
+        assertEquals(Match.Maybe(longer), SongMatcher(listOf(cover, longer)).match(lantern))
         // By someone else, or a friend's song without an artist: still missing, YouTube as before.
         assertEquals(Match.Missing, SongMatcher(listOf(song("Music/X/Paper Lantern.mp3", title = "Paper Lantern", artist = "Ida Moss", durationMs = 300_000))).match(lantern))
         assertEquals(Match.Missing, SongMatcher(listOf(longer)).match(lantern.copy(artist = null)))

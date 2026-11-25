@@ -122,11 +122,13 @@ data class QueueBook(
     /**
      * A friend's song from [positionMs] (Huddle's Play along, and Play it from the top), in that friend's one queue
      * ([source], user 2026-11-25): playing or in Recent, it plays again with [song] where it is in it, else added at its
-     * end ([addTo]), under the friend's name as you see it now; with none, a new queue of the song. The queue left goes to
-     * Recent as from a tap ([switchTo]).
+     * end ([addTo]), under the friend's name and key as you see them now; with none, a new queue of the song. Their queue
+     * from before 4.1 counts too, keyed by the friend's id and their play's time. The queue left goes to Recent as from a
+     * tap ([switchTo]).
      */
     fun playAlong(song: SongRef, positionMs: Long, source: QueueSource, now: Long): Switched {
-        val theirs = (listOfNotNull(currentId) + recent).firstOrNull { queue(it)?.from(source) == true }
+        val before = source.key.removePrefix("friend:") + ":"
+        val theirs = (listOfNotNull(currentId) + recent).firstOrNull { id -> queue(id)?.let { it.from(source) || (it.source.kind == source.kind && it.source.key.startsWith(before)) } == true }
         val moved = if (theirs == null) {
             play(listOf(song), 0, source, now)
         } else {

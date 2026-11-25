@@ -918,10 +918,13 @@ class Huddle(
             val byes = read.filter { it.second is Message.Bye }.mapTo(HashSet()) { it.first }
             // Whether what came asks for an answer (a name taken in your list, or free again): it goes in this sync.
             var answers = false
+            // Friends who went as one you had already (twinless): neither a friend nor a past friend.
+            var twins = emptyList<Friend>()
             val written = storage.change { state ->
                 state.copy(friends = state.friends.map { it.copy(notOpenedReads = notOpened[it.id] ?: it.notOpenedReads) })
                     .received(read, now)
                     .also { next -> answers = next.outbox.any { out -> state.outbox.none { it.id == out.id } } }
+                    .also { next -> twins = state.friends.filter { friend -> next.friends.none { it.id == friend.id } && next.past.none { it.id == friend.id } } }
             }
             if (!written) {
                 log("huddle: inbox not kept (not_written)")
@@ -941,6 +944,10 @@ class Huddle(
             // What was let go is gone: the next one that does not open gets its reads again.
             if (acknowledged && dropped > 0) storage.change { state -> state.copy(friends = state.friends.map { if (it.notOpenedReads > NOT_OPENED_RETRIES) it.copy(notOpenedReads = 0) else it }) }
             byes.mapNotNull { id -> stillHere.firstOrNull { it.id == id } }.forEach { gone -> server.dropBoxes(listOf(gone.inBox, gone.outBox)) }
+            twins.forEach { twin ->
+                if (!forgetHistory(twin.id)) log("huddle: a second friend's history not let go (not_written)")
+                server.dropBoxes(listOf(twin.inBox, twin.outBox))
+            }
             if (answers) flushNow()
             return acknowledged
         }
@@ -1006,25 +1013,36 @@ class Huddle(
             // Another friend's name: a stand-in of that one, not of the name they had.
             else -> standIn(profile.name, others)
         }
-        val updated = friend.copy(name = profile.name, taken = taken, asksNewName = profile.taken, self = profile.self ?: friend.self)
-        val answer = name?.takeIf { (profile.name != friend.name && taken != null) || (friend.taken != null && taken == null) }?.let { profile(updated, it, self, now) }
+        // Who they are is set once, from their first word of it: a later profile never makes them someone else (another friend).
+        val updated = friend.copy(name = profile.name, taken = taken, asksNewName = profile.taken, self = friend.self ?: profile.self)
+        // Told who they are for the first time: told who you are back, as an older KJB of theirs may have let yours go.
+        val learned = friend.self == null && profile.self != null && self != null
+        val answer = name?.takeIf { learned || (profile.name != friend.name && taken != null) || (friend.taken != null && taken == null) }?.let { profile(updated, it, self, now) }
         return copy(
             friends = friends.map { if (it.id == friend.id) updated else it },
             outbox = if (answer == null) outbox else outbox.filterNot { it.kind == Kind.PROFILE && it.box == friend.outBox } + answer,
-        ).twinless()
+        ).twinless(now)
     }
 
     /**
      * This state without a second friend who is one you had already ([Friend.self], user 2026-11-25): from a new invite
-     * one of you joined before their KJB knew who the other was. The one added first stays, with your history; the other
-     * goes quietly (no past friend, nothing sent), as the friend's KJB lets its own go once it learns who you are.
+     * one of you joined before their KJB knew who the other was. The one added first stays, with your history; the other,
+     * added within [INVITE_KEPT_MS] of [now] (as such a join is; never a friend of long standing, whatever another
+     * friend's KJB says), goes quietly: no past friend, nothing sent, the card their invite brought with them ([fetch]
+     * lets their history go), as the friend's KJB lets its own go once it learns who you are.
      */
-    private fun HuddleState.twinless(): HuddleState {
-        val twins = friends.filterIndexed { at, friend -> friend.self != null && friends.take(at).any { it.self == friend.self } }
+    private fun HuddleState.twinless(now: Long): HuddleState {
+        val twins = friends.filterIndexed { at, friend -> friend.self != null && now - friend.addedAt <= INVITE_KEPT_MS && friends.take(at).any { it.self == friend.self } }
         if (twins.isEmpty()) return this
         val ids = twins.map { it.id }.toSet()
         val boxes = twins.map { it.outBox }.toSet()
-        return copy(friends = friends - twins.toSet(), plays = plays.filterNot { it.friend in ids }, outbox = outbox.filterNot { it.box in boxes }, joined = joined - ids)
+        return copy(
+            friends = friends - twins.toSet(),
+            inbox = inbox.filterNot { it.friend in ids },
+            plays = plays.filterNot { it.friend in ids },
+            outbox = outbox.filterNot { it.box in boxes },
+            joined = joined - ids,
+        )
     }
 
     private fun newId(bytes: Int): String = HuddleCrypto.encode(ByteArray(bytes).also(random::nextBytes))
