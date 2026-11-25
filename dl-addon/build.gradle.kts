@@ -30,8 +30,8 @@ android {
         // 36 is raised only after a phone check of a download (the design); KJB's own target is not tied to it.
         targetSdk = 35
         // The add-on's own; what KJB checks is the AIDL's VERSION (IDlAddon), not this.
-        versionCode = 5
-        versionName = "4.0.0"
+        versionCode = 6
+        versionName = "4.1.0"
 
         ndk {
             // Python, ffmpeg and QuickJS are built for arm64 only here, as KJB.
