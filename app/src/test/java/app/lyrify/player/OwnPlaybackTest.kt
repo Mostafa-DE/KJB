@@ -337,14 +337,15 @@ class OwnPlaybackTest {
      * The phone's media card as Android runs it (AOSP): SystemUI reads the song playing only when KJB posts its media
      * notification, and NotificationManagerService drops an update while the app's posting rate is over five a second.
      * The rate is RateEstimator's: the time between the posts it let through, each new gap weighed 0.3, read before the
-     * post; a dropped post moves nothing.
+     * post; a dropped post moves nothing. The rate is the app's: KJB's other notifications ([song] null, a download's
+     * progress) count toward it too.
      */
     private class PhoneCard(private val clock: () -> Long) {
         var shows: String? = null
         private var lastAt: Long? = null
         private var gapS = 1_000.0
 
-        fun posted(song: String) {
+        fun posted(song: String?) {
             val now = clock()
             lastAt?.let { last ->
                 val estimate = 0.7 * gapS + 0.3 * maxOf((now - last) / 1_000.0, 0.0005)
@@ -352,7 +353,7 @@ class OwnPlaybackTest {
                 gapS = estimate
             }
             lastAt = now
-            shows = song
+            if (song != null) shows = song
         }
     }
 
@@ -392,8 +393,42 @@ class OwnPlaybackTest {
         assertEquals(playing, card.shows)
     }
 
+    /**
+     * 4.1 (mn2): one repost Android drops leaves the card behind until the next song. KJB's other notifications post fast
+     * (a playlist downloading, Covers & tags) and count toward the same rate, so the repost is posted again later.
+     */
     @Test
-    fun `the notification is posted once more only once its updates stop, and its own post starts no other wait`() = runTest {
+    fun `a repost Android drops while KJB's other notifications post fast is made good by the next one`() = runTest {
+        val card = PhoneCard { currentTime }
+        card.posted("Song 1")
+        advanceTimeBy(180_000)
+        val start = currentTime
+        var playing = "Song 1"
+        lateinit var repost: NotificationRepost
+        repost = NotificationRepost(backgroundScope) {
+            card.posted(playing)
+            repost.posted()
+        }
+        // A download's progress every 50 ms for 4 s; Next 2 s in, Media3 posting the song, buffering and ready.
+        for (at in 0L..4_000L step 10) {
+            advanceTimeBy(start + at - currentTime)
+            runCurrent()
+            if (at % 50 == 0L) card.posted(null)
+            if (at in 2_000L..2_040L step 20) {
+                playing = "Song 2"
+                card.posted(playing)
+                repost.posted()
+            }
+        }
+        assertEquals("the repost at 3.54 s was dropped too, as on the phone", "Song 1", card.shows)
+
+        advanceTimeBy(start + 2_040 + REPOST_QUIET_MS + REPOST_AGAIN_MS - currentTime)
+        runCurrent()
+        assertEquals(playing, card.shows)
+    }
+
+    @Test
+    fun `the notification is posted once more once its updates stop and again a while later, and its own posts start no other wait`() = runTest {
         var posts = 0
         lateinit var repost: NotificationRepost
         repost = NotificationRepost(backgroundScope) {
@@ -409,13 +444,34 @@ class OwnPlaybackTest {
         advanceTimeBy(200)
         runCurrent()
         assertEquals(1, posts)
-        advanceTimeBy(10 * REPOST_QUIET_MS)
+        advanceTimeBy(REPOST_AGAIN_MS - 200)
         runCurrent()
-        assertEquals("its own post is not an update", 1, posts)
+        assertEquals(1, posts)
+        advanceTimeBy(200)
+        runCurrent()
+        assertEquals(2, posts)
+        advanceTimeBy(10 * REPOST_AGAIN_MS)
+        runCurrent()
+        assertEquals("its own posts are not updates", 2, posts)
 
+        // An update between the two starts the wait again: the next post waits for quiet, the second one is not kept.
         repost.posted()
         advanceTimeBy(REPOST_QUIET_MS + 100)
         runCurrent()
-        assertEquals(2, posts)
+        assertEquals(3, posts)
+        advanceTimeBy(1_000)
+        repost.posted()
+        advanceTimeBy(REPOST_QUIET_MS - 100)
+        runCurrent()
+        assertEquals("still waiting for quiet", 3, posts)
+        advanceTimeBy(200)
+        runCurrent()
+        assertEquals(4, posts)
+        advanceTimeBy(REPOST_AGAIN_MS - 200)
+        runCurrent()
+        assertEquals(4, posts)
+        advanceTimeBy(200)
+        runCurrent()
+        assertEquals(5, posts)
     }
 }
