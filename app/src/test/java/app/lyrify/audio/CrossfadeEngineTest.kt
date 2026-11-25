@@ -1193,6 +1193,55 @@ class CrossfadeEngineTest {
         assertEquals(listOf(0, 3, 4, 5, 6, 1, 7).map(rig.uids::get), playing.loaded)
     }
 
+    /**
+     * 4.1 (mn2): the session's place is the queue's place of the song the player is on, and -1 (no song, the session
+     * says idle) for a song the queue no longer has. A song kept for the thread never sounds as one: one the queue left
+     * goes from the player in the edit's own turn, so a thread on it goes on to the queue's next song, and the main thread
+     * hears of a song only once the edits are done (ExoPlayer drops what its thread told before them). At every tell the
+     * session reads a song of the queue.
+     */
+    @Test
+    fun `a song kept for the thread that the queue moves or leaves never leaves the session with no song`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(8))
+        rig.mayFade = { _, _ -> false }
+        val playing = rig.made(0)
+        fun view() = sessionView(rig.engine, rig.engine.isPlaying, QueueBook(), Repeat.OFF)
+        val read = mutableListOf<Long?>()
+        rig.engine.addListener(object : EngineListener {
+            override fun onChanged() {
+                read += rig.engine.loaded.getOrNull(view().index)
+            }
+
+            override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+                read += rig.engine.loaded.getOrNull(view().index)
+            }
+        })
+        // The thread goes on to song 2 as song 1 ends, and song 2 leaves the queue: the thread goes on to song 3.
+        rig.runToLeft(500)
+        playing.goOnAhead()
+        rig.engine.applyAll(listOf(Edit.Remove(1)))
+        rig.run(0)
+        assertFalse(rig.uids[1] in playing.loaded)
+        assertEquals(rig.uids[2], playing.ahead)
+        playing.wentOn()
+        rig.run(0)
+        assertEquals(rig.uids[2], rig.engine.loaded.getOrNull(view().index))
+        assertTrue(view().playing)
+        assertEquals(Player.STATE_READY, rig.engine.playbackState)
+        // As song 3 ends the thread goes on to song 4, which moves far down the queue: it stays, and plays at its new place.
+        rig.runToLeft(500)
+        playing.goOnAhead()
+        assertEquals(rig.uids[3], playing.ahead)
+        rig.engine.applyAll(listOf(Edit.Move(2, 6)))
+        rig.run(0)
+        playing.wentOn()
+        rig.run(0)
+        assertEquals(6, view().index)
+        assertEquals(rig.uids[3], rig.engine.loaded[6])
+        assertTrue(view().playing)
+        assertTrue("the session read no song: $read", read.isNotEmpty() && null !in read)
+    }
+
     /** Round-2 review: a queue cut down to the songs the player already holds is held whole, so Repeat all reaches it. */
     @Test
     fun `a queue cut down to the three songs the player holds goes round with Repeat all`() = runTest {
