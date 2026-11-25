@@ -962,7 +962,7 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
             val failed = lookup.failed
             when {
                 lookup.addon != null && lookup.addon != AddonState.Ready -> {
-                    Text(stringResource(R.string.dl_get_first), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(if (lookup.addon is AddonState.Outdated) R.string.dl_playlist_update_first else R.string.dl_get_first), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     LyrifyButton(stringResource(R.string.dl_open_kjb), onClick = {
                         openDownloads(context)
                         onDismiss()

@@ -171,6 +171,7 @@
     <string name="dl_search_update">Searching YouTube and saving playlists need a newer Downloads add-on.</string>
     <string name="dl_search_get_first">Searching YouTube needs the Downloads add-on. Get it on the Downloads page.</string>
     <string name="dl_search_update_first">Searching YouTube needs a newer Downloads add-on. Update it on the Downloads page.</string>
+    <string name="dl_playlist_update_first">Saving a playlist needs a newer Downloads add-on. Update it on the Downloads page.</string>
     <string name="dl_open_downloads">Open Downloads</string>
 
     <!-- Settings > Downloads -->

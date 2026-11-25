@@ -18,6 +18,7 @@ import app.lyrify.dl.api.DlUpdate
 import app.lyrify.dl.api.PublicAddresses
 import app.lyrify.dl.api.isDownloadKey
 import app.lyrify.dl.api.isWebLink
+import app.lyrify.dl.api.namesSong
 import app.lyrify.dl.api.playlistId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -40,7 +41,6 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.InetAddress
-import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
@@ -511,7 +511,7 @@ class DlRuns(
         // private one, Liked music) leaves the song as it is, logged by its kind; a Mix yt-dlp cannot list answers with the
         // song's own info. A link with a list and no song (/playlist, watch?list=, embed/videoseries) is the playlist's own.
         var found: DlInfo? = null
-        if (list != null && URI(url).let { it.host?.lowercase() == "youtu.be" || it.rawQuery.orEmpty().split('&').any { field -> field.startsWith("v=") } }) {
+        if (list != null && namesSong(url)) {
             val listing = answer(id, { DlArgs.info(it, songs, playlist = true) }, url)
             if (listing is YtdlpExit.Failed) failure("lookup $id", listing)
             val out = (listing as? YtdlpExit.Done)?.out

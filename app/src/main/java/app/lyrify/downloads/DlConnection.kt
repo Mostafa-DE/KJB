@@ -24,6 +24,8 @@ import app.lyrify.dl.api.IDlAddon
 import app.lyrify.dl.api.IDlInfoCallback
 import app.lyrify.dl.api.IDlRunCallback
 import app.lyrify.dl.api.IDlSearchCallback
+import app.lyrify.dl.api.namesSong
+import app.lyrify.dl.api.playlistId
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.Flow
@@ -36,7 +38,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 /** The lowest Downloads add-on API (IDlAddon.VERSION) this KJB speaks; an add-on that answers less needs an update. */
 const val MIN_DL_API: Int = 1
 
-/** The add-on API with YouTube search (IDlAddon.search); an older add-on downloads links only, and is never asked to search. */
+/**
+ * The add-on API with YouTube search (IDlAddon.search) and playlists (DlInfo.playlist); an older add-on downloads links
+ * only, one video each, and is never asked to search or to look up a playlist's own link.
+ */
 const val DL_SEARCH_API: Int = 2
 
 /** One download run as the add-on tells it (IDlRunCallback, as Kotlin). Called on binder threads. */
@@ -213,9 +218,11 @@ class DlLookup(private val connect: suspend () -> DlConnection) {
     private var closed = false
 
     /**
-     * Binds the add-on and asks it to look [url] up, heard by [events]: Ready, or why the add-on can't be used. An add-on
-     * that dies before its full info fails the lookup as the engine: the rest would have come through a callback that died
-     * with it, and the sheet would say it looks it up for good (a link that names a playlist could never be saved).
+     * Binds the add-on and asks it to look [url] up, heard by [events]: Ready, or why the add-on can't be used. A playlist's
+     * own link (a list and no song) needs [DL_SEARCH_API]: an older add-on would open every video of it (minutes on the
+     * phone) and save one of its songs, so it is Outdated and never asked. An add-on that dies before its full info fails
+     * the lookup as the engine: the rest would have come through a callback that died with it, and the sheet would say it
+     * looks it up for good (a link that names a playlist could never be saved).
      */
     suspend fun start(url: String, events: DlLookupEvents): AddonState {
         val answered = AtomicBoolean(false)
@@ -230,7 +237,7 @@ class DlLookup(private val connect: suspend () -> DlConnection) {
             }
         }
         val died = { once.onFailed(DlEnd.Failed(DlFailure.ENGINE)) }
-        return ask(MIN_DL_API, { session ->
+        return ask(if (playlistId(url) != null && !namesSong(url)) DL_SEARCH_API else MIN_DL_API, { session ->
             session.port.info(url, once)
             session.death.invokeOnCompletion { died() }
         }, died)

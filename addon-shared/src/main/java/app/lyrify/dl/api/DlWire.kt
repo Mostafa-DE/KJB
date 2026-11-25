@@ -92,6 +92,19 @@ fun playlistId(url: String): String? {
 }
 
 /**
+ * Whether a link names a song: a `v=` in its query (watch?v=...&list=...), or a youtu.be link (youtu.be/<id>?list=...).
+ * A link with a list and no song (/playlist, watch?list=, embed/videoseries) is the playlist's own.
+ */
+fun namesSong(url: String): Boolean {
+    val uri = try {
+        URI(url)
+    } catch (_: URISyntaxException) {
+        return false
+    }
+    return uri.host?.lowercase() == "youtu.be" || uri.rawQuery.orEmpty().split('&').any { it.startsWith("v=") }
+}
+
+/**
  * Whether a link's host is out on the internet, so a shared link never makes the add-on (or KJB, for a cover) reach this
  * phone, the home or office network, or a cloud's metadata address: not loopback, unspecified, private (10/8, 172.16/12,
  * 192.168/16, carrier NAT 100.64/10, fc00::/7), link-local (169.254/16, fe80::/10), multicast or broadcast. An IPv6 form of

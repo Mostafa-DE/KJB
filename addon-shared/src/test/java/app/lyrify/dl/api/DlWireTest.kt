@@ -127,6 +127,21 @@ class DlWireTest {
     }
 
     @Test
+    fun `a link names a song by its v= or its youtu-be address, never by its list alone`() {
+        assertTrue(namesSong("https://www.youtube.com/watch?v=abc123def45&list=PLq7&index=3"))
+        assertTrue(namesSong("https://music.youtube.com/watch?list=OLAK5uy_m4dE&v=abc123def45"))
+        assertTrue(namesSong("https://youtu.be/abc123def45?si=x9&list=RDabc123def45"))
+        listOf(
+            "https://www.youtube.com/playlist?list=PLq7",
+            "https://music.youtube.com/playlist?list=OLAK5uy_m4dE&si=x9",
+            "https://www.youtube.com/watch?list=PLq7",
+            "https://www.youtube.com/embed/videoseries?list=PLq7",
+            "https://www.youtube.com/watch?vv=abc&list=PLq7",
+            "not a link",
+        ).forEach { assertFalse(it, namesSong(it)) }
+    }
+
+    @Test
     fun `a link to this phone or a literal private address is never a web link`() {
         listOf(
             "http://localhost/x",
