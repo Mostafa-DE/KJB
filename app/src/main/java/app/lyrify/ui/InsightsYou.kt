@@ -581,7 +581,7 @@ private fun WhereYouListen(outputs: OutputsCard, modifier: Modifier) {
     val all = (outputs.speaker + outputs.headphones + outputs.bluetooth + outputs.car).toLong()
     val rows = listOf(
         Triple(R.drawable.ic_smartphone, R.string.eq_output_speaker, outputs.speaker),
-        Triple(R.drawable.ic_headset_mic, R.string.eq_output_wired, outputs.headphones),
+        Triple(R.drawable.ic_headset_mic, R.string.insights_where_headphones, outputs.headphones),
         Triple(R.drawable.ic_bluetooth, R.string.eq_output_bluetooth, outputs.bluetooth),
         Triple(R.drawable.ic_directions_car, R.string.eq_output_car, outputs.car),
     ).filter { it.third > 0 }.sortedByDescending { it.third }

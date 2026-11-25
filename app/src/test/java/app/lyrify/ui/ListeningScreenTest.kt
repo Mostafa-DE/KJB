@@ -115,6 +115,8 @@ class ListeningScreenTest {
         // Each a bento tile as Read along's, a playlist opening its page, the outputs' bars growing as the race's do.
         listOf("BentoTile(R.drawable.ic_headphones", "BentoTile(R.drawable.ic_queue_music", "onOpen(Page.Playlist(top.item.id))", "MosaicTile(top.item.songs, size = 34.dp, corner = 9.dp)", "GROW_DELAY_MS + k * GROW_STEP_MS")
             .forEach { assertTrue(it, tiles.contains(it)) }
+        // Wired and USB are one row, named as the mockup names it, not the equalizer's "Wired headphones" (IN4).
+        assertTrue(tiles.contains("Triple(R.drawable.ic_headset_mic, R.string.insights_where_headphones, outputs.headphones)"))
     }
 
     @Test
@@ -195,6 +197,9 @@ class ListeningScreenTest {
         assertTrue(card.contains("if (tab != libraryOpensOn(shownLibraryTabs(read.library, (library as? LibraryState.Ready)?.library), read.library.opensOn)) return"))
         // The month turns with the phone's day, so an app kept running across the 1st shows the new month's card (Grok b-ui).
         assertTrue(card.contains("val month = remember(today) { recapMonthOf(System.currentTimeMillis(), zone) }"))
+        // The months are read again when a song is left out of Insights or let back in (IN4): a month whose plays all left
+        // has no recap, so no card.
+        assertTrue(card.contains("produceState<List<YearMonth>?>(null, month, read.library.leftOutOfInsights) {"))
         // Changed on purpose (IN2U): a tap plays the month's story; the recap pages are stories now.
         assertTrue(card.contains("nav.show(FullScreen.Story(month = month.toString()))"))
         // On its own bar item Insights has no back arrow.

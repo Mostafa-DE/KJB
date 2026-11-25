@@ -7,6 +7,7 @@ import app.lyrify.books.Book
 import app.lyrify.library.Library
 import app.lyrify.library.Playlist
 import app.lyrify.library.Song
+import app.lyrify.library.SongRef
 import app.lyrify.suggestions.FriendPlay
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -97,7 +98,11 @@ fun insightsPageOf(
     calendar: PhoneCalendar,
     library: Library?,
 ): InsightsPage {
-    val kept = data.copy(plays = leftIn(data.plays, data.leftOut, library), skips = leftIn(data.skips, data.leftOut, library))
+    val kept = data.copy(
+        plays = leftIn(data.plays, data.leftOut, library) { it.song },
+        skips = leftIn(data.skips, data.leftOut, library) { it.song },
+        favourites = leftIn(data.favourites, data.leftOut, library) { it },
+    )
     val zone = calendar.zone
     val going = bounds == null || now < bounds.until
     val today = dayOf(now, zone).date
@@ -111,7 +116,9 @@ fun insightsPageOf(
         before = before,
         beforeUntil = before?.let { previous -> bounds?.let { samePointIn(previous, it, now, zone) } },
     )
-    return InsightsPage(period, PageWork(kept, sources, period, now, calendar, library).cards())
+    // Read along and Your searches name a song by the interaction log's rows: a left-out song's go too.
+    val read = sources.copy(interactions = leftIn(sources.interactions, data.leftOut, library) { it.target?.takeIf { target -> target.kind == TargetKind.SONG }?.key?.let(::SongRef) })
+    return InsightsPage(period, PageWork(kept, read, period, now, calendar, library).cards())
 }
 
 /**

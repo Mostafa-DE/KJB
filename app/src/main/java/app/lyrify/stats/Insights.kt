@@ -40,16 +40,17 @@ data class InsightsData(
 )
 
 /**
- * [plays] without those of the songs left out of Insights ([leftOut]: "Leave songs out of Insights", in the page's menu),
- * each song found as the library finds it, a file moved or renamed since too (by its path alone without a library). They
- * still count for Most played, Recently played and Suggestions, which never read through here.
+ * [items] (plays, favourites, the interaction log's rows) without those of the songs left out of Insights ([leftOut]:
+ * "Leave songs out of Insights", in the page's menu), each item's [song] found as the library finds it, a file moved or
+ * renamed since too (by its path alone without a library); an item of no song stays. They still count for Most played,
+ * Recently played and Suggestions, which never read through here.
  */
-internal fun leftIn(plays: List<LoggedPlay>, leftOut: List<SongRef>, library: Library?): List<LoggedPlay> {
-    if (leftOut.isEmpty()) return plays
+internal fun <T> leftIn(items: List<T>, leftOut: List<SongRef>, library: Library?, song: (T) -> SongRef?): List<T> {
+    if (leftOut.isEmpty()) return items
     fun pathOf(song: SongRef): String = library?.resolver?.find(song)?.path ?: song.path
     val out = leftOut.mapTo(HashSet(), ::pathOf)
     val kept = HashMap<String, Boolean>()
-    return plays.filter { play -> kept.getOrPut(play.song.path) { pathOf(play.song) !in out } }
+    return items.filter { item -> song(item)?.let { ref -> kept.getOrPut(ref.path) { pathOf(ref) !in out } } ?: true }
 }
 
 /** A period's totals: the time heard and the plays that counted (both ledgers), and the songs, artists and albums played (music). */

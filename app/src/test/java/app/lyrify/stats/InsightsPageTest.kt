@@ -815,6 +815,26 @@ class InsightsPageTest {
         assertEquals(Totals(15 * 120_000L, 15, 2, 2, 1), shown(page(plays).cards.time).totals)
     }
 
+    @Test
+    fun `a song left out of Insights is never named on Read along, New favourites or Your searches, nor counted there`() {
+        val plays = plays(copper, 10, nov(3)) + plays(kite, 5, nov(4))
+        val opened = listOf(lyrics(kite, nov(5)), lyrics(kite, nov(6)), lyrics(kite, nov(7)), lyrics(copper, nov(8)))
+        val searches = listOf(search("kite", nov(20, "10:00"), Target(TargetKind.SONG, kite.path)), search("copper", nov(20, "11:00")))
+        val dates = mapOf(kite.path to nov(5), copper.path to nov(6))
+        val stats = stats(plays, emptyList(), library, opened + searches, PageSources(favouriteAdded = dates), listOf(kite.ref, copper.ref), leftOut = listOf(kite.ref))
+
+        val cards = runBlocking { stats.page(ListeningPeriod.MONTH, now, ammanCalendar) }.cards
+
+        assertEquals(LyricsCard(opened = 1, most = copper, mostTimes = 1, syncedPlays = 0, plays = 10), cards.lyrics)
+        assertEquals(FavouritesCard(added = 1, mostPlayed = copper), cards.favourites)
+        assertEquals(SearchesCard(1, tapped = 0, played = 0, words = listOf(WordCount("copper", 1)), songs = 0, artists = 0, albums = 0, others = 0), cards.searches)
+        // Let back in, it is named again.
+        val all = page(plays, interactions = opened + searches, sources = PageSources(favouriteAdded = dates), favourites = listOf(kite.ref, copper.ref)).cards
+        assertEquals(kite, all.lyrics?.most)
+        assertEquals(2, all.favourites?.added)
+        assertEquals(1, all.searches?.songs)
+    }
+
     // Books and podcasts
 
     @Test

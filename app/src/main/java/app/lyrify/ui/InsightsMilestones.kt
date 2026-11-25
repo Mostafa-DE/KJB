@@ -565,7 +565,8 @@ private fun RecapStartCard(tab: LibraryTab, modifier: Modifier) {
     val month = remember(today) { recapMonthOf(System.currentTimeMillis(), zone) }
     // Opened or closed already this month: no need to read the plays.
     if (read.nav.recapSeen?.let { it >= month } == true) return
-    val months by produceState<List<YearMonth>?>(null, month) { value = StatsGraph.stats(context).recaps(System.currentTimeMillis(), zone) }
+    // Read again when a song is left out of Insights or let back in: a month whose plays all left has no recap.
+    val months by produceState<List<YearMonth>?>(null, month, read.library.leftOutOfInsights) { value = StatsGraph.stats(context).recaps(System.currentTimeMillis(), zone) }
     if (!recapDue(month, months ?: return, read.nav.recapSeen)) return
     val done = { change { it.copy(nav = it.nav.copy(recapSeen = month)) } }
     val title = stringResource(R.string.insights_recap_title, monthText(month))

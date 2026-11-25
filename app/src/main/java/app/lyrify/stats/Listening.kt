@@ -270,7 +270,7 @@ class PlayStats(
     suspend fun recaps(now: Long, zone: ZoneId): List<YearMonth> {
         val plays = logs()?.plays.orEmpty()
         val library = library()
-        return withContext(compute) { recapMonths(leftIn(plays, leftOut(), library), now, zone, library) }
+        return withContext(compute) { recapMonths(leftIn(plays, leftOut(), library) { it.song }, now, zone, library) }
     }
 
     /**
