@@ -46,8 +46,9 @@ in an app store.
 
 - Invite friends with a link (Tools > Huddle, or the Huddle button in each main page's header), then send them a
   song, album or playlist with a note. What friends send waits at the top of Library and on the Huddle page.
-- See what friends play now, at the top of Library and on the player, and Play along from where they are. What you
-  play is shared once a friend joins; turn it off for one friend, or Listen privately.
+- See what friends play now, at the top of Library and on the player, and Play along from where they are, in one
+  queue for each friend. A friend's song you have plays from your own copy; when KJB is not sure it is the same song,
+  it asks first. What you play is shared once a friend joins; turn it off for one friend, or Listen privately.
 - Songs and notes you send and get stay on your phone for good, a friend's plays for a year. Everything goes through
   KJB's Huddle server locked, so only your friends' phones can read it (see "What leaves your phone").
 
@@ -77,10 +78,12 @@ in an app store.
 - Import from other apps (Settings > Backup > Import from app): m3u, m3u8, pls and XSPF playlists, playlists other
   apps saved on your phone, Musicolet backups (playlists, favourites, play counts and queues), and Samsung Music
   playlists and favourites. It only adds to what you have, and one Undo takes it back.
-- Downloads (KJB Downloads add-on): share a link from another app to **Save to KJB**, paste one in Tools > Downloads,
-  or search YouTube there, then pick audio or video and a quality. A playlist's, album's or Mix's link lists its songs,
-  and each one you tick saves on its own. Audio goes to Music/KJB Downloads with its title, artist and cover, video to
-  Movies/KJB Downloads; Settings can change both. Save only what you have the right to save.
+- Downloads (KJB Downloads add-on): share a link from another app to **Save to KJB**, or type in Tools > Downloads: a
+  link is looked up, words search YouTube. Then pick audio or video and a quality. A playlist's, album's or Mix's link
+  lists its songs, and each one you tick saves on its own. Audio goes to Music/KJB Downloads with its title, artist and
+  cover, video to Movies/KJB Downloads; Settings can change both. YouTube often refuses a VPN, so the page says when one
+  is on. A video YouTube shows only to adults who sign in can't be saved: KJB does not sign in. Save only what you have
+  the right to save.
 
 **Settings and updates**
 
@@ -143,7 +146,7 @@ gets covers from the Cover Art Archive and archive.org.
 | Modify system settings | Only to set a tone as your ringtone, alarm or notification sound | Asked when you tap Set |
 | Set alarms | Only so "Open Clock" can show your alarm list. KJB never sets or changes an alarm | Granted at install |
 | Install unknown apps ("Allow from this source") | To install a KJB update or an add-on when you tap Install. KJB first checks the file is KJB's own | Asked the first time you install one from KJB |
-| Internet, network state | LRCLIB, Covers & tags, similar artists, Huddle, the hourly update check, and downloading updates and add-ons from GitHub | Granted at install |
+| Internet, network state | LRCLIB, Covers & tags, similar artists, Huddle, the hourly update check, and downloading updates and add-ons from GitHub. Network state also tells Downloads whether a VPN is on | Granted at install |
 | Use the add-ons | So KJB can talk to KJB AI and KJB Downloads. Android grants it only to apps signed with KJB's key | Granted at install |
 | Foreground services, wake lock | Playing music with the screen off; the overnight AI run, the model download and Downloads | Granted at install |
 | Companion device presence | "Start when connected": Android tells KJB when a Bluetooth device you picked connects | Granted at install; does nothing until you pick a device |
