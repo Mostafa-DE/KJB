@@ -41,6 +41,8 @@
     <!-- The page -->
     <string name="dl_link">Link</string>
     <string name="dl_link_hint">Paste a link</string>
+    <string name="dl_link_or_search">Link or search</string>
+    <string name="dl_link_or_search_hint">Paste a link, or search YouTube for a song</string>
     <string name="dl_paste">Paste</string>
     <string name="dl_look_up">Look up</string>
     <string name="dl_now">Now</string>

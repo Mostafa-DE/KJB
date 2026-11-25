@@ -182,9 +182,8 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
     val addon = dl?.state
     val installer = remember(context) { AddonInstalls.installer(context, KjbAddons.DOWNLOADS) }
     val install by installer.state.collectAsStateWithLifecycle()
-    var link by rememberSaveable { mutableStateOf("") }
+    var text by rememberSaveable { mutableStateOf("") }
     var looking by rememberSaveable { mutableStateOf<String?>(null) }
-    var words by rememberSaveable { mutableStateOf("") }
     var searching by rememberSaveable { mutableStateOf<String?>(null) }
     var opened by remember { mutableStateOf<DownloadItem?>(null) }
     var filesAccess by remember { mutableStateOf(true) }
@@ -202,7 +201,7 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
         exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)
         installer.resume()
         Downloads.resume(context)
-        if (Downloads.state.value.settings.checkClipboard && link.isEmpty()) clipboardLink(context)?.let { link = it }
+        if (Downloads.state.value.settings.checkClipboard && text.isEmpty()) clipboardLink(context)?.let { text = it }
         onPauseOrDispose { }
     }
     val reduced = LocalReducedMotion.current
@@ -265,19 +264,27 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
                     }
                 }
             }
+            // One box: a link is looked up, words are searched for on YouTube when the add-on can.
             if (ready) {
+                val searches = dl?.searches == true
                 item(key = "link", contentType = "link") {
-                    Box(rowMotion(reduced)) { LinkField(link, { link = it }, onPaste = { clipboardLink(context)?.let { link = it } }) { ShareLinks.parse(link).firstOrNull()?.let { looking = it } } }
-                }
-            }
-            // YouTube search, or the newer add-on it needs (getting it shows on the add-on card above).
-            if (dl?.searches == true) {
-                item(key = "search", contentType = "search") {
                     Box(rowMotion(reduced)) {
-                        SearchField(words, { words = it }, stringResource(R.string.dl_search), stringResource(R.string.dl_search_hint), Modifier.padding(horizontal = ScreenPadding)) { searching = words }
+                        LinkOrSearchField(
+                            text,
+                            { text = it },
+                            searches,
+                            stringResource(if (searches) R.string.dl_link_or_search else R.string.dl_link),
+                            stringResource(if (searches) R.string.dl_link_or_search_hint else R.string.dl_link_hint),
+                            Modifier.padding(horizontal = ScreenPadding),
+                            onPaste = { clipboardLink(context)?.let { text = it } },
+                            onLookUp = { looking = it },
+                            onSearch = { searching = it },
+                        )
                     }
                 }
-            } else if (ready && install == InstallState.Idle) {
+            }
+            // The newer add-on search needs (getting it shows on the add-on card above).
+            if (dl?.searches != true && ready && install == InstallState.Idle) {
                 item(key = "search-update", contentType = "search-update") {
                     Box(rowMotion(reduced)) { Banner(R.drawable.ic_system_update, stringResource(R.string.dl_search_update), stringResource(R.string.dl_addon_update), installer::start) }
                 }
@@ -302,13 +309,13 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
     }
     looking?.let { url ->
         SaveSheet(url, onDismiss = { looking = null }) {
-            link = ""
+            text = ""
             scope.launch { toasts.say(resources, R.string.dl_started) }
         }
     }
     searching?.let { query ->
         YouTubeSearchSheet(query, onDismiss = { searching = null }) {
-            words = ""
+            text = ""
             scope.launch { toasts.say(resources, R.string.dl_started) }
         }
     }
@@ -325,45 +332,48 @@ private fun clipboardLink(context: Context): String? {
     return (0 until clip.itemCount).asSequence().mapNotNull { clip.getItemAt(it).coerceToText(context)?.toString() }.flatMap { ShareLinks.parse(it) }.firstOrNull()
 }
 
-/** The link field with Paste, and Look up, which opens the save sheet. */
-@Composable
-private fun LinkField(link: String, onLink: (String) -> Unit, onPaste: () -> Unit, onLookUp: () -> Unit) {
-    val usable = ShareLinks.parse(link).isNotEmpty()
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(horizontal = ScreenPadding)) {
-        LyrifyField(
-            value = link,
-            onValueChange = onLink,
-            modifier = Modifier.fillMaxWidth(),
-            label = stringResource(R.string.dl_link),
-            placeholder = stringResource(R.string.dl_link_hint),
-            trailing = { ChromeIconButton(R.drawable.ic_content_paste, stringResource(R.string.dl_paste), onPaste) },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
-            keyboardActions = KeyboardActions(onGo = { if (usable) onLookUp() }),
-        )
-        LyrifyButton(stringResource(R.string.dl_look_up), onClick = onLookUp, enabled = usable, icon = R.drawable.ic_download, modifier = Modifier.fillMaxWidth())
-    }
-}
-
 /**
- * The YouTube search field with Search, for the page (which opens the search sheet) and the sheet (which searches again):
- * [label] above it, also what TalkBack names it by once words fill it, and [placeholder] in it while it is empty. Words
- * longer than a search takes are cut there.
+ * The page's one box, with Paste: a link in it is looked up ([onLookUp], the save sheet), and words are searched for on
+ * YouTube ([onSearch], the search sheet) when the add-on [searches]; with one too old to search, only a link goes. Its
+ * button and the keyboard's key say which. [label] above it, also what TalkBack names it by once it is filled, and
+ * [placeholder] in it while it is empty.
  */
 @Composable
-private fun SearchField(words: String, onWords: (String) -> Unit, label: String, placeholder: String?, modifier: Modifier = Modifier, onSearch: () -> Unit) {
-    val usable = words.isNotBlank()
+internal fun LinkOrSearchField(
+    text: String,
+    onText: (String) -> Unit,
+    searches: Boolean,
+    label: String,
+    placeholder: String?,
+    modifier: Modifier = Modifier,
+    onPaste: () -> Unit,
+    onLookUp: (String) -> Unit,
+    onSearch: (String) -> Unit,
+) {
+    val link = ShareLinks.parse(text).firstOrNull()
+    val words = link == null && searches
+    val usable = link != null || (words && text.isNotBlank())
+    val submit = {
+        if (link != null) onLookUp(link) else if (usable) onSearch(text)
+    }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = modifier) {
         LyrifyField(
-            value = words,
-            onValueChange = { onWords(it.take(DlSearch.MAX_QUERY)) },
+            value = text,
+            onValueChange = onText,
             modifier = Modifier.fillMaxWidth(),
             label = label,
             placeholder = placeholder,
-            leading = { Icon(painterResource(R.drawable.ic_search), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp)) },
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { if (usable) onSearch() }),
+            trailing = { ChromeIconButton(R.drawable.ic_content_paste, stringResource(R.string.dl_paste), onPaste) },
+            keyboardOptions = KeyboardOptions(keyboardType = if (searches) KeyboardType.Text else KeyboardType.Uri, imeAction = if (words) ImeAction.Search else ImeAction.Go),
+            keyboardActions = KeyboardActions(onGo = { submit() }, onSearch = { submit() }),
         )
-        LyrifyButton(stringResource(R.string.dl_search_go), onClick = onSearch, enabled = usable, icon = R.drawable.ic_search, modifier = Modifier.fillMaxWidth())
+        LyrifyButton(
+            stringResource(if (words) R.string.dl_search_go else R.string.dl_look_up),
+            onClick = submit,
+            enabled = usable,
+            icon = if (words) R.drawable.ic_search else R.drawable.ic_download,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -1157,7 +1167,19 @@ fun YouTubeSearchSheet(query: String, onDismiss: () -> Unit, onStarted: () -> Un
         Text(stringResource(R.string.dl_search), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         when (val addon = search.addon) {
             null, AddonState.Ready -> {
-                SearchField(words, { words = it }, stringResource(R.string.dl_search_hint), placeholder = null, modifier = Modifier.padding(vertical = 8.dp)) { search.search(words) }
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 8.dp)) {
+                    // Labelled, not a placeholder: it opens with the words in it, and the label is what TalkBack names it by.
+                    LyrifyField(
+                        value = words,
+                        onValueChange = { words = it.take(DlSearch.MAX_QUERY) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = stringResource(R.string.dl_search_hint),
+                        leading = { Icon(painterResource(R.drawable.ic_search), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp)) },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                        keyboardActions = KeyboardActions(onSearch = { if (words.isNotBlank()) search.search(words) }),
+                    )
+                    LyrifyButton(stringResource(R.string.dl_search_go), onClick = { search.search(words) }, enabled = words.isNotBlank(), icon = R.drawable.ic_search, modifier = Modifier.fillMaxWidth())
+                }
                 SearchFound(search) { picked = it }
             }
             AddonState.Unreachable -> {

@@ -96,10 +96,12 @@ class DownloadsRowTest {
     }
 
     @Test
-    fun `the search field always has a name TalkBack reads, also once its words fill it`() {
+    fun `the search fields always have a name TalkBack reads, also once their words fill them`() {
         // No Compose renderer in these tests (ThemeTokensTest), so it is read from the source. The placeholder shows only
-        // while the field is empty, and the search sheet opens with the words in it: the label is what names it.
+        // while a field is empty, and the search sheet opens with the words in it: the label is what names it. The page's
+        // one box for a link or words (4.1) takes its label as a String; the sheet's field is labelled.
         val screen = File("src/main/java/app/lyrify/ui/DownloadsScreen.kt").readText()
-        assertTrue(Regex("""private fun SearchField\([^\n]*label: String,""").containsMatchIn(screen))
+        assertTrue(Regex("""internal fun LinkOrSearchField\((?:\n[^\n]*){0,5}\n\s+label: String,""").containsMatchIn(screen))
+        assertTrue(Regex("""value = words,\n[^\n]*\n[^\n]*\n\s+label = stringResource\(R\.string\.dl_search_hint\),""").containsMatchIn(screen))
     }
 }
